@@ -56,15 +56,14 @@ const workletCode = `
     registerProcessor('sound-engine-processor', SoundEngineProcessor);
 `;
 
-let audioCtx, engineNode, engineGain, targetGain, analyser, dataArray;
-let scene, camera, renderer, terrain, targetContact;
+let audioCtx, engineNode, engineGain, analyser, dataArray;\nlet scene, camera, renderer, terrain;\nconst targetAssets = new Map(); // Stores { audioGain, mesh } for each target
 let isScanning = false;
 let scanRadius = 0;
 let currentRpmValue = 0;
 let pingActiveIntensity = 0;
 
 const simEngine = new SimulationEngine();
-const primaryTarget = new SimulationTarget('target-01', {
+simEngine.addTarget(new SimulationTarget('target-01', {
     distance: 85,
     angle: Math.PI * 0.25,
     bearing: 45,
@@ -72,8 +71,16 @@ const primaryTarget = new SimulationTarget('target-01', {
     detected: false,
     rpm: 120,
     bladeCount: 3
-});
-simEngine.addTarget(primaryTarget);
+}));
+simEngine.addTarget(new SimulationTarget('target-02', {
+    distance: 60,
+    angle: Math.PI * 0.75,
+    bearing: 135,
+    velocity: 0.1,
+    detected: false,
+    rpm: 180,
+    bladeCount: 5
+}));
 
 const lCanvas = document.getElementById('lofar-canvas');
 const dCanvas = document.getElementById('demon-canvas');
@@ -87,6 +94,44 @@ const wCtx = wCanvas.getContext('2d');
 
 const bTemp = document.createElement('canvas');
 const wTemp = document.createElement('canvas');
+
+function createTargetAudio(target) {
+    const targetOsc = audioCtx.createOscillator();
+    targetOsc.type = 'triangle';
+    targetOsc.frequency.value = 40 + (Math.random() * 10); // Varied frequency
+
+    const targetNoise = audioCtx.createBufferSource();
+    const bSize = audioCtx.sampleRate * 2;
+    const buffer = audioCtx.createBuffer(1, bSize, audioCtx.sampleRate);
+    const dArr = buffer.getChannelData(0);
+    for(let i=0; i<bSize; i++) dArr[i] = Math.random() * 2 - 1;
+    targetNoise.buffer = buffer;
+    targetNoise.loop = true;
+
+    const targetFilter = audioCtx.createBiquadFilter();
+    targetFilter.type = 'lowpass';
+    targetFilter.frequency.value = 300 + (Math.random() * 200);
+
+    const gain = audioCtx.createGain();
+    gain.gain.value = 0.01;
+
+    targetOsc.connect(targetFilter);
+    targetNoise.connect(targetFilter);
+    targetFilter.connect(gain).connect(analyser);
+
+    targetOsc.start();
+    targetNoise.start();
+    return gain;
+}
+
+function createTargetMesh(target) {
+    const mesh = new THREE.Mesh(
+        new THREE.SphereGeometry(1.5, 8, 8),
+        new THREE.MeshBasicMaterial({ color: 0xff0000, transparent: true, opacity: 0 })
+    );
+    if (scene) scene.add(mesh);
+    return mesh;
+}
 
 async function initSystems() {
     if (audioCtx) return;
@@ -106,32 +151,13 @@ async function initSystems() {
         engineNode.connect(engineGain).connect(analyser);
         engineGain.gain.linearRampToValueAtTime(1.0, audioCtx.currentTime + 0.5);
 
-        const targetOsc = audioCtx.createOscillator();
-        targetOsc.type = 'triangle';
-        targetOsc.frequency.value = 42; // Distinct frequency for target
-
-        const targetNoise = audioCtx.createBufferSource();
-        const bSize = audioCtx.sampleRate * 2;
-        const buffer = audioCtx.createBuffer(1, bSize, audioCtx.sampleRate);
-        const dArr = buffer.getChannelData(0);
-        for(let i=0; i<bSize; i++) dArr[i] = Math.random() * 2 - 1;
-        targetNoise.buffer = buffer;
-        targetNoise.loop = true;
-
-        const targetFilter = audioCtx.createBiquadFilter();
-        targetFilter.type = 'lowpass';
-        targetFilter.frequency.value = 400;
-
-        targetGain = audioCtx.createGain();
-        targetGain.gain.value = 0.01;
-
-        targetOsc.connect(targetFilter);
-        targetNoise.connect(targetFilter);
-        targetFilter.connect(targetGain).connect(analyser);
-
-        targetOsc.start();
-        targetNoise.start();
-        analyser.connect(audioCtx.destination);
+        simEngine.targets.forEach(target => {
+            const assets = {
+                audioGain: createTargetAudio(target),
+                mesh: createTargetMesh(target)
+            };
+            targetAssets.set(target.id, assets);
+        });
 
         initThreeJS();
         document.getElementById('setup-screen').classList.add('hidden');
@@ -145,13 +171,17 @@ async function initSystems() {
 }
 
 function updateTargetSimulation(targets) {
-    const target = targets[0]; // Primary target
-    if (!target) return;
+    targets.forEach(target => {
+        const assets = targetAssets.get(target.id);
+        if (assets && assets.audioGain && audioCtx) {
+            const vol = Math.max(0.005, (100 - target.distance) / 400) * 0.3;
+            assets.audioGain.gain.setTargetAtTime(vol, audioCtx.currentTime, 0.1);
+        }
+    });
 
-    if (targetGain && audioCtx) {
-        const vol = Math.max(0.005, (100 - target.distance) / 400) * 0.3;
-        targetGain.gain.setTargetAtTime(vol, audioCtx.currentTime, 0.1);
-    }
+    // Update UI for the first target
+    const target = targets[0];
+    if (!target) return;
 
     const rangeEl = document.getElementById('target-range-text');
     const velEl = document.getElementById('target-vel-text');
@@ -204,8 +234,17 @@ function initThreeJS() {
     });
     terrain = new THREE.Mesh(new THREE.PlaneGeometry(200, 200, 30, 30).rotateX(-Math.PI/2), mat);
     scene.add(terrain);
-    targetContact = new THREE.Mesh(new THREE.SphereGeometry(1.5, 8, 8), new THREE.MeshBasicMaterial({ color: 0xff0000, transparent: true, opacity: 0 }));
-    scene.add(targetContact);
+
+    // Add meshes for any targets already initialized
+    simEngine.targets.forEach(target => {
+        const assets = targetAssets.get(target.id);
+        if (assets && !assets.mesh) {
+            assets.mesh = createTargetMesh(target);
+        } else if (assets && assets.mesh) {
+            scene.add(assets.mesh);
+        }
+    });
+
     scene.add(new THREE.GridHelper(200, 20, 0x002222, 0x001111));
 }
 
@@ -241,33 +280,51 @@ function renderLoop() {
     if (isScanning && terrain) {
         scanRadius += 1.5;
         terrain.material.uniforms.uScanRadius.value = scanRadius;
-        if (scanRadius >= primaryTarget.distance && !primaryTarget.detected) {
-            primaryTarget.detected = true;
-            createPingTap(audioCtx.currentTime, 0.4, 1000, 980);
-            if (targetContact) {
-                targetContact.position.set(Math.cos(primaryTarget.angle)*primaryTarget.distance, 1, Math.sin(primaryTarget.angle)*primaryTarget.distance);
-                targetContact.material.opacity = 1;
+
+        simEngine.targets.forEach(target => {
+            if (scanRadius >= target.distance && !target.detected) {
+                target.detected = true;
+                createPingTap(audioCtx.currentTime, 0.4, 1000, 980);
+                
+                const assets = targetAssets.get(target.id);
+                if (assets && assets.mesh) {
+                    assets.mesh.position.set(
+                        Math.cos(target.angle) * target.distance,
+                        1,
+                        Math.sin(target.angle) * target.distance
+                    );
+                    assets.mesh.material.opacity = 1;
+                }
+
+                const alert = document.getElementById('contact-alert');
+                if (alert) alert.classList.remove('hidden');
+                setTimeout(() => {
+                    const alertEl = document.getElementById('contact-alert');
+                    if(alertEl) alertEl.classList.add('hidden');
+                }, 1000);
             }
-            const alert = document.getElementById('contact-alert');
-            if (alert) alert.classList.remove('hidden');
-            setTimeout(() => {
-                const alertEl = document.getElementById('contact-alert');
-                if(alertEl) alertEl.classList.add('hidden');
-            }, 1000);
-        }
-        if (targetContact && targetContact.material.opacity > 0) targetContact.material.opacity *= 0.98;
+        });
+
         if (scanRadius > 150) {
             isScanning = false;
-            primaryTarget.detected = false;
+            simEngine.targets.forEach(t => t.detected = false);
             pingActiveIntensity = 0;
             terrain.material.uniforms.uActive.value = 0.0;
             const status = document.getElementById('tactical-status');
             if (status) {
                 status.innerText = "PASSIVE MODE";
-                status.classList.replace('text-green-500', 'text-green-500');
+                status.classList.remove('text-red-500');
+                status.classList.add('text-green-500');
             }
         }
     }
+
+    // Update target mesh opacities and positions (even when not scanning, though position only updates on ping)
+    targetAssets.forEach((assets) => {
+        if (assets.mesh && assets.mesh.material.opacity > 0) {
+            assets.mesh.material.opacity *= 0.98;
+        }
+    });
 
     if (analyser && dataArray) {
         analyser.getByteFrequencyData(dataArray);
@@ -351,10 +408,12 @@ function drawBTR() {
     bCtx.fillStyle = '#00';
     bCtx.fillRect(0, 0, bCanvas.width, 1);
 
-    const targetX = (primaryTarget.bearing / 360) * bCanvas.width;
-    const targetIntensity = Math.max(0, 255 - primaryTarget.distance * 2);
-    bCtx.fillStyle = `rgb(0, ${targetIntensity}, ${targetIntensity * 0.5})`;
-    bCtx.fillRect(targetX - 1, 0, 3, 1);
+    simEngine.targets.forEach(target => {
+        const targetX = (target.bearing / 360) * bCanvas.width;
+        const targetIntensity = Math.max(0, 255 - target.distance * 2);
+        bCtx.fillStyle = `rgb(0, ${targetIntensity}, ${targetIntensity * 0.5})`;
+        bCtx.fillRect(targetX - 1, 0, 3, 1);
+    });
 
     const selfNoiseIntensity = (currentRpmValue / 400) * 100;
     if (selfNoiseIntensity > 5) {
