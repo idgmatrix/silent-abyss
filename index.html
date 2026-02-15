@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>The Silent Abyss - Phase 5.7 Acoustic Fidelity</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body class="p-3 h-screen flex flex-col gap-3">
+    <div class="crt-overlay"></div>
+
+    <header class="panel p-2 flex justify-between items-center border-b-2 border-cyan-800">
+        <h1 class="text-lg font-bold tracking-[0.2em] glow-text uppercase text-cyan-400">Tactical Command System v5.7</h1>
+        <div class="flex gap-6 text-[11px]">
+            <div>DEPTH: <span class="text-white">125m</span></div>
+            <div>SONAR: <span id="tactical-status" class="text-green-500 font-bold tracking-widest">PASSIVE MODE</span></div>
+            <div id="clock">00:00:00</div>
+        </div>
+    </header>
+
+    <main class="flex-1 grid grid-cols-12 gap-3 overflow-hidden">
+        <section class="col-span-3 flex flex-col gap-3 overflow-hidden">
+            <div class="panel p-3 flex-none flex flex-col gap-2">
+                <div class="label-tech border-b border-cyan-900 pb-1">Main Drive Control</div>
+
+                <div id="setup-screen" class="flex flex-col items-center justify-center text-center py-2">
+                    <button id="start-btn" class="px-6 py-2 border border-cyan-400 hover:bg-cyan-900 transition-all uppercase text-sm font-bold shadow-[0_0_15px_rgba(0,255,204,0.3)]">
+                        Boot Tactical Core
+                    </button>
+                </div>
+
+                <div id="engine-controls" class="hidden space-y-3">
+                    <div>
+                        <div class="flex justify-between text-[10px] mb-1">
+                            <span>OWN SHIP RPM</span>
+                            <span id="rpm-display" class="font-bold text-cyan-300">0 RPM</span>
+                        </div>
+                        <input type="range" id="rpm-slider" min="0" max="400" value="0" class="w-full">
+                    </div>
+                    <button id="ping-btn" class="w-full py-2 border border-red-900 bg-red-950/10 hover:bg-red-950/40 text-red-500 text-[10px] font-bold uppercase tracking-widest transition-all">
+                        Active Pulse (Ping)
+                    </button>
+                </div>
+            </div>
+
+            <div class="panel p-2 flex-none bg-cyan-950/10">
+                <div class="label-tech mb-2 border-b border-cyan-900">Target Acoustic Intelligence</div>
+                <div class="grid grid-cols-2 gap-2 text-[10px]">
+                    <div class="flex flex-col">
+                        <span class="text-cyan-700">RANGE (RNG)</span>
+                        <span id="target-range-text" class="text-white font-bold text-sm italic">---</span>
+                    </div>
+                    <div class="flex flex-col">
+                        <span class="text-cyan-700">VELOCITY (VEL)</span>
+                        <span id="target-vel-text" class="text-white font-bold text-sm italic">---</span>
+                    </div>
+                    <div class="flex flex-col">
+                        <span class="text-cyan-700">BEARING (BRG)</span>
+                        <span id="target-brg-text" class="text-white font-bold text-sm italic">---</span>
+                    </div>
+                    <div class="flex flex-col">
+                        <span class="text-cyan-700">CONFIDENCE</span>
+                        <span id="sig-text" class="text-orange-400 font-bold text-sm animate-pulse">SEARCHING</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="panel p-2 flex-1">
+                <div class="label-tech">LOFAR (Narrowband Frequency)</div>
+                <div class="h-[calc(100%-15px)] bg-black/50 relative">
+                    <canvas id="lofar-canvas"></canvas>
+                </div>
+            </div>
+
+            <div class="panel p-2 flex-1">
+                <div class="label-tech">DEMON (Propeller Signature)</div>
+                <div class="h-[calc(100%-15px)] bg-black/50 relative">
+                    <canvas id="demon-canvas"></canvas>
+                </div>
+            </div>
+        </section>
+
+        <section class="col-span-6 flex flex-col gap-3">
+            <div class="panel flex-[2] relative overflow-hidden">
+                <div id="sonar-viewport"></div>
+                <div id="contact-alert" class="absolute top-10 left-1/2 -translate-x-1/2 pointer-events-none hidden">
+                    <div class="text-red-500 font-bold text-sm tracking-widest animate-pulse border border-red-500 px-4 py-1 bg-red-950/50 shadow-[0_0_20px_rgba(255,0,0,0.4)]">CONTACT ACQUIRED</div>
+                </div>
+            </div>
+
+            <div class="panel flex-1 p-2">
+                <div class="label-tech mb-1 flex justify-between">
+                    <span>BTR (Bearing Time Recorder)</span>
+                    <span>000° <---> 360°</span>
+                </div>
+                <div class="h-[calc(100%-15px)]">
+                    <canvas id="btr-canvas" class="bg-black"></canvas>
+                </div>
+            </div>
+        </section>
+
+        <section class="col-span-3 flex flex-col gap-3">
+            <div class="panel flex-1 flex flex-col">
+                <div class="p-2 border-b border-cyan-900 label-tech text-center">Broadband Waterfall (Ambient)</div>
+                <div id="waterfall-container" class="flex-1 bg-black overflow-hidden">
+                    <canvas id="waterfall-canvas"></canvas>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <script type="module" src="main.js"></script>
+</body>
+</html>
