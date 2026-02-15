@@ -17,22 +17,29 @@ const simEngine = new SimulationEngine();
 
 // Targets Setup
 simEngine.addTarget(new SimulationTarget('target-01', {
-    distance: 85,
-    angle: Math.PI * 0.25,
-    bearing: 45,
-    velocity: -0.15,
+    // Crossing target (West to East). Coordinates: x (+East/-West), z (+South/-North)
+    x: -90,
+    z: 30,
+    course: 0.2, // Radians. 0 = East.
+    speed: 0.8,  // ~16 kts
+    turnRate: 0.05,
     detected: false,
     rpm: 120,
-    bladeCount: 3
+    bladeCount: 3,
+    isPatrolling: false,
+    patrolRadius: 100
 }));
 simEngine.addTarget(new SimulationTarget('target-02', {
+    // Patrolling target
     distance: 60,
     angle: Math.PI * 0.75,
-    bearing: 135,
-    velocity: 0.1,
+    speed: 0.5, // ~10 kts
+    turnRate: 0.15,
     detected: false,
     rpm: 180,
-    bladeCount: 5
+    bladeCount: 5,
+    isPatrolling: true,
+    patrolRadius: 80
 }));
 
 // UI Elements
@@ -75,7 +82,7 @@ function updateDashboard(target) {
 
     if (rangeEl) rangeEl.innerText = `${(target.distance * 50).toFixed(0)}m`;
     if (velEl) velEl.innerText = `${Math.abs(target.velocity * 20).toFixed(1)}kts`;
-    if (brgEl) brgEl.innerText = `${target.bearing.toFixed(1)}°`;
+    if (brgEl) brgEl.innerText = `${target.bearing.toFixed(1)}° (T)`;
 
     if (target.distance < 50) {
         if(sigEl) {
@@ -119,7 +126,7 @@ function renderLoop() {
                 target.detected = true;
                 audioSys.createPingTap(0.4, 1000, 980);
 
-                tacticalView.updateTargetPosition(target.id, target.distance, target.angle);
+                tacticalView.updateTargetPosition(target.id, target.x, target.z);
 
                 const alert = document.getElementById('contact-alert');
                 if (alert) alert.classList.remove('hidden');

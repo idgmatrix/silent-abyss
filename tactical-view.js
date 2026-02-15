@@ -63,14 +63,10 @@ export class TacticalView {
         this.targetMeshes.set(targetId, mesh);
     }
 
-    updateTargetPosition(targetId, distance, angle) {
+    updateTargetPosition(targetId, x, z) {
         const mesh = this.targetMeshes.get(targetId);
         if (mesh) {
-            mesh.position.set(
-                Math.cos(angle) * distance,
-                1,
-                Math.sin(angle) * distance
-            );
+            mesh.position.set(x, 1, z);
             mesh.material.opacity = 1;
         }
     }
