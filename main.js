@@ -56,7 +56,9 @@ const workletCode = `
     registerProcessor('sound-engine-processor', SoundEngineProcessor);
 `;
 
-let audioCtx, engineNode, engineGain, analyser, dataArray;\nlet scene, camera, renderer, terrain;\nconst targetAssets = new Map(); // Stores { audioGain, mesh } for each target
+let audioCtx, engineNode, engineGain, analyser, dataArray;
+let scene, camera, renderer, terrain;
+const targetAssets = new Map(); // Stores { audioGain, mesh } for each target
 let isScanning = false;
 let scanRadius = 0;
 let currentRpmValue = 0;
