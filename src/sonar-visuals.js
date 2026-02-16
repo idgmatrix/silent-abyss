@@ -360,9 +360,11 @@ export class SonarVisuals {
         if (!this.waterfallDisplay || !this.waterfallDisplay.ctx) return;
 
         const theme = BTR_THEMES[this.currentWaterfallTheme].WATERFALL;
+        const source = this.lofarSpectrum || dataArray;
+        const sourceIsFloat = source instanceof Float32Array;
 
         this.waterfallDisplay.drawNextLine((ctx, width) => {
-            const totalSamples = Math.floor(dataArray.length * 0.8);
+            const totalSamples = Math.floor(source.length * 0.8);
             const imageData = ctx.createImageData(width, 1);
             const data = imageData.data;
 
@@ -373,11 +375,11 @@ export class SonarVisuals {
 
             for (let x = 0; x < width; x++) {
                 const sampleIdx = Math.floor((x / width) * totalSamples);
-                const val = dataArray[sampleIdx];
+                const val = source[sampleIdx] ?? 0;
+                const norm = sourceIsFloat ? val : val / 255;
                 const i = x * 4;
 
-                if (val > 15) {
-                    const norm = val / 255;
+                if (norm > 0.06) { // Equivalent to 15/255
                     let r, g, b;
 
                     if (norm < 0.5) {
@@ -386,7 +388,7 @@ export class SonarVisuals {
                         g = low[1] * (1 - t) + mid[1] * t;
                         b = low[2] * (1 - t) + mid[2] * t;
                     } else {
-                        const t = (norm - 0.5) * 2;
+                        const t = Math.min(1.0, (norm - 0.5) * 2);
                         r = mid[0] * (1 - t) + high[0] * t;
                         g = mid[1] * (1 - t) + high[1] * t;
                         b = mid[2] * (1 - t) + high[2] * t;

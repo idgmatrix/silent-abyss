@@ -40,6 +40,7 @@ export class WebGPUFFTProcessor {
 
         this._bufferLength = 0;
         this._spectrumCache = null;
+        this._hannWindow = null;
         this._lastMode = 'frequency';
     }
 
@@ -115,10 +116,29 @@ export class WebGPUFFTProcessor {
     }
 
     _prepareTimeDomainInput(timeDomainData, fftSize) {
-        if (timeDomainData.length === fftSize) return timeDomainData;
         const out = new Float32Array(fftSize);
-        out.set(timeDomainData.subarray(0, fftSize));
+        if (timeDomainData.length === fftSize) {
+            out.set(timeDomainData);
+        } else {
+            out.set(timeDomainData.subarray(0, fftSize));
+        }
+
+        this._applyHannWindow(out);
         return out;
+    }
+
+    _applyHannWindow(input) {
+        const n = input.length;
+        if (!this._hannWindow || this._hannWindow.length !== n) {
+            this._hannWindow = new Float32Array(n);
+            for (let i = 0; i < n; i++) {
+                this._hannWindow[i] = 0.5 * (1 - Math.cos((2 * Math.PI * i) / (n - 1)));
+            }
+        }
+
+        for (let i = 0; i < n; i++) {
+            input[i] *= this._hannWindow[i];
+        }
     }
 
     _prepareFrequencyInput(frequencyData, fftSize) {
@@ -332,16 +352,32 @@ fn main(@builtin(global_invocation_id) gid : vec3<u32>) {
     _postProcessSpectrum(spectrum) {
         const out = new Float32Array(spectrum.length);
 
+        // Filter more low-frequency bins with a smoother ramp
+        const DC_SKIP = 16;
+
         let maxValue = 0;
         for (let i = 0; i < spectrum.length; i++) {
-            const normalized = Math.log1p(Math.max(0, spectrum[i]) * 24) / Math.log(25);
-            maxValue = Math.max(maxValue, normalized);
+            let val = spectrum[i];
+
+            // Dampen first 16 bins using a parabolic ramp to suppress low-freq noise
+            if (i < DC_SKIP) {
+                const factor = Math.pow(i / DC_SKIP, 2);
+                val *= factor;
+            }
+
+            const normalized = Math.log1p(Math.max(0, val) * 24) / Math.log(25);
+
+            // Exclude dampened low-freq range from max calculation to avoid squashing targets
+            if (i >= DC_SKIP) {
+                maxValue = Math.max(maxValue, normalized);
+            }
             out[i] = normalized;
         }
 
         if (maxValue > 0) {
             for (let i = 0; i < out.length; i++) {
-                out[i] /= maxValue;
+                // Normalize and clamp to 1.0 (DC might still exceed it but we cap it)
+                out[i] = Math.min(1.0, out[i] / maxValue);
             }
         }
 

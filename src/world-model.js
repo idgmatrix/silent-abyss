@@ -124,6 +124,7 @@ export class WorldModel {
         this.simEngine.targets.forEach(t => {
             this.audioSys.updateTargetVolume(t.id, t.distance);
         });
+        this.audioSys.updateOwnShipFocusGain();
 
         this.tacticalView.updateTargetOpacities();
     }

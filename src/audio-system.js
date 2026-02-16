@@ -5,6 +5,9 @@ export class AudioSystem {
         this.ctx = null;
         this.wasmManager = new WasmAudioManager();
         this.ownVoiceId = 0;
+        this.ownBaseGain = 0.8;
+        this.ownCurrentGain = this.ownBaseGain;
+        this.lastOwnGainUpdateTime = 0;
         this.analyser = null;
         this.dataArray = null;
         this.targetNodes = new Map(); // Stores voice indices for targets
@@ -12,6 +15,25 @@ export class AudioSystem {
         this.bioTimeouts = new Set();
         this.timeDomainArray = null;
         this.computeProcessor = null;
+        this.focusSettings = {
+            gainFloor: 0.015,
+            distanceMax: 120,
+            distanceScale: 250,
+            baseDistanceGainMultiplier: 0.6,
+            focusedTargetBoost: 2.1,
+            backgroundDuck: 0.1,
+            ownShipDuck: 0.15,
+            gainAttack: 0.07,
+            gainRelease: 0.26,
+            mixAttack: 0.1,
+            mixRelease: 0.32,
+            focusedEngineFactor: 1.05,
+            focusedCavFactor: 1.1,
+            focusedBioFactor: 1.0,
+            backgroundEngineFactor: 0.75,
+            backgroundCavFactor: 0.1,
+            backgroundBioFactor: 0.6,
+        };
     }
 
     async init() {
@@ -34,7 +56,9 @@ export class AudioSystem {
             });
 
             this.ownVoiceId = this.wasmManager.defaultVoiceId;
-            this.wasmManager.setGain(0.8, this.ownVoiceId);
+            this.ownCurrentGain = this.ownBaseGain;
+            this.lastOwnGainUpdateTime = this.ctx.currentTime;
+            this.wasmManager.setGain(this.ownBaseGain, this.ownVoiceId);
             this.wasmManager.setEngineMix(1.0, this.ownVoiceId);
             this.wasmManager.setCavMix(0.3, this.ownVoiceId);
             this.wasmManager.setBioMix(0.0, this.ownVoiceId); // Own ship shouldn't chirp like a dolphin
@@ -59,6 +83,7 @@ export class AudioSystem {
         if (!this.ctx || !this.wasmManager.ready) return;
         const targetId = target.id;
         const type = target.type || 'SHIP';
+        const now = this.ctx.currentTime;
 
         // Request a new voice from Wasm
         const voiceId = await this.wasmManager.addVoice();
@@ -68,47 +93,135 @@ export class AudioSystem {
         }
 
         // Configure voice based on target
-        this.wasmManager.setGain(0.01, voiceId);
+        const initialGain = 0.01;
+        this.wasmManager.setGain(initialGain, voiceId);
         this.wasmManager.setBlades(target.bladeCount || 5, voiceId);
         this.wasmManager.setRpm(target.rpm || 0, voiceId);
+        let baseEngineMix = 1.0;
+        let baseCavMix = 0.6;
+        let baseBioMix = 0.0;
 
         if (type === 'BIOLOGICAL') {
-            this.wasmManager.setEngineMix(0.0, voiceId);
-            this.wasmManager.setCavMix(0.0, voiceId);
-            this.wasmManager.setBioMix(1.0, voiceId);
+            baseEngineMix = 0.0;
+            baseCavMix = 0.0;
+            baseBioMix = 1.0;
         } else if (type === 'STATIC') {
-            this.wasmManager.setEngineMix(0.1, voiceId); // Low rumble
-            this.wasmManager.setCavMix(0.3, voiceId);
-            this.wasmManager.setBioMix(0.0, voiceId);
+            baseEngineMix = 0.1; // Low rumble
+            baseCavMix = 0.3;
+            baseBioMix = 0.0;
         } else {
             // SHIP or SUBMARINE
-            this.wasmManager.setEngineMix(1.0, voiceId);
-            this.wasmManager.setCavMix(type === 'SUBMARINE' ? 0.2 : 0.6, voiceId);
-            this.wasmManager.setBioMix(0.0, voiceId);
+            baseEngineMix = 1.0;
+            baseCavMix = type === 'SUBMARINE' ? 0.2 : 0.6;
+            baseBioMix = 0.0;
         }
 
-        this.targetNodes.set(targetId, { voiceId, type });
+        this.wasmManager.setEngineMix(baseEngineMix, voiceId);
+        this.wasmManager.setCavMix(baseCavMix, voiceId);
+        this.wasmManager.setBioMix(baseBioMix, voiceId);
+
+        this.targetNodes.set(targetId, {
+            voiceId,
+            type,
+            baseEngineMix,
+            baseCavMix,
+            baseBioMix,
+            currentGain: initialGain,
+            currentEngineMix: baseEngineMix,
+            currentCavMix: baseCavMix,
+            currentBioMix: baseBioMix,
+            lastUpdateTime: now,
+        });
     }
 
     setFocusedTarget(targetId) {
-        this.focusedTargetId = targetId;
+        const nextFocus = (targetId !== null && targetId !== undefined && this.targetNodes.has(targetId))
+            ? targetId
+            : null;
+        if (this.focusedTargetId === nextFocus) return;
+
+        this.focusedTargetId = nextFocus;
+        this.updateOwnShipFocusGain();
     }
 
     updateTargetVolume(targetId, distance) {
         const node = this.targetNodes.get(targetId);
         if (node && this.wasmManager.ready) {
-            // Increased base gain and scaling
-            let vol = Math.max(0.015, (120 - distance) / 250) * 0.6;
+            const now = this.ctx ? this.ctx.currentTime : performance.now() / 1000;
+            const dt = Math.max(0, Math.min(0.2, now - (node.lastUpdateTime || now)));
+            node.lastUpdateTime = now;
 
-            // Apply Acoustic Focus boost/ducking
-            if (this.focusedTargetId === targetId) {
-                vol *= 2.5; // Focus boost
-            } else if (this.focusedTargetId) {
-                vol *= 0.3; // Duck non-focused targets
+            // Distance attenuation baseline
+            const cfg = this.focusSettings;
+            let targetGain = Math.max(cfg.gainFloor, (cfg.distanceMax - distance) / cfg.distanceScale) * cfg.baseDistanceGainMultiplier;
+
+            const hasFocus = this.focusedTargetId !== null;
+            const isFocused = this.focusedTargetId === targetId;
+            if (isFocused) {
+                targetGain *= cfg.focusedTargetBoost;
+            } else if (hasFocus) {
+                targetGain *= cfg.backgroundDuck;
             }
 
-            this.wasmManager.setGain(vol, node.voiceId);
+            const gainRising = targetGain > node.currentGain;
+            const gainTau = gainRising ? cfg.gainAttack : cfg.gainRelease;
+            const gainAlpha = 1 - Math.exp(-dt / Math.max(0.001, gainTau));
+            node.currentGain += (targetGain - node.currentGain) * gainAlpha;
+            this.wasmManager.setGain(node.currentGain, node.voiceId);
+
+            // Tactical spectral focus (pseudo low-pass on background contacts)
+            const engineFactor = isFocused
+                ? cfg.focusedEngineFactor
+                : hasFocus
+                    ? cfg.backgroundEngineFactor
+                    : 1.0;
+            const cavFactor = isFocused
+                ? cfg.focusedCavFactor
+                : hasFocus
+                    ? cfg.backgroundCavFactor
+                    : 1.0;
+            const bioFactor = isFocused
+                ? cfg.focusedBioFactor
+                : hasFocus
+                    ? cfg.backgroundBioFactor
+                    : 1.0;
+
+            const targetEngineMix = Math.min(1, Math.max(0, node.baseEngineMix * engineFactor));
+            const targetCavMix = Math.min(1, Math.max(0, node.baseCavMix * cavFactor));
+            const targetBioMix = Math.min(1, Math.max(0, node.baseBioMix * bioFactor));
+
+            const mixRising = targetEngineMix > node.currentEngineMix ||
+                targetCavMix > node.currentCavMix ||
+                targetBioMix > node.currentBioMix;
+            const mixTau = mixRising ? cfg.mixAttack : cfg.mixRelease;
+            const mixAlpha = 1 - Math.exp(-dt / Math.max(0.001, mixTau));
+
+            node.currentEngineMix += (targetEngineMix - node.currentEngineMix) * mixAlpha;
+            node.currentCavMix += (targetCavMix - node.currentCavMix) * mixAlpha;
+            node.currentBioMix += (targetBioMix - node.currentBioMix) * mixAlpha;
+
+            this.wasmManager.setEngineMix(node.currentEngineMix, node.voiceId);
+            this.wasmManager.setCavMix(node.currentCavMix, node.voiceId);
+            this.wasmManager.setBioMix(node.currentBioMix, node.voiceId);
         }
+    }
+
+    updateOwnShipFocusGain(now = this.ctx ? this.ctx.currentTime : performance.now() / 1000) {
+        if (!this.wasmManager || !this.wasmManager.ready) return;
+
+        const dt = Math.max(0, Math.min(0.2, now - (this.lastOwnGainUpdateTime || now)));
+        this.lastOwnGainUpdateTime = now;
+
+        const focusActive = this.focusedTargetId !== null;
+        const targetOwnGain = focusActive
+            ? this.ownBaseGain * this.focusSettings.ownShipDuck
+            : this.ownBaseGain;
+        const ownRising = targetOwnGain > this.ownCurrentGain;
+        const ownTau = ownRising ? this.focusSettings.gainAttack : this.focusSettings.gainRelease;
+        const ownAlpha = 1 - Math.exp(-dt / Math.max(0.001, ownTau));
+        this.ownCurrentGain += (targetOwnGain - this.ownCurrentGain) * ownAlpha;
+
+        this.wasmManager.setGain(this.ownCurrentGain, this.ownVoiceId);
     }
 
     createPingTap(vol = 0.5, startFreq = 1200, endFreq = 900) {
