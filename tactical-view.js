@@ -58,7 +58,6 @@ export class TacticalView {
         this.container.addEventListener('click', (e) => this.handleCanvasClick(e));
 
         this.setupTerrain();
-        this.scene.add(new THREE.GridHelper(200, 20, 0x00ffff, 0x004444));
 
         // Debug cube
         const cube = new THREE.Mesh(new THREE.BoxGeometry(5, 5, 5), new THREE.MeshBasicMaterial({ color: 0x00ff00 }));
@@ -205,11 +204,16 @@ export class TacticalView {
         this.targetMeshes.set(targetId, mesh);
     }
 
-    updateTargetPosition(targetId, x, z) {
+    updateTargetPosition(targetId, x, z, passive = false) {
         const mesh = this.targetMeshes.get(targetId);
         if (mesh) {
             mesh.position.set(x, 1, z);
-            mesh.material.opacity = 1;
+            if (passive) {
+                // Passive detection maintains a base visibility
+                if (mesh.material.opacity < 0.3) mesh.material.opacity = 0.3;
+            } else {
+                mesh.material.opacity = 1;
+            }
         }
     }
 
@@ -280,7 +284,8 @@ export class TacticalView {
         if (this.viewMode === '3d') {
             // Check targets in 3D
             this.targetMeshes.forEach((mesh, id) => {
-                if (mesh.material.opacity <= 0.1) return;
+                // Target must be visible enough to be selectable
+                if (mesh.material.opacity <= 0.2) return;
 
                 const vec = new THREE.Vector3(mesh.position.x, mesh.position.y, mesh.position.z);
                 vec.project(this.camera);
@@ -368,7 +373,7 @@ export class TacticalView {
         });
 
         targets.forEach(t => {
-            if (t.detected) {
+            if (t.detected || t.isPassivelyDetected) {
                 // Rotate position
                 let tx = t.x;
                 let tz = t.z;
@@ -382,8 +387,13 @@ export class TacticalView {
 
                 const isSelected = this.selectedTargetId === t.id;
 
+                // Set transparency for passive detections
+                ctx.globalAlpha = t.detected ? 1.0 : 0.5;
+
                 // Draw Target based on type
                 ctx.fillStyle = isSelected ? '#ff0000' : this.getTypeColor(t.type);
+                ctx.strokeStyle = ctx.fillStyle;
+                ctx.lineWidth = 1;
 
                 if (t.type === 'SUBMARINE') {
                     // Draw Diamond
@@ -393,24 +403,32 @@ export class TacticalView {
                     ctx.lineTo(dx, dy + 8);
                     ctx.lineTo(dx - 8, dy);
                     ctx.closePath();
-                    ctx.fill();
+                    if (t.detected) ctx.fill();
+                    ctx.stroke();
                 } else if (t.type === 'BIOLOGICAL') {
                     // Draw Small Circle
                     ctx.beginPath();
                     ctx.arc(dx, dy, 4, 0, Math.PI * 2);
-                    ctx.fill();
+                    if (t.detected) ctx.fill();
+                    ctx.stroke();
                 } else if (t.type === 'STATIC') {
                     // Draw Square
-                    ctx.fillRect(dx - 6, dy - 6, 12, 12);
+                    if (t.detected) {
+                        ctx.fillRect(dx - 6, dy - 6, 12, 12);
+                    } else {
+                        ctx.strokeRect(dx - 6, dy - 6, 12, 12);
+                    }
                 } else {
                     // Draw Circle (SHIP)
                     ctx.beginPath();
                     ctx.arc(dx, dy, 6, 0, Math.PI * 2);
-                    ctx.fill();
+                    if (t.detected) ctx.fill();
+                    ctx.stroke();
                 }
 
                 // Draw Label
                 ctx.fillStyle = '#ffffff';
+                ctx.globalAlpha = 1.0;
                 ctx.fillText(t.id.replace('target-', 'T'), dx + 10, dy);
             }
         });
@@ -492,12 +510,15 @@ export class TacticalView {
 
         // Draw Targets
         targets.forEach(t => {
-            if (t.detected) {
+            if (t.detected || t.isPassivelyDetected) {
                 const dx = centerX + t.x * scale;
                 const dy = centerY + t.z * scale;
 
                 const isSelected = this.selectedTargetId === t.id;
+                ctx.globalAlpha = t.detected ? 1.0 : 0.5;
                 ctx.fillStyle = isSelected ? '#ff0000' : this.getTypeColor(t.type);
+                ctx.strokeStyle = ctx.fillStyle;
+                ctx.lineWidth = 1;
 
                 if (t.type === 'SUBMARINE') {
                     // Diamond
@@ -507,20 +528,27 @@ export class TacticalView {
                     ctx.lineTo(dx, dy + 7);
                     ctx.lineTo(dx - 7, dy);
                     ctx.closePath();
-                    ctx.fill();
+                    if (t.detected) ctx.fill();
+                    ctx.stroke();
                 } else if (t.type === 'BIOLOGICAL') {
                     // Circle
                     ctx.beginPath();
                     ctx.arc(dx, dy, 4, 0, Math.PI * 2);
-                    ctx.fill();
+                    if (t.detected) ctx.fill();
+                    ctx.stroke();
                 } else {
                     // Square
-                    ctx.fillRect(dx - 5, dy - 5, 10, 10);
+                    if (t.detected) {
+                        ctx.fillRect(dx - 5, dy - 5, 10, 10);
+                    } else {
+                        ctx.strokeRect(dx - 5, dy - 5, 10, 10);
+                    }
                 }
 
                 // Label
                 ctx.fillStyle = '#ffffff';
                 ctx.font = '8px monospace';
+                ctx.globalAlpha = 1.0;
                 ctx.fillText(t.id.replace('target-', 'T'), dx + 8, dy);
             }
         });

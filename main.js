@@ -148,8 +148,9 @@ function renderLoop() {
         target.passiveSNR = snr;
         target.isPassivelyDetected = snr > 1.5; // Detection threshold
 
-        // In Passive Mode, we still want to see close targets on BTR
-        // but active pinging makes them "Found" (detected = true) for tactical maps
+        if (target.isPassivelyDetected) {
+            tacticalView.updateTargetPosition(target.id, target.x, target.z, true);
+        }
     });
 
     // Update Scanning logic
@@ -230,6 +231,9 @@ document.querySelectorAll('input[name="view-mode"]').forEach(el => {
 document.getElementById('tactical-viewport').addEventListener('targetSelected', (e) => {
     selectedTargetId = e.detail.id;
     console.log("Target Selected:", selectedTargetId);
+
+    // Update Audio Focus
+    audioSys.setFocusedTarget(selectedTargetId);
 
     const targetIdEl = document.getElementById('target-id-text');
     if (!selectedTargetId) {

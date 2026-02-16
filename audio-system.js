@@ -6,6 +6,7 @@ export class AudioSystem {
         this.analyser = null;
         this.dataArray = null;
         this.targetNodes = new Map(); // Stores gain nodes for targets
+        this.focusedTargetId = null;
     }
 
     async init() {
@@ -191,10 +192,23 @@ export class AudioSystem {
         playClick();
     }
 
+    setFocusedTarget(targetId) {
+        this.focusedTargetId = targetId;
+    }
+
     updateTargetVolume(targetId, distance) {
         const node = this.targetNodes.get(targetId);
         if (node && this.ctx) {
-            const vol = Math.max(0.005, (100 - distance) / 400) * 0.3;
+            // Increased base gain and scaling
+            let vol = Math.max(0.015, (120 - distance) / 250) * 0.6;
+
+            // Apply Acoustic Focus boost/ducking
+            if (this.focusedTargetId === targetId) {
+                vol *= 2.5; // Focus boost
+            } else if (this.focusedTargetId) {
+                vol *= 0.3; // Duck non-focused targets
+            }
+
             node.gain.gain.setTargetAtTime(vol, this.ctx.currentTime, 0.1);
         }
     }
