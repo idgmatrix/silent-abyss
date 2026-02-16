@@ -13,6 +13,12 @@ export const TrackState = {
     LOST: 'LOST'
 };
 
+export const BehaviorState = {
+    NORMAL: 'NORMAL',
+    EVADE: 'EVADE',
+    INTERCEPT: 'INTERCEPT'
+};
+
 export class SimulationTarget {
     constructor(id, config = {}) {
         this.id = id;
@@ -75,6 +81,9 @@ export class SimulationTarget {
         this.timeSinceLastTurn = 0;
         this.nextTurnInterval = 10 + (config.seed ?? 0.5) * 20; // Use provided seed or default
         this.lastPulseId = -1;
+        this.behaviorState = BehaviorState.NORMAL;
+        this.alertTimer = 0;
+        this.cruiseSpeed = this.speed;
     }
 
     // Compatibility Getters
@@ -128,11 +137,39 @@ export class SimulationTarget {
         // Legacy support: if setting negative velocity, try to turn around?
         // Better to just update speed magnitude
         this.speed = Math.abs(val);
+        this.cruiseSpeed = this.speed;
+    }
+
+    reactToPing() {
+        if (this.type === TargetType.SUBMARINE || this.type === TargetType.SHIP) {
+            this.behaviorState = BehaviorState.EVADE;
+            this.alertTimer = 30;
+            return;
+        }
+
+        if (this.type === TargetType.TORPEDO) {
+            this.behaviorState = BehaviorState.INTERCEPT;
+            this.alertTimer = 0;
+            return;
+        }
     }
 
     update(dt, random) {
-        // 1. AI Logic: Patrol / Collision Avoidance
-        if (this.isPatrolling) {
+        // 1. AI Logic: Reactive behavior or patrol/collision avoidance
+        if (this.behaviorState === BehaviorState.EVADE) {
+            this.targetCourse = Math.atan2(this.z, this.x); // Bearing away from origin (0,0)
+            this.speed = this.cruiseSpeed * 1.5;
+            this.alertTimer -= dt;
+
+            if (this.alertTimer <= 0) {
+                this.behaviorState = BehaviorState.NORMAL;
+                this.alertTimer = 0;
+                this.speed = this.cruiseSpeed;
+            }
+        } else if (this.behaviorState === BehaviorState.INTERCEPT) {
+            this.targetCourse = Math.atan2(-this.z, -this.x); // Bearing toward origin (0,0)
+            this.speed = this.cruiseSpeed;
+        } else if (this.isPatrolling) {
             const dist = Math.hypot(this.x - this.patrolCenter.x, this.z - this.patrolCenter.z);
 
             // Check boundary

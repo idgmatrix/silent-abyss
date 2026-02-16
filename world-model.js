@@ -18,6 +18,12 @@ export class WorldModel {
         // Configuration
         this.detectionThreshold = 1.5;
         this.lostTrackTimeout = 5.0; // 5 seconds
+        this.losSampleCount = 10;
+        this.passiveOcclusionAttenuation = 0.15;
+        this.soundLayerDepth = -5.0;
+        this.shadowZoneAttenuation = 0.5;
+        this.multiPathStrength = 0.2;
+        this.multiPathFrequency = 0.5;
     }
 
     seedTargets() {
@@ -121,9 +127,27 @@ export class WorldModel {
     }
 
     processPassiveDetection() {
+        const ownShipDepth = this.getOwnShipDepth();
+
         this.simEngine.targets.forEach(target => {
             const sig = target.getAcousticSignature();
-            const snr = sig / (Math.pow(target.distance / 10, 1.5) + 1);
+            let snr = sig / (Math.pow(target.distance / 10, 1.5) + 1);
+
+            const targetDepth = this.getTargetDepth(target);
+            const acrossLayer =
+                (ownShipDepth > this.soundLayerDepth && targetDepth < this.soundLayerDepth) ||
+                (ownShipDepth < this.soundLayerDepth && targetDepth > this.soundLayerDepth);
+            if (acrossLayer) {
+                snr *= this.shadowZoneAttenuation;
+            }
+
+            const multiPathFactor = 1 + Math.sin(target.distance * this.multiPathFrequency) * this.multiPathStrength;
+            snr *= multiPathFactor;
+
+            const hasLineOfSight = this.checkLineOfSight(target);
+            if (!hasLineOfSight) {
+                snr *= this.passiveOcclusionAttenuation;
+            }
             target.snr = snr; // Store current SNR for UI
 
             const isDetected = snr > this.detectionThreshold;
@@ -141,6 +165,22 @@ export class WorldModel {
         });
     }
 
+    getOwnShipDepth() {
+        if (!this.tacticalView || typeof this.tacticalView.getTerrainHeight !== 'function') {
+            return 0;
+        }
+
+        return this.tacticalView.getTerrainHeight(0, 0) + 5.0;
+    }
+
+    getTargetDepth(target) {
+        if (!this.tacticalView || typeof this.tacticalView.getTerrainHeight !== 'function') {
+            return 0;
+        }
+
+        return this.tacticalView.getTerrainHeight(target.x, target.z) + 2.0;
+    }
+
     processActiveScanning() {
         this.scanRadius += 15.0;
         this.tacticalView.setScanExUniforms(this.scanRadius, true);
@@ -149,8 +189,14 @@ export class WorldModel {
             // If scanning past target and it's not already tracked by active scan this pulse
             if (this.scanRadius >= target.distance && target.lastPulseId !== this.currentPulseId) {
                 target.lastPulseId = this.currentPulseId;
+                const hasLineOfSight = this.checkLineOfSight(target);
+                if (!hasLineOfSight) {
+                    return;
+                }
+
                 target.state = TrackState.TRACKED;
                 target.lastDetectedTime = this.elapsedTime;
+                target.reactToPing();
 
                 const echoVol = 0.6 * (1.0 - target.distance / 200);
                 this.audioSys.createPingEcho(echoVol, target.distance);
@@ -167,6 +213,34 @@ export class WorldModel {
             this.tacticalView.setScanExUniforms(this.scanRadius, false);
             window.dispatchEvent(new CustomEvent('sonar-scan-complete'));
         }
+    }
+
+    checkLineOfSight(target) {
+        if (!this.tacticalView || typeof this.tacticalView.getTerrainHeight !== 'function') {
+            return true;
+        }
+
+        const startX = 0;
+        const startZ = 0;
+        const endX = target.x;
+        const endZ = target.z;
+
+        const ownShipY = this.tacticalView.getTerrainHeight(startX, startZ) + 5.0;
+        const targetY = this.tacticalView.getTerrainHeight(endX, endZ) + 2.0;
+
+        for (let i = 1; i < this.losSampleCount; i++) {
+            const t = i / this.losSampleCount;
+            const sx = startX + (endX - startX) * t;
+            const sz = startZ + (endZ - startZ) * t;
+            const losY = ownShipY + (targetY - ownShipY) * t;
+            const terrainY = this.tacticalView.getTerrainHeight(sx, sz);
+
+            if (terrainY > losY) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     triggerPing() {
