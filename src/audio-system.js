@@ -15,6 +15,9 @@ export class AudioSystem {
         this.bioTimeouts = new Set();
         this.timeDomainArray = null;
         this.computeProcessor = null;
+        this.outputGain = null;
+        this.startupFadeDelay = 0.12;
+        this.startupFadeDuration = 0.28;
         this.focusSettings = {
             gainFloor: 0.015,
             distanceMax: 120,
@@ -45,14 +48,22 @@ export class AudioSystem {
             this.analyser = this.ctx.createAnalyser();
             this.analyser.fftSize = 2048;
             this.analyser.smoothingTimeConstant = 0.85;
+            this.analyser.minDecibels = -120;
+            this.analyser.maxDecibels = -30;
             this.dataArray = new Uint8Array(this.analyser.frequencyBinCount);
             this.timeDomainArray = new Float32Array(this.analyser.fftSize);
+            this.outputGain = this.ctx.createGain();
+            const now = this.ctx.currentTime;
+            this.outputGain.gain.setValueAtTime(0, now);
+            this.outputGain.gain.linearRampToValueAtTime(0, now + this.startupFadeDelay);
+            this.outputGain.gain.linearRampToValueAtTime(1, now + this.startupFadeDelay + this.startupFadeDuration);
+            this.outputGain.connect(this.analyser);
             this.analyser.connect(this.ctx.destination);
 
             // Initialize Wasm Manager with existing context and connect to analyser
             await this.wasmManager.init({
                 ctx: this.ctx,
-                outputNode: this.analyser
+                outputNode: this.outputGain
             });
 
             this.ownVoiceId = this.wasmManager.defaultVoiceId;
@@ -231,7 +242,7 @@ export class AudioSystem {
         const osc = this.ctx.createOscillator();
         const g = this.ctx.createGain();
 
-        osc.connect(g).connect(this.analyser);
+        osc.connect(g).connect(this.outputGain);
 
         osc.frequency.setValueAtTime(startFreq, time);
         osc.frequency.exponentialRampToValueAtTime(endFreq, time + 0.1);
@@ -251,9 +262,8 @@ export class AudioSystem {
         const osc = this.ctx.createOscillator();
         const g = this.ctx.createGain();
 
-        // Connect directly to analyser to bypass any sub-group ducking if implemented later,
-        // but for now analyser is the master bus.
-        osc.connect(g).connect(this.analyser);
+        // Route through the same startup-gated bus used by Wasm voices.
+        osc.connect(g).connect(this.outputGain);
 
         // Sharper sweep for echo: 1100Hz -> 850Hz
         osc.frequency.setValueAtTime(1100, time);
@@ -300,6 +310,10 @@ export class AudioSystem {
             if (this.analyser) {
                 this.analyser.disconnect();
                 this.analyser = null;
+            }
+            if (this.outputGain) {
+                this.outputGain.disconnect();
+                this.outputGain = null;
             }
 
             this.timeDomainArray = null;

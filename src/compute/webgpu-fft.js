@@ -23,7 +23,8 @@ export class WebGPUFFTProcessor {
         const requestedSize = options.fftSize ?? 1024;
 
         this.fftSize = isPowerOfTwo(requestedSize) ? requestedSize : 1024;
-        this.smoothing = clamp(options.smoothing ?? 0.82, 0, 0.98);
+        this.smoothing = clamp(options.smoothing ?? 0.72, 0, 0.98); // Reduced default smoothing for better reactivity
+        this.intensityReference = 0.12;
 
         this.backend = 'cpu';
         this.ready = false;
@@ -351,11 +352,15 @@ fn main(@builtin(global_invocation_id) gid : vec3<u32>) {
 
     _postProcessSpectrum(spectrum) {
         const out = new Float32Array(spectrum.length);
+        const LOG_SCALE_FACTOR = 100;
+        const LOG_SCALE_NORMALIZER = Math.log1p(LOG_SCALE_FACTOR);
+        const REFERENCE_DECAY = 0.94;
+        const REFERENCE_FLOOR = 0.08;
 
         // Filter more low-frequency bins with a smoother ramp
         const DC_SKIP = 16;
+        let framePeak = 0;
 
-        let maxValue = 0;
         for (let i = 0; i < spectrum.length; i++) {
             let val = spectrum[i];
 
@@ -365,20 +370,23 @@ fn main(@builtin(global_invocation_id) gid : vec3<u32>) {
                 val *= factor;
             }
 
-            const normalized = Math.log1p(Math.max(0, val) * 24) / Math.log(25);
+            const normalized =
+                Math.log1p(Math.max(0, val) * LOG_SCALE_FACTOR) / LOG_SCALE_NORMALIZER;
 
-            // Exclude dampened low-freq range from max calculation to avoid squashing targets
+            const clamped = Math.min(1.0, normalized);
+            out[i] = clamped;
+
             if (i >= DC_SKIP) {
-                maxValue = Math.max(maxValue, normalized);
+                framePeak = Math.max(framePeak, clamped);
             }
-            out[i] = normalized;
         }
 
-        if (maxValue > 0) {
-            for (let i = 0; i < out.length; i++) {
-                // Normalize and clamp to 1.0 (DC might still exceed it but we cap it)
-                out[i] = Math.min(1.0, out[i] / maxValue);
-            }
+        // Decaying peak reference prevents startup transients from flattening later frames.
+        const decayedReference = Math.max(REFERENCE_FLOOR, this.intensityReference * REFERENCE_DECAY);
+        this.intensityReference = Math.max(framePeak, decayedReference);
+
+        for (let i = 0; i < out.length; i++) {
+            out[i] = Math.min(1.0, out[i] / this.intensityReference);
         }
 
         if (!this._spectrumCache || this._spectrumCache.length !== out.length) {
@@ -409,5 +417,6 @@ fn main(@builtin(global_invocation_id) gid : vec3<u32>) {
         this.adapter = null;
         this.ready = false;
         this.backend = 'cpu';
+        this.intensityReference = 0.12;
     }
 }
