@@ -58,6 +58,33 @@ simEngine.addTarget(new SimulationTarget('target-04', {
     isPatrolling: false
 }));
 
+simEngine.addTarget(new SimulationTarget('target-05', {
+    // School of biologicals
+    distance: 110,
+    angle: Math.PI * 0.4,
+    type: 'BIOLOGICAL',
+    isPatrolling: true,
+    patrolRadius: 15
+}));
+
+simEngine.addTarget(new SimulationTarget('target-06', {
+    // Derelict wreck
+    x: -120,
+    z: -40,
+    type: 'STATIC',
+    isPatrolling: false
+}));
+
+simEngine.addTarget(new SimulationTarget('target-07', {
+    // Inbound Torpedo
+    distance: 140,
+    angle: Math.PI * 1.1,
+    type: 'TORPEDO',
+    isPatrolling: true,
+    patrolRadius: 200,
+    targetCourse: Math.PI * 2.1 // Move towards center-ish
+}));
+
 // UI Elements
 const rpmDisplay = document.getElementById('rpm-display');
 const statusDisplay = document.getElementById('tactical-status');
@@ -96,6 +123,11 @@ async function initSystems() {
     const themeSelect = document.getElementById('btr-theme-select');
     if (themeSelect) {
         themeSelect.onchange = (e) => sonarVisuals.setTheme(e.target.value);
+    }
+
+    const waterfallThemeSelect = document.getElementById('waterfall-theme-select');
+    if (waterfallThemeSelect) {
+        waterfallThemeSelect.onchange = (e) => sonarVisuals.setWaterfallTheme(e.target.value);
     }
 
     requestAnimationFrame(renderLoop);

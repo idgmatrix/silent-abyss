@@ -230,6 +230,10 @@ export class TacticalView {
                 geometry = new THREE.OctahedronGeometry(1.5, 0);
                 color = 0x00ffff;
                 break;
+            case 'TORPEDO':
+                geometry = new THREE.ConeGeometry(0.8, 4, 8);
+                color = 0xff0000;
+                break;
             case 'BIOLOGICAL':
                 geometry = new THREE.SphereGeometry(0.8, 8, 8);
                 color = 0x00ff00;
@@ -344,6 +348,7 @@ export class TacticalView {
     getTypeColor(type) {
         switch (type) {
             case 'SUBMARINE': return '#00ffff';
+            case 'TORPEDO': return '#ff0000';
             case 'BIOLOGICAL': return '#00ff00';
             case 'STATIC': return '#888888';
             default: return '#ff8800';
@@ -516,6 +521,16 @@ export class TacticalView {
                     ctx.closePath();
                     if (t.detected) ctx.fill();
                     ctx.stroke();
+                } else if (t.type === 'TORPEDO') {
+                    // Draw Triangle (pointing in course direction?)
+                    // For now, fixed triangle
+                    ctx.beginPath();
+                    ctx.moveTo(dx, dy - 8);
+                    ctx.lineTo(dx + 5, dy + 5);
+                    ctx.lineTo(dx - 5, dy + 5);
+                    ctx.closePath();
+                    if (t.detected) ctx.fill();
+                    ctx.stroke();
                 } else if (t.type === 'BIOLOGICAL') {
                     // Draw Small Circle
                     ctx.beginPath();
@@ -643,6 +658,15 @@ export class TacticalView {
                     ctx.lineTo(dx + 7, dy);
                     ctx.lineTo(dx, dy + 7);
                     ctx.lineTo(dx - 7, dy);
+                    ctx.closePath();
+                    if (t.detected) ctx.fill();
+                    ctx.stroke();
+                } else if (t.type === 'TORPEDO') {
+                    // Triangle
+                    ctx.beginPath();
+                    ctx.moveTo(dx, dy - 7);
+                    ctx.lineTo(dx + 4, dy + 4);
+                    ctx.lineTo(dx - 4, dy + 4);
                     ctx.closePath();
                     if (t.detected) ctx.fill();
                     ctx.stroke();

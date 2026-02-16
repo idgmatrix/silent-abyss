@@ -131,7 +131,15 @@
 
         <section class="col-span-3 flex flex-col gap-3 overflow-hidden min-h-0">
             <div class="panel flex-1 flex flex-col">
-                <div class="p-2 border-b border-cyan-900 label-tech text-center">Broadband Waterfall (Ambient)</div>
+                <div class="p-2 border-b border-cyan-900 label-tech text-center flex justify-between items-center">
+                    <span>Broadband Waterfall (Ambient)</span>
+                    <select id="waterfall-theme-select" class="bg-black border border-cyan-800 text-cyan-500 text-[9px] px-1 outline-none">
+                        <option value="CYAN">CYAN</option>
+                        <option value="PHOSPHOR">PHOSPHOR</option>
+                        <option value="AMBER">AMBER</option>
+                        <option value="THERMAL">THERMAL</option>
+                    </select>
+                </div>
                 <div id="waterfall-container" class="flex-1 bg-black overflow-hidden">
                     <canvas id="waterfall-canvas"></canvas>
                 </div>

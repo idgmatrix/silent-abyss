@@ -2,7 +2,8 @@ export const TargetType = {
     SHIP: 'SHIP',
     SUBMARINE: 'SUBMARINE',
     BIOLOGICAL: 'BIOLOGICAL',
-    STATIC: 'STATIC'
+    STATIC: 'STATIC',
+    TORPEDO: 'TORPEDO'
 };
 
 export class SimulationTarget {
@@ -22,11 +23,15 @@ export class SimulationTarget {
 
         // Movement Physics
         this.speed = Math.abs(config.speed ?? (config.velocity !== undefined ? Math.abs(config.velocity) : (this.type === TargetType.STATIC ? 0 : 0.15)));
+        if (this.type === TargetType.TORPEDO && config.speed === undefined) {
+            this.speed = 2.5; // Fast
+        }
 
         // Adjust default physics based on type
         let defaultTurnRate = 0.1;
         if (this.type === TargetType.SUBMARINE) defaultTurnRate = 0.05;
         if (this.type === TargetType.BIOLOGICAL) defaultTurnRate = 0.3;
+        if (this.type === TargetType.TORPEDO) defaultTurnRate = 0.5; // Very agile
 
         this.course = config.course ?? (config.angle ?? 0);
         this.turnRate = config.turnRate ?? defaultTurnRate; // radians per second
@@ -47,10 +52,12 @@ export class SimulationTarget {
         this.detected = config.detected ?? false;
         this.rpm = config.rpm ?? 120;
         if (this.type === TargetType.SUBMARINE) this.rpm = config.rpm ?? 90;
+        if (this.type === TargetType.TORPEDO) this.rpm = 600; // High speed turbine
         if (this.type === TargetType.BIOLOGICAL || this.type === TargetType.STATIC) this.rpm = 0;
 
         this.bladeCount = config.bladeCount ?? 3;
         if (this.type === TargetType.SUBMARINE) this.bladeCount = config.bladeCount ?? 7;
+        if (this.type === TargetType.TORPEDO) this.bladeCount = 4;
 
         // AI / Patrol Logic
         this.patrolRadius = config.patrolRadius ?? 90;
@@ -95,6 +102,7 @@ export class SimulationTarget {
             case 'SUBMARINE': base = 25; break;
             case 'BIOLOGICAL': base = 15; break;
             case 'STATIC': base = 5; break;
+            case 'TORPEDO': base = 80; break;
             default: base = 10;
         }
 
@@ -137,6 +145,10 @@ export class SimulationTarget {
                         this.targetCourse += (Math.random() - 0.5) * Math.PI; // +/- 90 degrees
                         this.speed = 0.05 + Math.random() * 0.25; // Variable speed
                         this.nextTurnInterval = 2 + Math.random() * 8; // Very frequent turns
+                    } else if (this.type === TargetType.TORPEDO) {
+                        // Torpedoes make sharp adjustments
+                        this.targetCourse += (Math.random() - 0.5) * 0.5;
+                        this.nextTurnInterval = 1 + Math.random() * 3;
                     } else {
                         this.targetCourse += (Math.random() - 0.5) * 2.0; // +/- 1 radian
                         this.nextTurnInterval = 20 + Math.random() * 40; // 20-60s per leg

@@ -6,36 +6,60 @@ export const BTR_THEMES = {
         BIOLOGICAL: [0, 255, 0],
         STATIC: [128, 128, 128],
         SHIP: [0, 255, 128],
+        TORPEDO: [255, 0, 0],
         SELF: [0, 100, 150],
         BACKGROUND: [0, 20, 20],
-        PING: [200, 255, 255]
+        PING: [200, 255, 255],
+        WATERFALL: {
+            low: [0, 0, 0],
+            mid: [0, 150, 255],
+            high: [200, 255, 255]
+        }
     },
     'PHOSPHOR': {
         SUBMARINE: [0, 255, 68],
         BIOLOGICAL: [100, 255, 100],
         STATIC: [0, 100, 20],
         SHIP: [0, 200, 50],
+        TORPEDO: [200, 255, 0],
         SELF: [0, 150, 40],
         BACKGROUND: [0, 30, 5],
-        PING: [150, 255, 150]
+        PING: [150, 255, 150],
+        WATERFALL: {
+            low: [0, 10, 0],
+            mid: [0, 200, 50],
+            high: [200, 255, 100]
+        }
     },
     'AMBER': {
         SUBMARINE: [255, 176, 0],
         BIOLOGICAL: [200, 100, 0],
         STATIC: [100, 50, 0],
         SHIP: [255, 120, 0],
+        TORPEDO: [255, 50, 0],
         SELF: [150, 80, 0],
         BACKGROUND: [30, 15, 0],
-        PING: [255, 220, 100]
+        PING: [255, 220, 100],
+        WATERFALL: {
+            low: [20, 5, 0],
+            mid: [255, 120, 0],
+            high: [255, 255, 150]
+        }
     },
     'THERMAL': {
         SUBMARINE: [255, 255, 255],
         BIOLOGICAL: [255, 200, 0],
         STATIC: [100, 100, 255],
         SHIP: [255, 100, 0],
+        TORPEDO: [255, 0, 0],
         SELF: [50, 50, 200],
         BACKGROUND: [0, 0, 50],
-        PING: [255, 255, 255]
+        PING: [255, 255, 255],
+        WATERFALL: {
+            low: [0, 0, 50],
+            mid: [255, 0, 0],
+            high: [255, 255, 255]
+        }
     }
 };
 
@@ -51,6 +75,7 @@ export class SonarVisuals {
 
         this.lastTargets = [];
         this.currentTheme = 'CYAN';
+        this.currentWaterfallTheme = 'CYAN';
     }
 
     init() {
@@ -190,6 +215,12 @@ export class SonarVisuals {
         }
     }
 
+    setWaterfallTheme(themeName) {
+        if (BTR_THEMES[themeName]) {
+            this.currentWaterfallTheme = themeName;
+        }
+    }
+
     drawBTR(targets, currentRpm, pingIntensity) {
         if (!this.btrDisplay) return;
 
@@ -268,17 +299,31 @@ export class SonarVisuals {
     drawWaterfall(dataArray) {
         if (!this.waterfallDisplay) return;
 
+        const theme = BTR_THEMES[this.currentWaterfallTheme].WATERFALL;
+
         this.waterfallDisplay.drawNextLine((ctx, width, height) => {
             const totalSamples = dataArray.length * 0.8;
             const bw = width / totalSamples;
 
             for(let i=0; i < totalSamples; i++) {
-                const val = dataArray[i];
+                const val = dataArray[i]; // 0-255
                 if(val > 15) {
-                    let r = val > 220 ? 255 : (val > 180 ? (val-180)*3 : 0);
-                    let g = val * 0.7;
-                    let b = val * 0.4;
-                    ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
+                    const norm = val / 255;
+                    let r, g, b;
+
+                    if (norm < 0.5) {
+                        const t = norm * 2;
+                        r = theme.low[0] * (1-t) + theme.mid[0] * t;
+                        g = theme.low[1] * (1-t) + theme.mid[1] * t;
+                        b = theme.low[2] * (1-t) + theme.mid[2] * t;
+                    } else {
+                        const t = (norm - 0.5) * 2;
+                        r = theme.mid[0] * (1-t) + theme.high[0] * t;
+                        g = theme.mid[1] * (1-t) + theme.high[1] * t;
+                        b = theme.mid[2] * (1-t) + theme.high[2] * t;
+                    }
+
+                    ctx.fillStyle = `rgb(${r|0}, ${g|0}, ${b|0})`;
                     ctx.fillRect(i * bw, 0, bw + 1, 1);
                 } else {
                     ctx.fillStyle = '#000';
