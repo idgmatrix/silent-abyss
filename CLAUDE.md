@@ -3,35 +3,37 @@
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Project Overview
-The Silent Abyss is a web-based simulation of a tactical submarine sonar and command system. It provides real-time acoustic analysis visualizations (LOFAR, DEMON, BTR, Waterfall) and a 3D tactical viewport.
+The Silent Abyss is a web-based simulation of a tactical submarine sonar and command system. It provides real-time acoustic analysis visualizations (LOFAR, DEMON, BTR, Waterfall) and a 3D tactical viewport with procedural terrain.
 
 ## Tech Stack
 - **Frontend**: Vanilla HTML5, JavaScript (ES modules), CSS3.
-- **Styling**: Tailwind CSS (CDN) + Custom CSS (`style.css`) for CRT/retro overlays.
+- **Styling**: Tailwind CSS (CDN) + Custom CRT/retro overlays.
 - **3D Engine**: Three.js r128 (CDN) for the tactical viewport.
-- **Audio**: Web Audio API with `AudioWorklet` for real-time synthesis and FFT analysis.
+- **Audio**: Web Audio API with `AudioWorklet` (inline Blob) for real-time engine noise synthesis.
 
 ## Development Lifecycle
-- **Run**: Open `index.html` in a modern web browser.
-- **Dependencies**: Requires internet access to load Tailwind and Three.js from CDNs.
-- **Build**: No build step required; serves raw static files.
-- **Tests**: No automated testing framework. Manual verification via browser.
+- **Run**: Open `index.html` in a modern browser.
+- **Dependencies**: Loads Tailwind and Three.js from CDNs; requires internet access.
+- **Build/Lint/Test**: No build step, linting, or automated tests implemented. Manual browser verification is used.
 
 ## Architecture & Structure
-- **Entry Point**: `index.html` loads `main.js` as an ES module (`type="module"`).
-- **Core Logic** (`main.js`):
-    - **Audio Engine**: `SoundEngineProcessor` defined as an inline string/Blob and loaded as an `AudioWorklet`. Handles propeller noise and cavitation.
-    - **Visualization Loop**: `renderLoop` (rAF) handles both 3D scene updates and 2D canvas drawing.
-    - **State**: Manages `audioCtx`, `analyser`, and `scene` global state.
+- **Entry Point**: `index.html` loads `main.js` as an ES module.
+- **Core Orchestration** (`main.js`): Coordinates simulation state, audio engine updates, and visualization loops. Handles global interaction events like `targetSelected`.
 - **Simulation** (`simulation.js`):
-    - **SimulationEngine**: Time-based tick loop using `performance.now()` to update targets.
-    - **SimulationTarget**: Physics model for targets (distance, bearing, velocity).
-- **Visualizations**:
-    - **3D**: Three.js scene with custom shader material for sonar ping rings on terrain.
-    - **2D Sonars**: `drawBTR` and `drawWaterfall` use the "draw-copy-draw" technique (shift existing canvas content) to create time-history scrolling effects.
+    - `SimulationEngine`: Fixed-interval tick loop for physics updates.
+    - `SimulationTarget`: Cartesian-based physics model (x, z). Includes `getAcousticSignature()` for passive sonar modeling.
+- **Tactical Display** (`tactical-view.js`):
+    - Manages Three.js scene (3D) and a shared 2D overlay for 'RADAR' and 'GRID' modes.
+    - Implements procedural Perlin-noise seabed terrain via `ShaderMaterial`.
+    - Handles map-based target selection.
+- **Sonar Visuals** (`sonar-visuals.js`):
+    - Renders acoustic displays (LOFAR, DEMON, BTR, Waterfall).
+    - `ScrollingDisplay`: Helper class using "draw-copy-draw" for time-history falls.
+    - Implements BTR-based bearing selection logic.
+- **Audio System** (`audio-system.js`): Wraps Web Audio API and AudioWorklet management.
 
 ## Key Implementation Details
-- **AudioWorklet**: Implemented via `URL.createObjectURL(new Blob(...))` to avoid separate file requirements for the worklet processor.
-- **Communication**: Main thread controls audio engine via `port.postMessage` (e.g., `SET_RPM`).
-- **Styling**: `.crt-overlay` in `style.css` creates the scanline/vignette effect. Tailwind handles grid/flex layouts.
-- **Coordinate System**: Measurements in meters/degrees. 3D Viewport centers on own-ship (0,0,0).
+- **Passive Detection**: `main.js` calculates Signal-to-Noise Ratio (SNR) for each target based on acoustic signatures and distance.
+- **Interaction Model**: Selection is unified via the `targetSelected` custom event. Selecting a target focuses LOFAR/DEMON analysis on that contact's profile.
+- **Coordinate System**: Measurements in meters/degrees. 3D Viewport centers on own-ship (0,0,0). North is +Z in 3D, and Up (0°) in North-Up 2D modes.
+- **DPR Scaling**: All canvases use `devicePixelRatio` scaling to ensure visual clarity on high-density displays.
