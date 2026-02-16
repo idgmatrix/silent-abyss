@@ -1,3 +1,5 @@
+import { TrackState } from './simulation.js';
+
 export class TacticalView {
     constructor() {
         this.scene = null;
@@ -117,6 +119,7 @@ export class TacticalView {
         this.container.addEventListener('click', this._clickHandler);
 
         this.setupTerrain();
+        this.setupOwnShip();
         this.setupSelectionRing();
         this.setupMarineSnow();
 
@@ -259,6 +262,17 @@ export class TacticalView {
         this.scene.add(this.terrain);
     }
 
+    setupOwnShip() {
+        const geometry = new THREE.ConeGeometry(2, 6, 4);
+        geometry.rotateX(Math.PI / 2); // Point along Z
+        const material = new THREE.MeshBasicMaterial({ color: 0x00ff00, wireframe: true });
+        const ownShip = new THREE.Mesh(geometry, material);
+        const y = this.getTerrainHeight(0, 0) + 5.0;
+        ownShip.position.set(0, y, 0); // Above terrain center
+        this.scene.add(ownShip);
+        this.ownShip = ownShip;
+    }
+
     addTarget(target) {
         const targetId = target.id;
         const type = target.type || 'SHIP';
@@ -353,6 +367,11 @@ export class TacticalView {
                     this.selectionRing.scale.set(s, s, s);
                 } else {
                     this.selectionRing.visible = false;
+                }
+
+                // Update Own Ship rotation
+                if (this.ownShip) {
+                    this.ownShip.rotation.y = -ownShipCourse; // Adjust sign if needed
                 }
 
                 // Update Marine Snow
@@ -527,7 +546,7 @@ export class TacticalView {
         });
 
         targets.forEach(t => {
-            if (t.detected || t.isPassivelyDetected) {
+            if (t.state === TrackState.TRACKED) {
                 // Rotate position
                 let tx = t.x;
                 let tz = t.z;
@@ -541,8 +560,8 @@ export class TacticalView {
 
                 const isSelected = this.selectedTargetId === t.id;
 
-                // Set transparency for passive detections
-                ctx.globalAlpha = t.detected ? 1.0 : 0.5;
+                // Set transparency
+                ctx.globalAlpha = isSelected ? 1.0 : 0.7;
 
                 // Draw Selection HUD if selected
                 if (isSelected) {
@@ -562,36 +581,31 @@ export class TacticalView {
                     ctx.lineTo(dx, dy + 8);
                     ctx.lineTo(dx - 8, dy);
                     ctx.closePath();
-                    if (t.detected) ctx.fill();
+                    ctx.fill();
                     ctx.stroke();
                 } else if (t.type === 'TORPEDO') {
-                    // Draw Triangle (pointing in course direction?)
-                    // For now, fixed triangle
+                    // Draw Triangle
                     ctx.beginPath();
                     ctx.moveTo(dx, dy - 8);
                     ctx.lineTo(dx + 5, dy + 5);
                     ctx.lineTo(dx - 5, dy + 5);
                     ctx.closePath();
-                    if (t.detected) ctx.fill();
+                    ctx.fill();
                     ctx.stroke();
                 } else if (t.type === 'BIOLOGICAL') {
                     // Draw Small Circle
                     ctx.beginPath();
                     ctx.arc(dx, dy, 4, 0, Math.PI * 2);
-                    if (t.detected) ctx.fill();
+                    ctx.fill();
                     ctx.stroke();
                 } else if (t.type === 'STATIC') {
                     // Draw Square
-                    if (t.detected) {
-                        ctx.fillRect(dx - 6, dy - 6, 12, 12);
-                    } else {
-                        ctx.strokeRect(dx - 6, dy - 6, 12, 12);
-                    }
+                    ctx.fillRect(dx - 6, dy - 6, 12, 12);
                 } else {
                     // Draw Circle (SHIP)
                     ctx.beginPath();
                     ctx.arc(dx, dy, 6, 0, Math.PI * 2);
-                    if (t.detected) ctx.fill();
+                    ctx.fill();
                     ctx.stroke();
                 }
 
@@ -679,12 +693,12 @@ export class TacticalView {
 
         // Draw Targets
         targets.forEach(t => {
-            if (t.detected || t.isPassivelyDetected) {
+            if (t.state === TrackState.TRACKED) {
                 const dx = centerX + t.x * scale;
                 const dy = centerY + t.z * scale;
 
                 const isSelected = this.selectedTargetId === t.id;
-                ctx.globalAlpha = t.detected ? 1.0 : 0.5;
+                ctx.globalAlpha = isSelected ? 1.0 : 0.7;
 
                 if (isSelected) {
                     this.drawSelectionHUD(ctx, dx, dy, 10, this.pulse);
@@ -702,7 +716,7 @@ export class TacticalView {
                     ctx.lineTo(dx, dy + 7);
                     ctx.lineTo(dx - 7, dy);
                     ctx.closePath();
-                    if (t.detected) ctx.fill();
+                    ctx.fill();
                     ctx.stroke();
                 } else if (t.type === 'TORPEDO') {
                     // Triangle
@@ -711,21 +725,17 @@ export class TacticalView {
                     ctx.lineTo(dx + 4, dy + 4);
                     ctx.lineTo(dx - 4, dy + 4);
                     ctx.closePath();
-                    if (t.detected) ctx.fill();
+                    ctx.fill();
                     ctx.stroke();
                 } else if (t.type === 'BIOLOGICAL') {
                     // Circle
                     ctx.beginPath();
                     ctx.arc(dx, dy, 4, 0, Math.PI * 2);
-                    if (t.detected) ctx.fill();
+                    ctx.fill();
                     ctx.stroke();
                 } else {
                     // Square
-                    if (t.detected) {
-                        ctx.fillRect(dx - 5, dy - 5, 10, 10);
-                    } else {
-                        ctx.strokeRect(dx - 5, dy - 5, 10, 10);
-                    }
+                    ctx.fillRect(dx - 5, dy - 5, 10, 10);
                 }
 
                 // Label

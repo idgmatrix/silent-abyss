@@ -6,10 +6,19 @@ export const TargetType = {
     TORPEDO: 'TORPEDO'
 };
 
+export const TrackState = {
+    UNDETECTED: 'UNDETECTED',
+    AMBIGUOUS: 'AMBIGUOUS', // Detected but not classified
+    TRACKED: 'TRACKED',
+    LOST: 'LOST'
+};
+
 export class SimulationTarget {
     constructor(id, config = {}) {
         this.id = id;
         this.type = config.type ?? TargetType.SHIP;
+        this.state = TrackState.UNDETECTED;
+        this.lastDetectedTime = 0;
 
         // Internal State (Cartesian)
         this.x = config.x ?? 0;
@@ -49,7 +58,6 @@ export class SimulationTarget {
         }
 
         // Audio/Visual properties
-        this.detected = config.detected ?? false;
         this.rpm = config.rpm ?? 120;
         if (this.type === TargetType.SUBMARINE) this.rpm = config.rpm ?? 90;
         if (this.type === TargetType.TORPEDO) this.rpm = 600; // High speed turbine
@@ -65,7 +73,7 @@ export class SimulationTarget {
         this.lastTurnTime = 0;
         this.patrolCenter = { x: this.x, z: this.z }; // Patrol around start position
         this.timeSinceLastTurn = 0;
-        this.nextTurnInterval = 10 + Math.random() * 20; // 10-30s initial leg
+        this.nextTurnInterval = 10 + (config.seed ?? 0.5) * 20; // Use provided seed or default
     }
 
     // Compatibility Getters
@@ -121,7 +129,7 @@ export class SimulationTarget {
         this.speed = Math.abs(val);
     }
 
-    update(dt) {
+    update(dt, random) {
         // 1. AI Logic: Patrol / Collision Avoidance
         if (this.isPatrolling) {
             const dist = Math.hypot(this.x - this.patrolCenter.x, this.z - this.patrolCenter.z);
@@ -142,16 +150,16 @@ export class SimulationTarget {
                 if (this.timeSinceLastTurn > this.nextTurnInterval) {
                     if (this.type === TargetType.BIOLOGICAL) {
                         // Biologicals move very erratically
-                        this.targetCourse += (Math.random() - 0.5) * Math.PI; // +/- 90 degrees
-                        this.speed = 0.05 + Math.random() * 0.25; // Variable speed
-                        this.nextTurnInterval = 2 + Math.random() * 8; // Very frequent turns
+                        this.targetCourse += (random() - 0.5) * Math.PI; // +/- 90 degrees
+                        this.speed = 0.05 + random() * 0.25; // Variable speed
+                        this.nextTurnInterval = 2 + random() * 8; // Very frequent turns
                     } else if (this.type === TargetType.TORPEDO) {
                         // Torpedoes make sharp adjustments
-                        this.targetCourse += (Math.random() - 0.5) * 0.5;
-                        this.nextTurnInterval = 1 + Math.random() * 3;
+                        this.targetCourse += (random() - 0.5) * 0.5;
+                        this.nextTurnInterval = 1 + random() * 3;
                     } else {
-                        this.targetCourse += (Math.random() - 0.5) * 2.0; // +/- 1 radian
-                        this.nextTurnInterval = 20 + Math.random() * 40; // 20-60s per leg
+                        this.targetCourse += (random() - 0.5) * 2.0; // +/- 1 radian
+                        this.nextTurnInterval = 20 + random() * 40; // 20-60s per leg
                     }
                     this.timeSinceLastTurn = 0;
                 }
@@ -189,11 +197,19 @@ export class SimulationTarget {
 }
 
 export class SimulationEngine {
-    constructor() {
+    constructor(seed = 12345) {
         this.targets = [];
         this.onTick = null;
         this.lastUpdateTime = 0;
-        this.intervalId = null;
+        this.seed = seed;
+    }
+
+    // Simple deterministic PRNG (Mulberry32)
+    random() {
+        let t = this.seed += 0x6D2B79F5;
+        t = Math.imul(t ^ t >>> 15, t | 1);
+        t ^= t + Math.imul(t ^ t >>> 7, t | 61);
+        return ((t ^ t >>> 14) >>> 0) / 4294967296;
     }
 
     addTarget(target) {
@@ -201,27 +217,36 @@ export class SimulationEngine {
     }
 
     start(tickRate = 100) {
-        if (this.intervalId) return;
-
-        this.lastUpdateTime = performance.now();
-        this.intervalId = setInterval(() => {
-            const now = performance.now();
-            const dt = (now - this.lastUpdateTime) / 1000;
-            this.lastUpdateTime = now;
-            this.tick(dt);
-        }, tickRate);
+        this.accumulator = 0;
+        this.fixedDt = tickRate / 1000;
+        this.lastUpdateTime = 0;
     }
 
-    stop() {
-        if (this.intervalId) {
-            clearInterval(this.intervalId);
-            this.intervalId = null;
+    update(now) {
+        if (this.lastUpdateTime === 0) {
+            this.lastUpdateTime = now;
+            return;
+        }
+
+        const frameTime = (now - this.lastUpdateTime) / 1000;
+        this.lastUpdateTime = now;
+
+        this.accumulator += frameTime;
+
+        while (this.accumulator >= this.fixedDt) {
+            this.tick(this.fixedDt);
+            this.accumulator -= this.fixedDt;
         }
     }
 
+    stop() {
+        this.lastUpdateTime = 0;
+    }
+
     tick(dt) {
+        const randFunc = () => this.random();
         for (const target of this.targets) {
-            target.update(dt);
+            target.update(dt, randFunc);
         }
 
         if (this.onTick) {

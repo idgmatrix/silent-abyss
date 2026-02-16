@@ -1,4 +1,5 @@
 import { ScrollingDisplay } from './scrolling-display.js';
+import { TrackState } from './simulation.js';
 
 export const BTR_THEMES = {
     'CYAN': {
@@ -129,7 +130,7 @@ export class SonarVisuals {
         let minDiff = 15; // 15 degrees tolerance
 
         this.lastTargets.forEach(t => {
-            if (!t.isPassivelyDetected && !t.detected) return;
+            if (t.state !== TrackState.TRACKED) return;
 
             let diff = Math.abs(t.bearing - clickedBearing);
             if (diff > 180) diff = 360 - diff;
@@ -259,17 +260,17 @@ export class SonarVisuals {
 
             // Targets
             targets.forEach(target => {
-                if (!target.isPassivelyDetected && pingIntensity <= 0) return;
+                if (target.state !== TrackState.TRACKED && pingIntensity <= 0) return;
 
                 // Add small bearing jitter based on SNR
-                const jitter = (Math.random() - 0.5) * (5.0 / (target.passiveSNR + 0.1));
+                const jitter = (Math.random() - 0.5) * (5.0 / (target.snr + 0.1));
                 const targetX = ((target.bearing + jitter) / 360) * width;
 
-                let targetIntensity = Math.min(1.0, (target.passiveSNR * 40) / 255);
+                let targetIntensity = Math.min(1.0, (target.snr * 40) / 255);
 
-                // Boost intensity if target was recently detected by active sonar
-                if (target.detected) {
-                    targetIntensity = Math.max(targetIntensity, 0.8);
+                // Boost intensity if target is tracked
+                if (target.state === TrackState.TRACKED) {
+                    targetIntensity = Math.max(targetIntensity, 0.4);
                 }
 
                 let baseColor = theme[target.type] || theme.SHIP;

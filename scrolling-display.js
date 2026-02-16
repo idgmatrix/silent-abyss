@@ -35,6 +35,7 @@ export class ScrollingDisplay {
         const shift = dpr;
 
         // Efficient self-copy scrolling
+        this.ctx.imageSmoothingEnabled = false;
         this.ctx.drawImage(this.canvas, 0, 0, w, h - shift, 0, shift, w, h - shift);
 
         // Clear the top line
