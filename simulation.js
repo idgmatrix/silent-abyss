@@ -1,6 +1,14 @@
+export const TargetType = {
+    SHIP: 'SHIP',
+    SUBMARINE: 'SUBMARINE',
+    BIOLOGICAL: 'BIOLOGICAL',
+    STATIC: 'STATIC'
+};
+
 export class SimulationTarget {
     constructor(id, config = {}) {
         this.id = id;
+        this.type = config.type ?? TargetType.SHIP;
 
         // Internal State (Cartesian)
         this.x = config.x ?? 0;
@@ -13,9 +21,15 @@ export class SimulationTarget {
         }
 
         // Movement Physics
-        this.speed = Math.abs(config.speed ?? (config.velocity !== undefined ? Math.abs(config.velocity) : 0.15));
+        this.speed = Math.abs(config.speed ?? (config.velocity !== undefined ? Math.abs(config.velocity) : (this.type === TargetType.STATIC ? 0 : 0.15)));
+
+        // Adjust default physics based on type
+        let defaultTurnRate = 0.1;
+        if (this.type === TargetType.SUBMARINE) defaultTurnRate = 0.05;
+        if (this.type === TargetType.BIOLOGICAL) defaultTurnRate = 0.3;
+
         this.course = config.course ?? (config.angle ?? 0);
-        this.turnRate = config.turnRate ?? 0.1; // radians per second
+        this.turnRate = config.turnRate ?? defaultTurnRate; // radians per second
         this.targetCourse = config.targetCourse ?? this.course;
 
         // Compatibility Initialization for legacy velocity (radial)
@@ -32,13 +46,17 @@ export class SimulationTarget {
         // Audio/Visual properties
         this.detected = config.detected ?? false;
         this.rpm = config.rpm ?? 120;
+        if (this.type === TargetType.SUBMARINE) this.rpm = config.rpm ?? 90;
+        if (this.type === TargetType.BIOLOGICAL || this.type === TargetType.STATIC) this.rpm = 0;
+
         this.bladeCount = config.bladeCount ?? 3;
+        if (this.type === TargetType.SUBMARINE) this.bladeCount = config.bladeCount ?? 7;
 
         // AI / Patrol Logic
         this.patrolRadius = config.patrolRadius ?? 90;
-        this.isPatrolling = config.isPatrolling ?? true;
+        this.isPatrolling = config.isPatrolling ?? (this.type !== TargetType.STATIC);
         this.lastTurnTime = 0;
-        this.patrolCenter = { x: 0, z: 0 };
+        this.patrolCenter = { x: this.x, z: this.z }; // Patrol around start position
         this.timeSinceLastTurn = 0;
         this.nextTurnInterval = 10 + Math.random() * 20; // 10-30s initial leg
     }
@@ -78,7 +96,7 @@ export class SimulationTarget {
     update(dt) {
         // 1. AI Logic: Patrol / Collision Avoidance
         if (this.isPatrolling) {
-            const dist = this.distance;
+            const dist = Math.hypot(this.x - this.patrolCenter.x, this.z - this.patrolCenter.z);
 
             // Check boundary
             if (dist > this.patrolRadius) {
@@ -94,9 +112,16 @@ export class SimulationTarget {
                 this.timeSinceLastTurn += dt;
                 // Change course after interval
                 if (this.timeSinceLastTurn > this.nextTurnInterval) {
-                    this.targetCourse += (Math.random() - 0.5) * 2.0; // +/- 1 radian
+                    if (this.type === TargetType.BIOLOGICAL) {
+                        // Biologicals move very erratically
+                        this.targetCourse += (Math.random() - 0.5) * Math.PI; // +/- 90 degrees
+                        this.speed = 0.05 + Math.random() * 0.25; // Variable speed
+                        this.nextTurnInterval = 2 + Math.random() * 8; // Very frequent turns
+                    } else {
+                        this.targetCourse += (Math.random() - 0.5) * 2.0; // +/- 1 radian
+                        this.nextTurnInterval = 20 + Math.random() * 40; // 20-60s per leg
+                    }
                     this.timeSinceLastTurn = 0;
-                    this.nextTurnInterval = 20 + Math.random() * 40; // 20-60s per leg
                 }
             }
         }

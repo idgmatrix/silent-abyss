@@ -17,29 +17,44 @@ const simEngine = new SimulationEngine();
 
 // Targets Setup
 simEngine.addTarget(new SimulationTarget('target-01', {
-    // Crossing target (West to East). Coordinates: x (+East/-West), z (+South/-North)
+    // Merchant Vessel (SHIP)
     x: -90,
     z: 30,
-    course: 0.2, // Radians. 0 = East.
-    speed: 0.8,  // ~16 kts
-    turnRate: 0.05,
-    detected: false,
+    course: 0.2,
+    speed: 0.8,
+    type: 'SHIP',
     rpm: 120,
     bladeCount: 3,
-    isPatrolling: false,
-    patrolRadius: 100
+    isPatrolling: false
 }));
+
 simEngine.addTarget(new SimulationTarget('target-02', {
-    // Patrolling target
+    // Stealthy Submarine (SUBMARINE)
     distance: 60,
     angle: Math.PI * 0.75,
-    speed: 0.5, // ~10 kts
-    turnRate: 0.15,
-    detected: false,
-    rpm: 180,
-    bladeCount: 5,
+    speed: 0.3,
+    type: 'SUBMARINE',
+    rpm: 80,
+    bladeCount: 7,
     isPatrolling: true,
     patrolRadius: 80
+}));
+
+simEngine.addTarget(new SimulationTarget('target-03', {
+    // Erratic Whale (BIOLOGICAL)
+    distance: 40,
+    angle: -Math.PI * 0.25,
+    type: 'BIOLOGICAL',
+    isPatrolling: true,
+    patrolRadius: 30
+}));
+
+simEngine.addTarget(new SimulationTarget('target-04', {
+    // Volcanic Vent (STATIC)
+    x: 70,
+    z: -80,
+    type: 'STATIC',
+    isPatrolling: false
 }));
 
 // UI Elements
@@ -53,8 +68,8 @@ async function initSystems() {
 
     // Initialize Targets in subsystems
     simEngine.targets.forEach(target => {
-        audioSys.createTargetAudio(target.id);
-        tacticalView.addTarget(target.id);
+        audioSys.createTargetAudio(target);
+        tacticalView.addTarget(target);
     });
 
     document.getElementById('setup-screen').classList.add('hidden');
@@ -85,10 +100,12 @@ function updateDashboard(target) {
     const velEl = document.getElementById('target-vel-text');
     const brgEl = document.getElementById('target-brg-text');
     const sigEl = document.getElementById('sig-text');
+    const classEl = document.getElementById('target-class-text');
 
     if (rangeEl) rangeEl.innerText = `${(target.distance * 50).toFixed(0)}m`;
     if (velEl) velEl.innerText = `${Math.abs(target.velocity * 20).toFixed(1)}kts`;
     if (brgEl) brgEl.innerText = `${target.bearing.toFixed(1)}° (T)`;
+    if (classEl) classEl.innerText = target.type;
 
     if (target.distance < 50) {
         if(sigEl) {

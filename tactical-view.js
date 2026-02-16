@@ -93,13 +93,39 @@ export class TacticalView {
         this.scene.add(this.terrain);
     }
 
-    addTarget(targetId) {
+    addTarget(target) {
+        const targetId = target.id;
+        const type = target.type || 'SHIP';
         if (this.targetMeshes.has(targetId)) return;
 
+        let geometry;
+        let color;
+
+        switch (type) {
+            case 'SUBMARINE':
+                geometry = new THREE.OctahedronGeometry(1.5, 0);
+                color = 0x00ffff;
+                break;
+            case 'BIOLOGICAL':
+                geometry = new THREE.SphereGeometry(0.8, 8, 8);
+                color = 0x00ff00;
+                break;
+            case 'STATIC':
+                geometry = new THREE.BoxGeometry(2, 2, 2);
+                color = 0x888888;
+                break;
+            case 'SHIP':
+            default:
+                geometry = new THREE.SphereGeometry(1.5, 8, 8);
+                color = 0xff8800;
+                break;
+        }
+
         const mesh = new THREE.Mesh(
-            new THREE.SphereGeometry(1.5, 8, 8),
-            new THREE.MeshBasicMaterial({ color: 0xff0000, transparent: true, opacity: 0 })
+            geometry,
+            new THREE.MeshBasicMaterial({ color: color, transparent: true, opacity: 0 })
         );
+        mesh.userData = { type: type }; // Store type for 2D rendering
         this.scene.add(mesh);
         this.targetMeshes.set(targetId, mesh);
     }
@@ -156,6 +182,15 @@ export class TacticalView {
 
     setViewMode(mode) {
         this.viewMode = mode;
+    }
+
+    getTypeColor(type) {
+        switch (type) {
+            case 'SUBMARINE': return '#00ffff';
+            case 'BIOLOGICAL': return '#00ff00';
+            case 'STATIC': return '#888888';
+            default: return '#ff8800';
+        }
     }
 
     handleCanvasClick(e) {
@@ -247,11 +282,34 @@ export class TacticalView {
                 const dx = centerX + rotX * scale;
                 const dy = centerY + rotZ * scale;
 
-                // Draw Target
-                ctx.fillStyle = this.selectedTargetId === t.id ? '#ff0000' : '#ff8800';
-                ctx.beginPath();
-                ctx.arc(dx, dy, 6, 0, Math.PI * 2);
-                ctx.fill();
+                const isSelected = this.selectedTargetId === t.id;
+
+                // Draw Target based on type
+                ctx.fillStyle = isSelected ? '#ff0000' : this.getTypeColor(t.type);
+
+                if (t.type === 'SUBMARINE') {
+                    // Draw Diamond
+                    ctx.beginPath();
+                    ctx.moveTo(dx, dy - 8);
+                    ctx.lineTo(dx + 8, dy);
+                    ctx.lineTo(dx, dy + 8);
+                    ctx.lineTo(dx - 8, dy);
+                    ctx.closePath();
+                    ctx.fill();
+                } else if (t.type === 'BIOLOGICAL') {
+                    // Draw Small Circle
+                    ctx.beginPath();
+                    ctx.arc(dx, dy, 4, 0, Math.PI * 2);
+                    ctx.fill();
+                } else if (t.type === 'STATIC') {
+                    // Draw Square
+                    ctx.fillRect(dx - 6, dy - 6, 12, 12);
+                } else {
+                    // Draw Circle (SHIP)
+                    ctx.beginPath();
+                    ctx.arc(dx, dy, 6, 0, Math.PI * 2);
+                    ctx.fill();
+                }
 
                 // Draw Label
                 ctx.fillStyle = '#ffffff';
@@ -319,14 +377,33 @@ export class TacticalView {
 
         if (!targets) return;
 
-        // Draw Targets (Simple squares for grid)
+        // Draw Targets
         targets.forEach(t => {
             if (t.detected) {
                 const dx = centerX + t.x * scale;
-                const dy = centerY + t.z * scale; // Z is 'down' in 2D canvas usually, but let's stick to standard map
+                const dy = centerY + t.z * scale;
 
-                ctx.fillStyle = this.selectedTargetId === t.id ? '#ff0000' : '#ff8800';
-                ctx.fillRect(dx - 5, dy - 5, 10, 10);
+                const isSelected = this.selectedTargetId === t.id;
+                ctx.fillStyle = isSelected ? '#ff0000' : this.getTypeColor(t.type);
+
+                if (t.type === 'SUBMARINE') {
+                    // Diamond
+                    ctx.beginPath();
+                    ctx.moveTo(dx, dy - 7);
+                    ctx.lineTo(dx + 7, dy);
+                    ctx.lineTo(dx, dy + 7);
+                    ctx.lineTo(dx - 7, dy);
+                    ctx.closePath();
+                    ctx.fill();
+                } else if (t.type === 'BIOLOGICAL') {
+                    // Circle
+                    ctx.beginPath();
+                    ctx.arc(dx, dy, 4, 0, Math.PI * 2);
+                    ctx.fill();
+                } else {
+                    // Square
+                    ctx.fillRect(dx - 5, dy - 5, 10, 10);
+                }
 
                 // Label
                 ctx.fillStyle = '#ffffff';

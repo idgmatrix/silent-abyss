@@ -106,36 +106,89 @@ export class AudioSystem {
         }
     }
 
-    createTargetAudio(targetId) {
+    createTargetAudio(target) {
         if (!this.ctx) return;
+        const targetId = target.id;
+        const type = target.type || 'SHIP';
 
-        const targetOsc = this.ctx.createOscillator();
-        targetOsc.type = 'triangle';
-        targetOsc.frequency.value = 40 + (Math.random() * 10);
-
-        const targetNoise = this.ctx.createBufferSource();
-        const bSize = this.ctx.sampleRate * 2;
-        const buffer = this.ctx.createBuffer(1, bSize, this.ctx.sampleRate);
-        const dArr = buffer.getChannelData(0);
-        for(let i=0; i<bSize; i++) dArr[i] = Math.random() * 2 - 1;
-        targetNoise.buffer = buffer;
-        targetNoise.loop = true;
-
-        const targetFilter = this.ctx.createBiquadFilter();
-        targetFilter.type = 'lowpass';
-        targetFilter.frequency.value = 300 + (Math.random() * 200);
-
+        let targetOsc = null;
+        let targetNoise = null;
+        let targetFilter = this.ctx.createBiquadFilter();
         const gain = this.ctx.createGain();
         gain.gain.value = 0.01;
 
-        targetOsc.connect(targetFilter);
-        targetNoise.connect(targetFilter);
+        if (type === 'BIOLOGICAL') {
+            // Random clicks/chirps instead of steady sound
+            this.createBioLoop(targetId, gain);
+        } else if (type === 'STATIC') {
+            // Just steady low rumble noise
+            targetNoise = this.createNoiseSource(2.0);
+            targetFilter.type = 'lowpass';
+            targetFilter.frequency.value = 150;
+            targetNoise.connect(targetFilter);
+        } else {
+            // SHIP or SUBMARINE
+            targetOsc = this.ctx.createOscillator();
+            targetOsc.type = type === 'SUBMARINE' ? 'sine' : 'triangle';
+
+            // Base frequency based on RPM and blade count
+            const baseFreq = (target.rpm / 60) * target.bladeCount;
+            targetOsc.frequency.value = Math.max(20, baseFreq * 2); // 2x for audible fundamental range
+
+            targetNoise = this.createNoiseSource(2.0);
+            targetFilter.type = 'lowpass';
+            targetFilter.frequency.value = type === 'SUBMARINE' ? 250 : 500;
+
+            targetOsc.connect(targetFilter);
+            targetNoise.connect(targetFilter);
+            targetOsc.start();
+        }
+
+        if (targetNoise) targetNoise.start();
         targetFilter.connect(gain).connect(this.analyser);
 
-        targetOsc.start();
-        targetNoise.start();
+        this.targetNodes.set(targetId, {
+            osc: targetOsc,
+            noise: targetNoise,
+            gain: gain,
+            type: type
+        });
+    }
 
-        this.targetNodes.set(targetId, { osc: targetOsc, noise: targetNoise, gain: gain });
+    createNoiseSource(duration) {
+        const bSize = this.ctx.sampleRate * duration;
+        const buffer = this.ctx.createBuffer(1, bSize, this.ctx.sampleRate);
+        const dArr = buffer.getChannelData(0);
+        for(let i=0; i<bSize; i++) dArr[i] = Math.random() * 2 - 1;
+        const noise = this.ctx.createBufferSource();
+        noise.buffer = buffer;
+        noise.loop = true;
+        return noise;
+    }
+
+    createBioLoop(targetId, outputGain) {
+        const playClick = () => {
+            if (!this.targetNodes.has(targetId)) return;
+
+            const osc = this.ctx.createOscillator();
+            const g = this.ctx.createGain();
+            osc.connect(g).connect(outputGain);
+
+            const freq = 800 + Math.random() * 2000;
+            osc.frequency.setValueAtTime(freq, this.ctx.currentTime);
+            osc.frequency.exponentialRampToValueAtTime(100, this.ctx.currentTime + 0.1);
+
+            g.gain.setValueAtTime(0, this.ctx.currentTime);
+            g.gain.linearRampToValueAtTime(0.5, this.ctx.currentTime + 0.01);
+            g.gain.linearRampToValueAtTime(0, this.ctx.currentTime + 0.1);
+
+            osc.start();
+            osc.stop(this.ctx.currentTime + 0.15);
+
+            // Schedule next click
+            setTimeout(playClick, 500 + Math.random() * 3000);
+        };
+        playClick();
     }
 
     updateTargetVolume(targetId, distance) {

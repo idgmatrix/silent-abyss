@@ -128,7 +128,16 @@ export class SonarVisuals {
             targets.forEach(target => {
                 const targetX = (target.bearing / 360) * width;
                 const targetIntensity = Math.max(0, 255 - target.distance * 2);
-                ctx.fillStyle = `rgb(0, ${targetIntensity}, ${targetIntensity * 0.5})`;
+
+                let color;
+                switch(target.type) {
+                    case 'SUBMARINE': color = `rgb(0, ${targetIntensity}, ${targetIntensity})`; break; // Cyan
+                    case 'BIOLOGICAL': color = `rgb(0, ${targetIntensity}, 0)`; break; // Green
+                    case 'STATIC': color = `rgb(${targetIntensity * 0.5}, ${targetIntensity * 0.5}, ${targetIntensity * 0.5})`; break; // Gray
+                    default: color = `rgb(0, ${targetIntensity}, ${targetIntensity * 0.5})`; break; // Orange-ish Green (Existing)
+                }
+
+                ctx.fillStyle = color;
                 ctx.fillRect(targetX - 1, 0, 3, 1);
             });
 
