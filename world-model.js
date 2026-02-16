@@ -111,6 +111,11 @@ export class WorldModel {
             this.processActiveScanning();
         }
 
+        // Update Audio Volume/Focus
+        this.simEngine.targets.forEach(t => {
+            this.audioSys.updateTargetVolume(t.id, t.distance);
+        });
+
         this.tacticalView.updateTargetOpacities();
     }
 
@@ -136,7 +141,7 @@ export class WorldModel {
     }
 
     processActiveScanning() {
-        this.scanRadius += 4.5;
+        this.scanRadius += 15.0;
         this.tacticalView.setScanExUniforms(this.scanRadius, true);
 
         this.simEngine.targets.forEach(target => {
