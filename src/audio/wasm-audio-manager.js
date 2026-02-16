@@ -8,6 +8,7 @@ export class WasmAudioManager {
         this.node = null;
         this.outputGain = null;
         this.ready = false;
+        this.lastError = null;
         this.defaultVoiceId = 0;
         this._addVoiceQueue = [];
 
@@ -35,18 +36,35 @@ export class WasmAudioManager {
         }
 
         this.ready = false;
+        this.lastError = null;
         this.defaultVoiceId = 0;
         this.ctx = ctx || new (window.AudioContext || window.webkitAudioContext)();
         this.ownsContext = !ctx;
 
         const workletUrl = workletPath instanceof URL ? workletPath : new URL(workletPath, import.meta.url);
-        await this.ctx.audioWorklet.addModule(workletUrl.href);
+        // Add timestamp to force reload and avoid cache issues with modified worklet
+        workletUrl.searchParams.set('t', Date.now());
+
+        try {
+            await this.ctx.audioWorklet.addModule(workletUrl.href);
+        } catch (e) {
+            console.error('WasmAudioManager: failed to add module', e);
+            throw e;
+        }
 
         this.node = new AudioWorkletNode(this.ctx, 'wasm-engine-processor', {
             numberOfInputs: 0,
             numberOfOutputs: 1,
             outputChannelCount: [1],
         });
+
+        // PING test
+        this.node.port.postMessage({ type: 'PING' });
+
+        this.node.onprocessorerror = (event) => {
+            console.error('WasmAudioManager: processor error', event);
+            this.lastError = 'AudioWorkletProcessor error (check console for details)';
+        };
 
         this.outputGain = this.ctx.createGain();
         this.outputGain.gain.value = 1.0;
@@ -59,7 +77,8 @@ export class WasmAudioManager {
         }
 
         this.node.port.onmessage = (event) => {
-            this.handleProcessorMessage(event.data);
+            const data = event.data;
+            this.handleProcessorMessage(data);
         };
 
         const wasmUrl = wasmPath instanceof URL ? wasmPath : new URL(wasmPath, import.meta.url);
@@ -68,16 +87,20 @@ export class WasmAudioManager {
             throw new Error(`Failed to load wasm module (${response.status} ${response.statusText}) from ${wasmUrl.href}`);
         }
         const bytes = await response.arrayBuffer();
-        const wasmModule = await WebAssembly.compile(bytes);
 
+        // Send the bytes directly to the worklet to compile there
+        // This avoids structured clone issues with WebAssembly.Module in some environments
         this.node.port.postMessage({
             type: 'INIT_WASM',
-            wasmModule,
+            wasmBytes: bytes,
             maxFrames,
             maxVoices,
             autoAddVoice,
         });
 
+        this.node.port.onmessageerror = (event) => {
+            console.error('WasmAudioManager: onmessageerror', event);
+        };
         await this.waitUntilReady();
     }
 
@@ -102,6 +125,7 @@ export class WasmAudioManager {
 
         if (data.type === 'ERROR') {
             console.error('WasmEngineProcessor error:', data.error);
+            this.lastError = data.error;
             const resolver = this._addVoiceQueue.shift();
             if (resolver) {
                 resolver(-1);
@@ -114,7 +138,7 @@ export class WasmAudioManager {
         }
     }
 
-    waitUntilReady(timeoutMs = 5000) {
+    waitUntilReady(timeoutMs = 10000) {
         const start = performance.now();
         return new Promise((resolve, reject) => {
             const tick = () => {
@@ -122,8 +146,12 @@ export class WasmAudioManager {
                     resolve();
                     return;
                 }
+                if (this.lastError) {
+                    reject(new Error(`WasmEngineProcessor failed to initialize: ${this.lastError}`));
+                    return;
+                }
                 if (performance.now() - start > timeoutMs) {
-                    reject(new Error('Timed out waiting for wasm-engine-processor to initialize.'));
+                    reject(new Error(`Timed out waiting for wasm-engine-processor to initialize (${timeoutMs}ms). Check console for worklet errors.`));
                     return;
                 }
                 setTimeout(tick, 10);
