@@ -4,10 +4,21 @@ export class ScrollingDisplay {
         this.ctx = this.canvas ? this.canvas.getContext('2d') : null;
         this.tempCanvas = document.createElement('canvas');
         this.tempCtx = this.tempCanvas.getContext('2d');
+        this._resizeHandler = () => this.resize();
         this.resize();
         if (this.canvas) {
-           window.addEventListener('resize', () => this.resize());
+           window.addEventListener('resize', this._resizeHandler);
         }
+    }
+
+    dispose() {
+        if (this.canvas) {
+            window.removeEventListener('resize', this._resizeHandler);
+        }
+        this.ctx = null;
+        this.tempCtx = null;
+        this.canvas = null;
+        this.tempCanvas = null;
     }
 
     resize() {

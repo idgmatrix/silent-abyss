@@ -9,6 +9,8 @@ let scanRadius = 0;
 let currentRpmValue = 0;
 let pingActiveIntensity = 0;
 let selectedTargetId = null;
+let renderRequest = null;
+let clockInterval = null;
 
 // Subsystems
 const audioSys = new AudioSystem();
@@ -108,7 +110,12 @@ async function initSystems() {
         targets.forEach(t => {
             audioSys.updateTargetVolume(t.id, t.distance);
         });
-        updateDashboard(targets[0]);
+
+        // Update Dashboard with selected target or default to first target if none selected
+        const targetToDisplay = selectedTargetId ? targets.find(t => t.id === selectedTargetId) : targets[0];
+        if (targetToDisplay) {
+            updateDashboard(targetToDisplay);
+        }
     };
 
     simEngine.start(100);
@@ -130,8 +137,40 @@ async function initSystems() {
         waterfallThemeSelect.onchange = (e) => sonarVisuals.setWaterfallTheme(e.target.value);
     }
 
-    requestAnimationFrame(renderLoop);
+    const tacticalViewport = document.getElementById('tactical-viewport');
+    if (tacticalViewport) {
+        tacticalViewport.addEventListener('targetSelected', handleTargetSelected);
+    }
+
+    if (renderRequest) cancelAnimationFrame(renderRequest);
+    renderRequest = requestAnimationFrame(renderLoop);
 }
+
+window.cleanupSystems = () => {
+    console.log("Cleaning up systems...");
+    if (renderRequest) cancelAnimationFrame(renderRequest);
+    if (clockInterval) clearInterval(clockInterval);
+
+    const tacticalViewport = document.getElementById('tactical-viewport');
+    if (tacticalViewport && handleTargetSelected) {
+        tacticalViewport.removeEventListener('targetSelected', handleTargetSelected);
+    }
+
+    simEngine.dispose();
+    audioSys.dispose();
+    tacticalView.dispose();
+    sonarVisuals.dispose();
+
+    // Reset UI state
+    document.getElementById('setup-screen').classList.remove('hidden');
+    document.getElementById('engine-controls').classList.add('hidden');
+    if (statusDisplay) statusDisplay.innerText = "SYSTEMS OFFLINE";
+};
+
+// Also cleanup on page unload
+window.addEventListener('beforeunload', () => {
+    window.cleanupSystems();
+});
 
 function updateDashboard(target) {
     if (!target) return;
@@ -176,7 +215,7 @@ function triggerPing() {
 }
 
 function renderLoop() {
-    requestAnimationFrame(renderLoop);
+    renderRequest = requestAnimationFrame(renderLoop);
 
     // Update Passive Detection Logic
     simEngine.targets.forEach(target => {
@@ -266,7 +305,7 @@ document.querySelectorAll('input[name="view-mode"]').forEach(el => {
 });
 
 // Target Selection
-document.getElementById('tactical-viewport').addEventListener('targetSelected', (e) => {
+const handleTargetSelected = (e) => {
     selectedTargetId = e.detail.id;
     console.log("Target Selected:", selectedTargetId);
 
@@ -286,10 +325,11 @@ document.getElementById('tactical-viewport').addEventListener('targetSelected', 
         if (targetIdEl) targetIdEl.innerText = selectedTargetId.toUpperCase();
         updateDashboard(target);
     }
-});
+};
 
 // Clock
-setInterval(() => {
+if (clockInterval) clearInterval(clockInterval);
+clockInterval = setInterval(() => {
     const clock = document.getElementById('clock');
     if (clock) clock.innerText = new Date().toTimeString().split(' ')[0];
 }, 1000);

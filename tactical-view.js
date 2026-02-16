@@ -72,6 +72,8 @@ export class TacticalView {
     }
 
     init(containerId) {
+        if (this.renderer) return; // Already initialized
+
         this.container = document.getElementById(containerId);
         console.log("TacticalView Init:", this.container);
         if (!this.container) return;
@@ -107,8 +109,12 @@ export class TacticalView {
         this.container.appendChild(this.twoDCanvas);
         this.twoDCtx = this.twoDCanvas.getContext('2d');
 
+        // Event handlers
+        this._resizeHandler = () => this.resize();
+        this._clickHandler = (e) => this.handleCanvasClick(e);
+
         // Click handling
-        this.container.addEventListener('click', (e) => this.handleCanvasClick(e));
+        this.container.addEventListener('click', this._clickHandler);
 
         this.setupTerrain();
         this.setupSelectionRing();
@@ -119,10 +125,51 @@ export class TacticalView {
         cube.position.y = 10;
         this.scene.add(cube);
 
-        window.addEventListener('resize', () => this.resize());
+        window.addEventListener('resize', this._resizeHandler);
 
         // Initial resize to set canvas dimensions
         this.resize();
+    }
+
+    dispose() {
+        if (this._resizeHandler) {
+            window.removeEventListener('resize', this._resizeHandler);
+        }
+        if (this.container && this._clickHandler) {
+            this.container.removeEventListener('click', this._clickHandler);
+        }
+
+        if (this.renderer) {
+            this.renderer.dispose();
+            if (this.renderer.domElement && this.renderer.domElement.parentElement) {
+                this.renderer.domElement.parentElement.removeChild(this.renderer.domElement);
+            }
+        }
+
+        if (this.twoDCanvas && this.twoDCanvas.parentElement) {
+            this.twoDCanvas.parentElement.removeChild(this.twoDCanvas);
+        }
+
+        if (this.scene) {
+            this.scene.traverse(object => {
+                if (object.geometry) object.geometry.dispose();
+                if (object.material) {
+                    if (Array.isArray(object.material)) {
+                        object.material.forEach(mat => mat.dispose());
+                    } else {
+                        object.material.dispose();
+                    }
+                }
+            });
+        }
+
+        this.renderer = null;
+        this.scene = null;
+        this.camera = null;
+        this.twoDCtx = null;
+        this.twoDCanvas = null;
+        this.container = null;
+        this.targetMeshes.clear();
     }
 
     setupSelectionRing() {
@@ -442,8 +489,9 @@ export class TacticalView {
     }
 
     render2DRadial(targets, ownShipCourse) {
-        const w = this.twoDCanvas.width;
-        const h = this.twoDCanvas.height;
+        if (!this.container) return;
+        const w = this.container.clientWidth;
+        const h = this.container.clientHeight;
         const ctx = this.twoDCtx;
 
         // Clear with black background
@@ -589,10 +637,10 @@ export class TacticalView {
     }
 
     renderGrid(targets) {
-        if (!this.twoDCtx || !this.twoDCanvas) return;
+        if (!this.twoDCtx || !this.twoDCanvas || !this.container) return;
 
-        const w = this.twoDCanvas.width;
-        const h = this.twoDCanvas.height;
+        const w = this.container.clientWidth;
+        const h = this.container.clientHeight;
         const ctx = this.twoDCtx;
 
         // Clear with black background
@@ -723,6 +771,8 @@ export class TacticalView {
         if (this.twoDCanvas) {
              this.twoDCanvas.width = width * dpr;
              this.twoDCanvas.height = height * dpr;
+             // Scale context to use CSS pixels for drawing
+             if (this.twoDCtx) this.twoDCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
         }
 
         this.camera.aspect = width / height;

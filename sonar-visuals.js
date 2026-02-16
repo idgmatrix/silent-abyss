@@ -79,6 +79,8 @@ export class SonarVisuals {
     }
 
     init() {
+        if (this.lCanvas) return; // Already initialized
+
         this.lCanvas = document.getElementById('lofar-canvas');
         this.dCanvas = document.getElementById('demon-canvas');
 
@@ -88,17 +90,32 @@ export class SonarVisuals {
         this.btrDisplay = new ScrollingDisplay('btr-canvas');
         this.waterfallDisplay = new ScrollingDisplay('waterfall-canvas');
 
+        this._btrClickHandler = (e) => this.handleBTRClick(e);
+
         if (this.btrDisplay.canvas) {
             this.btrDisplay.canvas.style.cursor = 'crosshair';
-            this.btrDisplay.canvas.addEventListener('click', (e) => this.handleBTRClick(e));
+            this.btrDisplay.canvas.addEventListener('click', this._btrClickHandler);
         }
 
+        this._resizeHandler = () => this.resize();
         this.resize();
-        window.addEventListener('resize', () => this.resize());
+        window.addEventListener('resize', this._resizeHandler);
     }
 
     resize() {
-        // ... (existing code)
+        const dpr = window.devicePixelRatio || 1;
+
+        [this.lCanvas, this.dCanvas].forEach(cvs => {
+            if (cvs) {
+                const rect = cvs.parentElement.getBoundingClientRect();
+                cvs.width = rect.width * dpr;
+                cvs.height = rect.height * dpr;
+                // No need to set CSS width/height if they are already 100% in CSS
+            }
+        });
+
+        if (this.btrDisplay) this.btrDisplay.resize();
+        if (this.waterfallDisplay) this.waterfallDisplay.resize();
     }
 
     handleBTRClick(e) {
@@ -331,5 +348,26 @@ export class SonarVisuals {
                 }
             }
         });
+    }
+
+    dispose() {
+        if (this._resizeHandler) {
+            window.removeEventListener('resize', this._resizeHandler);
+        }
+        if (this.btrDisplay) {
+            if (this.btrDisplay.canvas && this._btrClickHandler) {
+                this.btrDisplay.canvas.removeEventListener('click', this._btrClickHandler);
+            }
+            this.btrDisplay.dispose();
+        }
+        if (this.waterfallDisplay) {
+            this.waterfallDisplay.dispose();
+        }
+        this.btrDisplay = null;
+        this.waterfallDisplay = null;
+        this.lCtx = null;
+        this.dCtx = null;
+        this.lCanvas = null;
+        this.dCanvas = null;
     }
 }

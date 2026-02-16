@@ -7,6 +7,7 @@ export class AudioSystem {
         this.dataArray = null;
         this.targetNodes = new Map(); // Stores gain nodes for targets
         this.focusedTargetId = null;
+        this.bioTimeouts = new Set();
     }
 
     async init() {
@@ -23,7 +24,6 @@ export class AudioSystem {
                         this.currentRpm = 0;
                         this.phase = 0;
                         this.bladeCount = 5;
-                        this.sampleRate = 48000;
                         this.lastNoise = 0;
                         this.port.onmessage = (e) => {
                             if (e.data.type === 'SET_RPM') this.targetRpm = e.data.value;
@@ -39,7 +39,7 @@ export class AudioSystem {
 
                         if (activeRpm > 0.05) {
                              const baseFreq = (activeRpm / 60) * this.bladeCount;
-                             const delta = (2 * Math.PI * baseFreq) / this.sampleRate;
+                             const delta = (2 * Math.PI * baseFreq) / sampleRate;
                              // Pre-calculate amplitude outside loop for efficiency
                              const amplitude = Math.min(0.25, activeRpm / 200); // Higher max amplitude
                              const cavitationIntensity = activeRpm > 100 ? (activeRpm - 100) / 300 : 0.01;
@@ -119,8 +119,7 @@ export class AudioSystem {
         gain.gain.value = 0.01;
 
         if (type === 'BIOLOGICAL') {
-            // Random clicks/chirps instead of steady sound
-            this.createBioLoop(targetId, gain);
+            // No steady sound, just setup for bio loop later
         } else if (type === 'STATIC') {
             // Just steady low rumble noise
             targetNoise = this.createNoiseSource(2.0);
@@ -154,6 +153,11 @@ export class AudioSystem {
             gain: gain,
             type: type
         });
+
+        if (type === 'BIOLOGICAL') {
+            // Random clicks/chirps instead of steady sound
+            this.createBioLoop(targetId, gain);
+        }
     }
 
     createNoiseSource(duration) {
@@ -169,7 +173,7 @@ export class AudioSystem {
 
     createBioLoop(targetId, outputGain) {
         const playClick = () => {
-            if (!this.targetNodes.has(targetId)) return;
+            if (!this.targetNodes.has(targetId) || !this.ctx) return;
 
             const osc = this.ctx.createOscillator();
             const g = this.ctx.createGain();
@@ -187,7 +191,8 @@ export class AudioSystem {
             osc.stop(this.ctx.currentTime + 0.15);
 
             // Schedule next click
-            setTimeout(playClick, 500 + Math.random() * 3000);
+            const timeoutId = setTimeout(playClick, 500 + Math.random() * 3000);
+            this.bioTimeouts.add(timeoutId);
         };
         playClick();
     }
@@ -243,5 +248,35 @@ export class AudioSystem {
 
     getContext() {
         return this.ctx;
+    }
+
+    dispose() {
+        if (this.ctx) {
+            this.bioTimeouts.forEach(id => clearTimeout(id));
+            this.bioTimeouts.clear();
+
+            this.targetNodes.forEach(node => {
+                if (node.osc) node.osc.stop();
+                if (node.noise) node.noise.stop();
+                if (node.gain) node.gain.disconnect();
+            });
+            this.targetNodes.clear();
+
+            if (this.engineNode) {
+                this.engineNode.disconnect();
+                this.engineNode = null;
+            }
+            if (this.engineGain) {
+                this.engineGain.disconnect();
+                this.engineGain = null;
+            }
+            if (this.analyser) {
+                this.analyser.disconnect();
+                this.analyser = null;
+            }
+
+            this.ctx.close();
+            this.ctx = null;
+        }
     }
 }

@@ -228,4 +228,10 @@ export class SimulationEngine {
             this.onTick(this.targets, dt);
         }
     }
+
+    dispose() {
+        this.stop();
+        this.targets = [];
+        this.onTick = null;
+    }
 }
