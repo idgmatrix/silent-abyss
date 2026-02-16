@@ -89,7 +89,10 @@ export class SonarVisuals {
         if (this.dCanvas) this.dCtx = this.dCanvas.getContext('2d');
 
         this.btrDisplay = new ScrollingDisplay('btr-canvas');
+        this.btrDisplay.setDecayRate(0.005); // Very slow decay for BTR
+
         this.waterfallDisplay = new ScrollingDisplay('waterfall-canvas');
+        this.waterfallDisplay.setDecayRate(0.002); // Even slower for Waterfall to show long history
 
         this._btrClickHandler = (e) => this.handleBTRClick(e);
 

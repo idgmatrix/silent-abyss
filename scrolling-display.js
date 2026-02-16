@@ -2,11 +2,16 @@ export class ScrollingDisplay {
     constructor(canvasId) {
         this.canvas = document.getElementById(canvasId);
         this.ctx = this.canvas ? this.canvas.getContext('2d', { alpha: false }) : null;
+        this.decayRate = 0.01; // Default
         this._resizeHandler = () => this.resize();
         this.resize();
         if (this.canvas) {
            window.addEventListener('resize', this._resizeHandler);
         }
+    }
+
+    setDecayRate(rate) {
+        this.decayRate = rate;
     }
 
     dispose() {
@@ -38,7 +43,16 @@ export class ScrollingDisplay {
         this.ctx.imageSmoothingEnabled = false;
         this.ctx.drawImage(this.canvas, 0, 0, w, h - shift, 0, shift, w, h - shift);
 
-        // Clear the top line
+        // Subtle phosphor decay for history
+        if (this.decayRate > 0) {
+            this.ctx.save();
+            this.ctx.globalCompositeOperation = 'source-over';
+            this.ctx.fillStyle = `rgba(0, 0, 0, ${this.decayRate})`;
+            this.ctx.fillRect(0, shift, w, h - shift);
+            this.ctx.restore();
+        }
+
+        // Clear the new scan line area completely at the top
         this.ctx.clearRect(0, 0, w, shift);
     }
 
