@@ -161,7 +161,7 @@ export class WorldModel {
             if (isDetected) {
                 target.state = TrackState.TRACKED;
                 target.lastDetectedTime = this.elapsedTime;
-                this.tacticalView.updateTargetPosition(target.id, target.x, target.z, true);
+                this.tacticalView.updateTargetPosition(target.id, target.x, target.z, true, target.speed);
             } else if (target.state === TrackState.TRACKED) {
                 // If we were tracking but SNR dropped, move to LOST
                 if (this.elapsedTime - target.lastDetectedTime > this.lostTrackTimeout) {
@@ -209,7 +209,7 @@ export class WorldModel {
 
                 const echoVol = 0.6 * (1.0 - target.distance / 200);
                 this.audioSys.createPingEcho(echoVol, target.distance);
-                this.tacticalView.updateTargetPosition(target.id, target.x, target.z);
+                this.tacticalView.updateTargetPosition(target.id, target.x, target.z, false, target.speed);
 
                 // Trigger UI Event
                 window.dispatchEvent(new CustomEvent('sonar-contact', { detail: { id: target.id } }));

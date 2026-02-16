@@ -10,6 +10,8 @@ export class AudioSystem {
         this.targetNodes = new Map(); // Stores voice indices for targets
         this.focusedTargetId = null;
         this.bioTimeouts = new Set();
+        this.timeDomainArray = null;
+        this.computeProcessor = null;
     }
 
     async init() {
@@ -22,6 +24,7 @@ export class AudioSystem {
             this.analyser.fftSize = 2048;
             this.analyser.smoothingTimeConstant = 0.85;
             this.dataArray = new Uint8Array(this.analyser.frequencyBinCount);
+            this.timeDomainArray = new Float32Array(this.analyser.fftSize);
             this.analyser.connect(this.ctx.destination);
 
             // Initialize Wasm Manager with existing context and connect to analyser
@@ -46,6 +49,10 @@ export class AudioSystem {
         if (this.wasmManager && this.wasmManager.ready) {
             this.wasmManager.setRpm(value, this.ownVoiceId);
         }
+    }
+
+    setComputeProcessor(processor) {
+        this.computeProcessor = processor || null;
     }
 
     async createTargetAudio(target) {
@@ -159,6 +166,14 @@ export class AudioSystem {
         return this.ctx;
     }
 
+    getTimeDomainData() {
+        if (this.analyser && this.timeDomainArray) {
+            this.analyser.getFloatTimeDomainData(this.timeDomainArray);
+            return this.timeDomainArray;
+        }
+        return null;
+    }
+
     dispose() {
         if (this.wasmManager) {
             this.wasmManager.dispose();
@@ -174,6 +189,8 @@ export class AudioSystem {
                 this.analyser = null;
             }
 
+            this.timeDomainArray = null;
+            this.computeProcessor = null;
             this.ctx.close();
             this.ctx = null;
         }

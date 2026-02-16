@@ -1,4 +1,9 @@
 import * as THREE from 'three';
+import { CavitationParticles } from './effects/cavitation-particles.js';
+
+function clamp(value, min, max) {
+    return Math.max(min, Math.min(max, value));
+}
 
 export class Tactical3DRenderer {
     constructor(getTerrainHeight) {
@@ -8,14 +13,22 @@ export class Tactical3DRenderer {
         this.scene = null;
         this.camera = null;
         this.renderer = null;
+        this.rendererBackend = 'webgl';
+
         this.terrain = null;
+        this.waterSurface = null;
+        this.scanRingFx = null;
         this.ownShip = null;
         this.selectionRing = null;
         this.marineSnow = null;
         this.targetMeshes = new Map();
+
+        this.cavitationParticles = new CavitationParticles();
+        this._cavitationPending = false;
+        this._renderPending = false;
     }
 
-    init(container) {
+    async init(container) {
         if (this.renderer || !container) return;
 
         this.container = container;
@@ -24,7 +37,7 @@ export class Tactical3DRenderer {
         this.camera.position.set(0, 50, 80);
         this.camera.lookAt(0, 0, 0);
 
-        this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+        this.renderer = await this._createRenderer(container);
         this.renderer.setPixelRatio(window.devicePixelRatio || 1);
         this.renderer.setSize(container.clientWidth, container.clientHeight);
         this.renderer.domElement.style.position = 'absolute';
@@ -35,12 +48,42 @@ export class Tactical3DRenderer {
         container.appendChild(this.renderer.domElement);
 
         this.setupTerrain();
+        this.setupWaterSurface();
         this.setupOwnShip();
         this.setupSelectionRing();
         this.setupMarineSnow();
+
+        await this.cavitationParticles.init(this.scene);
+    }
+
+    async _createRenderer() {
+        const webgpuAvailable = typeof navigator !== 'undefined' && !!navigator.gpu;
+
+        if (webgpuAvailable) {
+            try {
+                const webgpuModule = await import('three/webgpu');
+                const WebGPURenderer = webgpuModule.WebGPURenderer || webgpuModule.default;
+
+                if (WebGPURenderer) {
+                    const renderer = new WebGPURenderer({ antialias: true, alpha: true });
+                    if (typeof renderer.init === 'function') {
+                        await renderer.init();
+                    }
+                    this.rendererBackend = 'webgpu';
+                    return renderer;
+                }
+            } catch (error) {
+                console.warn('Failed to create WebGPU renderer, using WebGL fallback:', error);
+            }
+        }
+
+        this.rendererBackend = 'webgl';
+        return new THREE.WebGLRenderer({ antialias: true, alpha: true });
     }
 
     dispose() {
+        this.cavitationParticles.dispose();
+
         if (this.renderer) {
             this.renderer.dispose();
             if (this.renderer.domElement && this.renderer.domElement.parentElement) {
@@ -66,10 +109,15 @@ export class Tactical3DRenderer {
         this.camera = null;
         this.renderer = null;
         this.terrain = null;
+        this.waterSurface = null;
+        this.scanRingFx = null;
         this.ownShip = null;
         this.selectionRing = null;
         this.marineSnow = null;
         this.targetMeshes.clear();
+        this.rendererBackend = 'webgl';
+        this._cavitationPending = false;
+        this._renderPending = false;
     }
 
     setVisible(visible) {
@@ -82,6 +130,13 @@ export class Tactical3DRenderer {
         this.renderer.setSize(width, height);
         this.camera.aspect = width / height;
         this.camera.updateProjectionMatrix();
+    }
+
+    getRendererCapabilities() {
+        return {
+            backend: this.rendererBackend,
+            cavitation: this.cavitationParticles.getCapabilities()
+        };
     }
 
     addTarget(target) {
@@ -120,17 +175,18 @@ export class Tactical3DRenderer {
             geometry,
             new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0 })
         );
-        mesh.userData = { type };
+        mesh.userData = { type, speed: target.speed ?? 0 };
         this.scene.add(mesh);
         this.targetMeshes.set(targetId, mesh);
     }
 
-    updateTargetPosition(targetId, x, z, passive = false) {
+    updateTargetPosition(targetId, x, z, passive = false, speed = 0) {
         const mesh = this.targetMeshes.get(targetId);
         if (!mesh) return;
 
         const y = this.getTerrainHeight(x, z) + 2.0;
         mesh.position.set(x, y, z);
+        mesh.userData.speed = speed;
 
         if (passive) {
             if (mesh.material.opacity < 0.3) mesh.material.opacity = 0.3;
@@ -148,12 +204,19 @@ export class Tactical3DRenderer {
     }
 
     setScanExUniforms(radius, active) {
-        if (!this.terrain) return;
-        this.terrain.material.uniforms.uScanRadius.value = radius;
-        this.terrain.material.uniforms.uActive.value = active ? 1.0 : 0.0;
+        if (this.terrain && this.terrain.material.uniforms) {
+            this.terrain.material.uniforms.uScanRadius.value = radius;
+            this.terrain.material.uniforms.uActive.value = active ? 1.0 : 0.0;
+        }
+
+        if (this.scanRingFx) {
+            this.scanRingFx.visible = !!active;
+            const ringRadius = Math.max(1, radius);
+            this.scanRingFx.scale.set(ringRadius, ringRadius, ringRadius);
+        }
     }
 
-    render(ownShipCourse, selectedTargetId, pulse) {
+    render(ownShipCourse, selectedTargetId, pulse, targets = [], dt = 0.016) {
         if (!this.renderer || !this.scene || !this.camera) return;
 
         if (this.selectionRing) {
@@ -182,7 +245,57 @@ export class Tactical3DRenderer {
             this.marineSnow.geometry.attributes.position.needsUpdate = true;
         }
 
+        if (!this._cavitationPending) {
+            const emitters = this._buildCavitationEmitters(targets);
+            this._cavitationPending = true;
+            this.cavitationParticles.update(emitters, dt)
+                .catch((error) => {
+                    console.warn('Cavitation particle update failed:', error);
+                })
+                .finally(() => {
+                    this._cavitationPending = false;
+                });
+        }
+
+        if (typeof this.renderer.renderAsync === 'function') {
+            if (this._renderPending) return;
+            this._renderPending = true;
+            this.renderer.renderAsync(this.scene, this.camera)
+                .catch((error) => {
+                    console.warn('WebGPU render failed:', error);
+                })
+                .finally(() => {
+                    this._renderPending = false;
+                });
+            return;
+        }
+
         this.renderer.render(this.scene, this.camera);
+    }
+
+    _buildCavitationEmitters(targets) {
+        const emitters = [];
+        for (const target of targets) {
+            if (!target || !target.id) continue;
+
+            const mesh = this.targetMeshes.get(target.id);
+            if (!mesh || mesh.material.opacity < 0.2) continue;
+
+            const type = target.type || mesh.userData.type;
+            if (type === 'BIOLOGICAL' || type === 'STATIC') continue;
+
+            const speed = target.speed ?? mesh.userData.speed ?? 0;
+            if (speed < this.cavitationParticles.speedThreshold) continue;
+
+            emitters.push({
+                x: mesh.position.x,
+                y: mesh.position.y,
+                z: mesh.position.z,
+                intensity: clamp(speed / 2.5, 0.4, 2.0)
+            });
+        }
+
+        return emitters;
     }
 
     pickTargetAtPoint(x, y, rect) {
@@ -254,13 +367,16 @@ export class Tactical3DRenderer {
         }
         geometry.computeVertexNormals();
 
-        const mat = new THREE.ShaderMaterial({
-            uniforms: {
-                uScanRadius: { value: 0 },
-                uColor: { value: new THREE.Color(0x004444) },
-                uActive: { value: 0.0 }
-            },
-            vertexShader: `
+        const useShader = this.rendererBackend !== 'webgpu';
+
+        const material = useShader
+            ? new THREE.ShaderMaterial({
+                uniforms: {
+                    uScanRadius: { value: 0 },
+                    uColor: { value: new THREE.Color(0x004444) },
+                    uActive: { value: 0.0 }
+                },
+                vertexShader: `
                 varying float vDist;
                 varying float vHeight;
                 void main() {
@@ -268,7 +384,7 @@ export class Tactical3DRenderer {
                     vHeight = position.y;
                     gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
                 }`,
-            fragmentShader: `
+                fragmentShader: `
                 uniform float uScanRadius;
                 uniform vec3 uColor;
                 uniform float uActive;
@@ -283,12 +399,50 @@ export class Tactical3DRenderer {
                         gl_FragColor = vec4(baseColor, 0.4);
                     }
                 }`,
+                transparent: true,
+                wireframe: true
+            })
+            : new THREE.MeshBasicMaterial({
+                color: 0x0f5f5f,
+                transparent: true,
+                opacity: 0.45,
+                wireframe: true
+            });
+
+        this.terrain = new THREE.Mesh(geometry, material);
+        this.scene.add(this.terrain);
+
+        if (!useShader) {
+            const ringGeometry = new THREE.RingGeometry(0.96, 1.0, 96);
+            const ringMaterial = new THREE.MeshBasicMaterial({
+                color: 0x00ffff,
+                transparent: true,
+                opacity: 0.35,
+                side: THREE.DoubleSide,
+                depthWrite: false
+            });
+            this.scanRingFx = new THREE.Mesh(ringGeometry, ringMaterial);
+            this.scanRingFx.rotation.x = -Math.PI / 2;
+            this.scanRingFx.position.y = -0.2;
+            this.scanRingFx.visible = false;
+            this.scene.add(this.scanRingFx);
+        }
+    }
+
+    setupWaterSurface() {
+        const geometry = new THREE.PlaneGeometry(300, 300, 1, 1);
+        geometry.rotateX(-Math.PI / 2);
+
+        const material = new THREE.MeshBasicMaterial({
+            color: 0x114444,
             transparent: true,
-            wireframe: true
+            opacity: 0.14,
+            depthWrite: false
         });
 
-        this.terrain = new THREE.Mesh(geometry, mat);
-        this.scene.add(this.terrain);
+        this.waterSurface = new THREE.Mesh(geometry, material);
+        this.waterSurface.position.y = 0;
+        this.scene.add(this.waterSurface);
     }
 
     setupOwnShip() {

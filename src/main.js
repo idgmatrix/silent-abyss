@@ -3,6 +3,7 @@ import { AudioSystem } from './audio-system.js';
 import { TacticalView } from './tactical-view.js';
 import { SonarVisuals } from './sonar-visuals.js';
 import { WorldModel } from './world-model.js';
+import { WebGPUFFTProcessor } from './compute/webgpu-fft.js';
 
 // State
 let currentRpmValue = 60;
@@ -15,6 +16,7 @@ const tacticalView = new TacticalView();
 const sonarVisuals = new SonarVisuals();
 const simEngine = new SimulationEngine();
 const worldModel = new WorldModel(simEngine, audioSys, tacticalView, sonarVisuals);
+const webgpuFft = new WebGPUFFTProcessor({ fftSize: 1024, smoothing: 0.82 });
 
 // UI Elements
 let rpmDisplay, statusDisplay, rangeEl, velEl, brgEl, sigEl, classEl, targetIdEl, contactAlertEl, depthEl;
@@ -34,10 +36,13 @@ function cacheDomElements() {
 
 async function initSystems() {
     cacheDomElements();
+    await webgpuFft.init();
     await audioSys.init();
+    audioSys.setComputeProcessor(webgpuFft);
+    sonarVisuals.setFFTProcessor(webgpuFft);
     audioSys.setRpm(currentRpmValue);
     worldModel.seedTargets();
-    tacticalView.init('tactical-viewport');
+    await tacticalView.init('tactical-viewport');
     sonarVisuals.init();
 
     // Initialize Targets in subsystems
@@ -123,6 +128,7 @@ window.cleanupSystems = () => {
     audioSys.dispose();
     tacticalView.dispose();
     sonarVisuals.dispose();
+    webgpuFft.dispose();
 
     // Reset UI state
     document.getElementById('setup-screen').classList.remove('hidden');
@@ -176,12 +182,22 @@ function renderLoop(now) {
 
     // Render Visuals
     const data = audioSys.getFrequencyData();
+    const timeDomainData = audioSys.getTimeDomainData();
     const ctx = audioSys.getContext();
     if (ctx && data) {
         const selectedTarget = worldModel.getSelectedTarget();
         const activeRpm = selectedTarget ? selectedTarget.rpm : currentRpmValue;
 
-        sonarVisuals.draw(data, simEngine.targets, activeRpm, worldModel.pingActiveIntensity, ctx.sampleRate, audioSys.analyser.fftSize, selectedTarget);
+        sonarVisuals.draw(
+            data,
+            simEngine.targets,
+            activeRpm,
+            worldModel.pingActiveIntensity,
+            ctx.sampleRate,
+            audioSys.analyser.fftSize,
+            selectedTarget,
+            timeDomainData
+        );
     }
 }
 
