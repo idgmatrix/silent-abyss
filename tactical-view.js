@@ -10,6 +10,8 @@ export class TacticalView {
         // View State
         this.viewMode = '3d'; // '3d', 'radial', 'grid'
         this.selectedTargetId = null;
+        this.scanRadius = 0;
+        this.scanActive = false;
 
         // Canvases
         this.twoDCanvas = null;
@@ -70,26 +72,99 @@ export class TacticalView {
     }
 
     setupTerrain() {
+        // Simple noise function for terrain
+        const noise = (x, y) => {
+            const n = Math.sin(x * 12.9898 + y * 78.233) * 43758.5453;
+            return n - Math.floor(n);
+        };
+
+        const smoothNoise = (x, y) => {
+            const corners = (noise(x-1, y-1) + noise(x+1, y-1) + noise(x-1, y+1) + noise(x+1, y+1)) / 16;
+            const sides = (noise(x-1, y) + noise(x+1, y) + noise(x, y-1) + noise(x, y+1)) / 8;
+            const center = noise(x, y) / 4;
+            return corners + sides + center;
+        };
+
+        const interpolatedNoise = (x, y) => {
+            const integerX = Math.floor(x);
+            const fractionalX = x - integerX;
+            const integerY = Math.floor(y);
+            const fractionalY = y - integerY;
+
+            const v1 = smoothNoise(integerX, integerY);
+            const v2 = smoothNoise(integerX + 1, integerY);
+            const v3 = smoothNoise(integerX, integerY + 1);
+            const v4 = smoothNoise(integerX + 1, integerY + 1);
+
+            const i1 = v1 * (1 - fractionalX) + v2 * fractionalX;
+            const i2 = v3 * (1 - fractionalX) + v4 * fractionalX;
+
+            return i1 * (1 - fractionalY) + i2 * fractionalY;
+        };
+
+        const terrainNoise = (x, y) => {
+            let total = 0;
+            const persistence = 0.5;
+            const octaves = 3;
+            for (let i = 0; i < octaves; i++) {
+                const frequency = Math.pow(2, i);
+                const amplitude = Math.pow(persistence, i);
+                total += interpolatedNoise(x * frequency * 0.05, y * frequency * 0.05) * amplitude;
+            }
+            return total;
+        };
+
+        const geometry = new THREE.PlaneGeometry(300, 300, 60, 60);
+        geometry.rotateX(-Math.PI / 2);
+
+        // Apply noise to vertices
+        const pos = geometry.attributes.position;
+        for (let i = 0; i < pos.count; i++) {
+            const x = pos.getX(i);
+            const z = pos.getZ(i);
+            const y = terrainNoise(x, z) * 15 - 10; // Height and vertical offset
+            pos.setY(i, y);
+        }
+        geometry.computeVertexNormals();
+
         const mat = new THREE.ShaderMaterial({
             uniforms: {
                 uScanRadius: { value: 0 },
                 uColor: { value: new THREE.Color(0x004444) },
                 uActive: { value: 0.0 }
             },
-            vertexShader: `varying float vDist; void main() { vDist = length(position.xz); gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+            vertexShader: `
+                varying float vDist;
+                varying float vHeight;
+                void main() {
+                    vDist = length(position.xz);
+                    vHeight = position.y;
+                    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+                }`,
             fragmentShader: `
                 uniform float uScanRadius;
                 uniform vec3 uColor;
                 uniform float uActive;
                 varying float vDist;
+                varying float vHeight;
                 void main() {
-                    float ring = smoothstep(uScanRadius - 10.0, uScanRadius, vDist) * (1.0 - smoothstep(uScanRadius, uScanRadius + 0.5, vDist));
-                    if(uActive < 0.5) discard;
-                    gl_FragColor = vec4(uColor * (0.1 + ring * 5.0), ring);
+                    float ring = smoothstep(uScanRadius - 12.0, uScanRadius, vDist) * (1.0 - smoothstep(uScanRadius, uScanRadius + 1.0, vDist));
+
+                    // Base color shaded by depth
+                    vec3 baseColor = uColor * (0.2 + (vHeight + 15.0) / 30.0);
+
+                    // Final color with ping ring
+                    if (uActive > 0.5) {
+                        gl_FragColor = vec4(baseColor + vec3(0.0, 1.0, 1.0) * ring * 0.8, 0.6 + ring * 0.4);
+                    } else {
+                        gl_FragColor = vec4(baseColor, 0.4);
+                    }
                 }`,
-            transparent: true, wireframe: true
+            transparent: true,
+            wireframe: true
         });
-        this.terrain = new THREE.Mesh(new THREE.PlaneGeometry(200, 200, 30, 30).rotateX(-Math.PI/2), mat);
+
+        this.terrain = new THREE.Mesh(geometry, mat);
         this.scene.add(this.terrain);
     }
 
@@ -147,6 +222,8 @@ export class TacticalView {
     }
 
     setScanExUniforms(radius, active) {
+        this.scanRadius = radius;
+        this.scanActive = active;
         if (this.terrain) {
             this.terrain.material.uniforms.uScanRadius.value = radius;
             this.terrain.material.uniforms.uActive.value = active ? 1.0 : 0.0;
@@ -198,26 +275,54 @@ export class TacticalView {
         const x = e.clientX - rect.left;
         const y = e.clientY - rect.top;
 
-        // Check targets
-        this.targetMeshes.forEach((mesh, id) => {
-            if (mesh.material.opacity <= 0.1) return; // Ignore undetected targets
+        let hitId = null;
 
-            const vec = new THREE.Vector3(mesh.position.x, mesh.position.y, mesh.position.z);
-            vec.project(this.camera);
+        if (this.viewMode === '3d') {
+            // Check targets in 3D
+            this.targetMeshes.forEach((mesh, id) => {
+                if (mesh.material.opacity <= 0.1) return;
 
-            const screenX = (vec.x * 0.5 + 0.5) * rect.width;
-            const screenY = (-(vec.y * 0.5) + 0.5) * rect.height;
+                const vec = new THREE.Vector3(mesh.position.x, mesh.position.y, mesh.position.z);
+                vec.project(this.camera);
 
-            const dist = Math.sqrt((x - screenX)**2 + (y - screenY)**2);
-            if (dist < 20) {
-                this.selectedTargetId = id;
-                // Dispatch event or callback?
-                // Let's check if there's a callback or we can just read it.
-                // We'll rely on main.js polling or passing a callback.
-                // For now, let's dispatch a custom event.
-                this.container.dispatchEvent(new CustomEvent('targetSelected', { detail: { id } }));
-            }
-        });
+                const screenX = (vec.x * 0.5 + 0.5) * rect.width;
+                const screenY = (-(vec.y * 0.5) + 0.5) * rect.height;
+
+                const dist = Math.sqrt((x - screenX)**2 + (y - screenY)**2);
+                if (dist < 20) hitId = id;
+            });
+        } else if (this.viewMode === 'radial') {
+            const centerX = rect.width / 2;
+            const centerY = rect.height / 2;
+            const scale = 1.5;
+            const angleOffset = -Math.PI / 2;
+
+            this.targetMeshes.forEach((mesh, id) => {
+                const rotX = mesh.position.x * Math.cos(angleOffset) - mesh.position.z * Math.sin(angleOffset);
+                const rotZ = mesh.position.x * Math.sin(angleOffset) + mesh.position.z * Math.cos(angleOffset);
+
+                const dx = centerX + rotX * scale;
+                const dy = centerY + rotZ * scale;
+
+                const dist = Math.sqrt((x - dx)**2 + (y - dy)**2);
+                if (dist < 25) hitId = id;
+            });
+        } else if (this.viewMode === 'grid') {
+            const centerX = rect.width / 2;
+            const centerY = rect.height / 2;
+            const scale = 1.5;
+
+            this.targetMeshes.forEach((mesh, id) => {
+                const dx = centerX + mesh.position.x * scale;
+                const dy = centerY + mesh.position.z * scale;
+
+                const dist = Math.sqrt((x - dx)**2 + (y - dy)**2);
+                if (dist < 25) hitId = id;
+            });
+        }
+
+        this.selectedTargetId = hitId;
+        this.container.dispatchEvent(new CustomEvent('targetSelected', { detail: { id: hitId } }));
     }
 
     render2DRadial(targets, ownShipCourse) {
@@ -250,14 +355,7 @@ export class TacticalView {
         if (!targets) return;
 
         // Transform logic for RADIAL mode (North-Up)
-        // North is Up (0 degrees in ThreeJS is +X, which is East).
-        // We want +Z (North) to be Up.
-        // -90 degrees (-PI/2) to rotate +Z to point up.
         const angleOffset = -Math.PI / 2;
-
-        // We can use ctx.rotate, but we need to convert target positions (x, z) first.
-        // x is East, z is South (in standard 3D view from top).
-        // Let's just iterate and draw.
 
         // Grid Lines (0, 90, 180, 270)
         ctx.strokeStyle = '#002222';
@@ -317,7 +415,22 @@ export class TacticalView {
             }
         });
 
-        // Draw Own Ship (Center) - Fixed orientation for North-Up
+        // Draw Ping Ring
+        if (this.scanActive) {
+            ctx.strokeStyle = '#00ffff';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.arc(centerX, centerY, this.scanRadius * scale, 0, Math.PI * 2);
+            ctx.stroke();
+
+            // Fading trail
+            ctx.strokeStyle = 'rgba(0, 255, 255, 0.4)';
+            ctx.beginPath();
+            ctx.arc(centerX, centerY, (this.scanRadius - 5) * scale, 0, Math.PI * 2);
+            ctx.stroke();
+        }
+
+        // Draw Own Ship (Center)
         ctx.save();
         ctx.translate(centerX, centerY);
         // Ship triangle pointing up (North)
@@ -411,6 +524,15 @@ export class TacticalView {
                 ctx.fillText(t.id.replace('target-', 'T'), dx + 8, dy);
             }
         });
+
+        // Draw Ping Ring (Square-ish or circular, let's stick to circular for consistency)
+        if (this.scanActive) {
+            ctx.strokeStyle = '#00ffff';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.arc(centerX, centerY, this.scanRadius * scale, 0, Math.PI * 2);
+            ctx.stroke();
+        }
 
         // Own Ship
         ctx.fillStyle = '#00ff00';

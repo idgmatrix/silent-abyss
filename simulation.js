@@ -87,6 +87,26 @@ export class SimulationTarget {
         return this.speed * Math.cos(this.course - this.angle);
     }
 
+    getAcousticSignature() {
+        // Base noise depends on type
+        let base = 0;
+        switch (this.type) {
+            case 'SHIP': base = 50; break;
+            case 'SUBMARINE': base = 25; break;
+            case 'BIOLOGICAL': base = 15; break;
+            case 'STATIC': base = 5; break;
+            default: base = 10;
+        }
+
+        // RPM contribution
+        const rpmFactor = this.rpm / 60; // normalized around 60rpm
+
+        // Speed contribution (cavitation/flow noise)
+        const speedFactor = Math.pow(this.speed * 5, 1.5);
+
+        return base * (1 + rpmFactor * 0.5 + speedFactor);
+    }
+
     set velocity(val) {
         // Legacy support: if setting negative velocity, try to turn around?
         // Better to just update speed magnitude

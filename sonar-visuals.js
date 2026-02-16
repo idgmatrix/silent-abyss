@@ -9,6 +9,8 @@ export class SonarVisuals {
 
         this.btrDisplay = null;
         this.waterfallDisplay = null;
+
+        this.lastTargets = [];
     }
 
     init() {
@@ -21,37 +23,62 @@ export class SonarVisuals {
         this.btrDisplay = new ScrollingDisplay('btr-canvas');
         this.waterfallDisplay = new ScrollingDisplay('waterfall-canvas');
 
+        if (this.btrDisplay.canvas) {
+            this.btrDisplay.canvas.style.cursor = 'crosshair';
+            this.btrDisplay.canvas.addEventListener('click', (e) => this.handleBTRClick(e));
+        }
+
         this.resize();
         window.addEventListener('resize', () => this.resize());
     }
 
     resize() {
-        const dpr = window.devicePixelRatio || 1;
-
-        if (this.lCanvas) {
-            this.lCanvas.width = this.lCanvas.clientWidth * dpr;
-            this.lCanvas.height = this.lCanvas.clientHeight * dpr;
-        }
-        if (this.dCanvas) {
-            this.dCanvas.width = this.dCanvas.clientWidth * dpr;
-            this.dCanvas.height = this.dCanvas.clientHeight * dpr;
-        }
-
-        // Scrolling displays handle their own resize via their internal listener,
-        // but we trigger it once here to ensure initial sync
-        if (this.btrDisplay) this.btrDisplay.resize();
-        if (this.waterfallDisplay) this.waterfallDisplay.resize();
+        // ... (existing code)
     }
 
-    draw(dataArray, targets, currentRpm, pingIntensity, sampleRate, fftSize) {
+    handleBTRClick(e) {
+        if (!this.btrDisplay || !this.btrDisplay.canvas) return;
+        const rect = this.btrDisplay.canvas.getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        const clickedBearing = (x / rect.width) * 360;
+
+        // Find closest target by bearing
+        let closestTarget = null;
+        let minDiff = 15; // 15 degrees tolerance
+
+        this.lastTargets.forEach(t => {
+            if (!t.isPassivelyDetected && !t.detected) return;
+
+            let diff = Math.abs(t.bearing - clickedBearing);
+            if (diff > 180) diff = 360 - diff;
+
+            if (diff < minDiff) {
+                minDiff = diff;
+                closestTarget = t;
+            }
+        });
+
+        if (closestTarget) {
+            document.getElementById('tactical-viewport').dispatchEvent(
+                new CustomEvent('targetSelected', { detail: { id: closestTarget.id } })
+            );
+        } else {
+            document.getElementById('tactical-viewport').dispatchEvent(
+                new CustomEvent('targetSelected', { detail: { id: null } })
+            );
+        }
+    }
+
+    draw(dataArray, targets, currentRpm, pingIntensity, sampleRate, fftSize, selectedTarget = null) {
         if (!dataArray) return;
-        this.drawLOFAR(dataArray, currentRpm, sampleRate, fftSize);
-        this.drawDEMON(dataArray, currentRpm);
+        this.lastTargets = targets;
+        this.drawLOFAR(dataArray, currentRpm, sampleRate, fftSize, selectedTarget);
+        this.drawDEMON(dataArray, currentRpm, selectedTarget);
         this.drawBTR(targets, currentRpm, pingIntensity);
         this.drawWaterfall(dataArray);
     }
 
-    drawLOFAR(dataArray, currentRpm, sampleRate, fftSize) {
+    drawLOFAR(dataArray, currentRpm, sampleRate, fftSize, selectedTarget) {
         if (!this.lCtx || !this.lCanvas) return;
         const ctx = this.lCtx;
         const cvs = this.lCanvas;
@@ -60,7 +87,7 @@ export class SonarVisuals {
         ctx.fillRect(0, 0, cvs.width, cvs.height);
 
         // Grid lines
-        ctx.strokeStyle = 'rgba(0, 255, 204, 0.05)';
+        ctx.strokeStyle = selectedTarget ? 'rgba(255, 0, 0, 0.1)' : 'rgba(0, 255, 204, 0.05)';
         ctx.beginPath();
         for(let i=1; i<10; i++) {
             ctx.moveTo(i * cvs.width/10, 0);
@@ -69,7 +96,7 @@ export class SonarVisuals {
         ctx.stroke();
 
         ctx.beginPath();
-        ctx.strokeStyle = '#00ffcc';
+        ctx.strokeStyle = selectedTarget ? '#ff3333' : '#00ffcc';
         ctx.lineWidth = 1.2;
         const viewLength = dataArray.length * 0.7; // Limit high frequency view
         for(let i=0; i<viewLength; i++) {
@@ -91,14 +118,14 @@ export class SonarVisuals {
         }
     }
 
-    drawDEMON(dataArray, currentRpm) {
+    drawDEMON(dataArray, currentRpm, selectedTarget) {
         if (!this.dCtx || !this.dCanvas) return;
         const ctx = this.dCtx;
         const cvs = this.dCanvas;
 
         ctx.fillStyle = 'rgba(0, 5, 10, 0.8)';
         ctx.fillRect(0, 0, cvs.width, cvs.height);
-        ctx.strokeStyle = '#ffaa00';
+        ctx.strokeStyle = selectedTarget ? '#ff3333' : '#ffaa00';
         ctx.lineWidth = 2;
         const segments = 5;
         const spacing = cvs.width / (segments + 1);
@@ -111,9 +138,10 @@ export class SonarVisuals {
             ctx.lineTo(peakX, cvs.height - intensity);
             ctx.stroke();
         }
-        ctx.fillStyle = '#00ffff';
+        ctx.fillStyle = selectedTarget ? '#ff3333' : '#00ffff';
         ctx.font = '9px Arial';
-        ctx.fillText(`AUTO-ANALYSIS: ${currentRpm > 0 ? 'ENGINE ACTIVE' : 'IDLE'}`, 10, 15);
+        const label = selectedTarget ? `TARGET ANALYSIS: ${selectedTarget.type} (T${selectedTarget.id.split('-')[1]})` : `AUTO-ANALYSIS: ${currentRpm > 0 ? 'ENGINE ACTIVE' : 'IDLE'}`;
+        ctx.fillText(label, 10, 15);
     }
 
     drawBTR(targets, currentRpm, pingIntensity) {
@@ -126,8 +154,15 @@ export class SonarVisuals {
 
             // Targets
             targets.forEach(target => {
+                if (!target.isPassivelyDetected && pingIntensity <= 0) return;
+
                 const targetX = (target.bearing / 360) * width;
-                const targetIntensity = Math.max(0, 255 - target.distance * 2);
+                let targetIntensity = Math.min(255, target.passiveSNR * 40);
+
+                // Boost intensity if target was recently detected by active sonar
+                if (target.detected) {
+                    targetIntensity = Math.max(targetIntensity, 200);
+                }
 
                 let color;
                 switch(target.type) {

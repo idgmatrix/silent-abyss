@@ -8,6 +8,7 @@ let isScanning = false;
 let scanRadius = 0;
 let currentRpmValue = 0;
 let pingActiveIntensity = 0;
+let selectedTargetId = null;
 
 // Subsystems
 const audioSys = new AudioSystem();
@@ -139,6 +140,18 @@ function triggerPing() {
 function renderLoop() {
     requestAnimationFrame(renderLoop);
 
+    // Update Passive Detection Logic
+    simEngine.targets.forEach(target => {
+        const sig = target.getAcousticSignature();
+        // Path loss: Inverse square law (simplified for this sim)
+        const snr = sig / (Math.pow(target.distance / 10, 1.5) + 1);
+        target.passiveSNR = snr;
+        target.isPassivelyDetected = snr > 1.5; // Detection threshold
+
+        // In Passive Mode, we still want to see close targets on BTR
+        // but active pinging makes them "Found" (detected = true) for tactical maps
+    });
+
     // Update Scanning logic
     if (isScanning) {
         scanRadius += 1.5;
@@ -188,7 +201,10 @@ function renderLoop() {
     const data = audioSys.getFrequencyData();
     const ctx = audioSys.getContext();
     if (ctx && data) {
-         sonarVisuals.draw(data, simEngine.targets, currentRpmValue, pingActiveIntensity, ctx.sampleRate, audioSys.analyser.fftSize);
+        const selectedTarget = simEngine.targets.find(t => t.id === selectedTargetId);
+        const activeRpm = selectedTarget ? selectedTarget.rpm : currentRpmValue;
+
+        sonarVisuals.draw(data, simEngine.targets, activeRpm, pingActiveIntensity, ctx.sampleRate, audioSys.analyser.fftSize, selectedTarget);
     }
 }
 
@@ -212,12 +228,20 @@ document.querySelectorAll('input[name="view-mode"]').forEach(el => {
 
 // Target Selection
 document.getElementById('tactical-viewport').addEventListener('targetSelected', (e) => {
-    const targetId = e.detail.id;
-    console.log("Target Selected:", targetId);
-    const target = simEngine.targets.find(t => t.id === targetId);
+    selectedTargetId = e.detail.id;
+    console.log("Target Selected:", selectedTargetId);
+
+    const targetIdEl = document.getElementById('target-id-text');
+    if (!selectedTargetId) {
+        if (targetIdEl) targetIdEl.innerText = "OWN-SHIP";
+        // Reset dashboard or show own-ship stats?
+        // For now, let's just clear the display or show a default.
+        return;
+    }
+
+    const target = simEngine.targets.find(t => t.id === selectedTargetId);
     if (target) {
-        const targetIdEl = document.getElementById('target-id-text');
-        if (targetIdEl) targetIdEl.innerText = targetId.toUpperCase();
+        if (targetIdEl) targetIdEl.innerText = selectedTargetId.toUpperCase();
         updateDashboard(target);
     }
 });
