@@ -1,3 +1,5 @@
+import * as THREE from 'three';
+
 export class Tactical3DRenderer {
     constructor(getTerrainHeight) {
         this.getTerrainHeight = typeof getTerrainHeight === 'function' ? getTerrainHeight : () => 0;
