@@ -17,7 +17,7 @@ const simEngine = new SimulationEngine();
 const worldModel = new WorldModel(simEngine, audioSys, tacticalView, sonarVisuals);
 
 // UI Elements
-let rpmDisplay, statusDisplay, rangeEl, velEl, brgEl, sigEl, classEl, targetIdEl, contactAlertEl;
+let rpmDisplay, statusDisplay, rangeEl, velEl, brgEl, sigEl, classEl, targetIdEl, contactAlertEl, depthEl;
 
 function cacheDomElements() {
     rpmDisplay = document.getElementById('rpm-display');
@@ -29,6 +29,7 @@ function cacheDomElements() {
     classEl = document.getElementById('target-class-text');
     targetIdEl = document.getElementById('target-id-text');
     contactAlertEl = document.getElementById('contact-alert');
+    depthEl = document.querySelector('header div div span.text-white'); // Matches DEPTH display
 }
 
 async function initSystems() {
@@ -51,6 +52,9 @@ async function initSystems() {
 
     simEngine.onTick = (targets, dt) => {
         worldModel.update(dt);
+        if (depthEl) {
+            depthEl.innerText = `${worldModel.getOwnShipDepth().toFixed(0)}m`;
+        }
     };
 
     simEngine.start(100);

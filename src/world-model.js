@@ -1,4 +1,5 @@
 import { TrackState, SimulationTarget } from './simulation.js';
+import { EnvironmentModel } from './acoustics/environment-model.js';
 
 export class WorldModel {
     constructor(simEngine, audioSys, tacticalView, sonarVisuals) {
@@ -6,6 +7,8 @@ export class WorldModel {
         this.audioSys = audioSys;
         this.tacticalView = tacticalView;
         this.sonarVisuals = sonarVisuals;
+
+        this.environment = new EnvironmentModel();
 
         this.selectedTargetId = null;
         this.isScanning = false;
@@ -20,8 +23,7 @@ export class WorldModel {
         this.lostTrackTimeout = 5.0; // 5 seconds
         this.losSampleCount = 10;
         this.passiveOcclusionAttenuation = 0.15;
-        this.soundLayerDepth = -5.0;
-        this.shadowZoneAttenuation = 0.5;
+        this.shadowZoneAttenuation = 0.4; // More aggressive attenuation for layer crossing
         this.multiPathStrength = 0.2;
         this.multiPathFrequency = 0.5;
     }
@@ -130,14 +132,18 @@ export class WorldModel {
         const ownShipDepth = this.getOwnShipDepth();
 
         this.simEngine.targets.forEach(target => {
-            const sig = target.getAcousticSignature();
-            let snr = sig / (Math.pow(target.distance / 10, 1.5) + 1);
-
             const targetDepth = this.getTargetDepth(target);
-            const acrossLayer =
-                (ownShipDepth > this.soundLayerDepth && targetDepth < this.soundLayerDepth) ||
-                (ownShipDepth < this.soundLayerDepth && targetDepth > this.soundLayerDepth);
-            if (acrossLayer) {
+            const ambientNoise = this.environment.getAmbientNoise(targetDepth);
+
+            // Normalized signature with distance-based transmission loss
+            const sig = target.getAcousticSignature();
+            const transmissionLoss = Math.pow(target.distance / 10, 1.5);
+
+            // SNR calculation incorporating environmental background noise
+            let snr = sig / (transmissionLoss * (ambientNoise / 60) + 1);
+
+            // Layer crossing attenuation (Thermocline shadow zone)
+            if (this.environment.isThermoclineBetween(ownShipDepth, targetDepth)) {
                 snr *= this.shadowZoneAttenuation;
             }
 
@@ -167,18 +173,21 @@ export class WorldModel {
 
     getOwnShipDepth() {
         if (!this.tacticalView || typeof this.tacticalView.getTerrainHeight !== 'function') {
-            return 0;
+            return 5.0; // Default shallow depth
         }
 
-        return this.tacticalView.getTerrainHeight(0, 0) + 5.0;
+        const height = this.tacticalView.getTerrainHeight(0, 0);
+        // Assuming surface is at 0, depth is distance below surface
+        return Math.max(1.0, -height - 5.0); // 5m above seabed
     }
 
     getTargetDepth(target) {
         if (!this.tacticalView || typeof this.tacticalView.getTerrainHeight !== 'function') {
-            return 0;
+            return 10.0;
         }
 
-        return this.tacticalView.getTerrainHeight(target.x, target.z) + 2.0;
+        const height = this.tacticalView.getTerrainHeight(target.x, target.z);
+        return Math.max(1.0, -height - 2.0); // 2m above seabed
     }
 
     processActiveScanning() {
