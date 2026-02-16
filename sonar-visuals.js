@@ -1,5 +1,44 @@
 import { ScrollingDisplay } from './scrolling-display.js';
 
+export const BTR_THEMES = {
+    'CYAN': {
+        SUBMARINE: [0, 255, 255],
+        BIOLOGICAL: [0, 255, 0],
+        STATIC: [128, 128, 128],
+        SHIP: [0, 255, 128],
+        SELF: [0, 100, 150],
+        BACKGROUND: [0, 20, 20],
+        PING: [200, 255, 255]
+    },
+    'PHOSPHOR': {
+        SUBMARINE: [0, 255, 68],
+        BIOLOGICAL: [100, 255, 100],
+        STATIC: [0, 100, 20],
+        SHIP: [0, 200, 50],
+        SELF: [0, 150, 40],
+        BACKGROUND: [0, 30, 5],
+        PING: [150, 255, 150]
+    },
+    'AMBER': {
+        SUBMARINE: [255, 176, 0],
+        BIOLOGICAL: [200, 100, 0],
+        STATIC: [100, 50, 0],
+        SHIP: [255, 120, 0],
+        SELF: [150, 80, 0],
+        BACKGROUND: [30, 15, 0],
+        PING: [255, 220, 100]
+    },
+    'THERMAL': {
+        SUBMARINE: [255, 255, 255],
+        BIOLOGICAL: [255, 200, 0],
+        STATIC: [100, 100, 255],
+        SHIP: [255, 100, 0],
+        SELF: [50, 50, 200],
+        BACKGROUND: [0, 0, 50],
+        PING: [255, 255, 255]
+    }
+};
+
 export class SonarVisuals {
     constructor() {
         this.lCanvas = null;
@@ -11,6 +50,7 @@ export class SonarVisuals {
         this.waterfallDisplay = null;
 
         this.lastTargets = [];
+        this.currentTheme = 'CYAN';
     }
 
     init() {
@@ -144,56 +184,82 @@ export class SonarVisuals {
         ctx.fillText(label, 10, 15);
     }
 
+    setTheme(themeName) {
+        if (BTR_THEMES[themeName]) {
+            this.currentTheme = themeName;
+        }
+    }
+
     drawBTR(targets, currentRpm, pingIntensity) {
         if (!this.btrDisplay) return;
 
+        const theme = BTR_THEMES[this.currentTheme];
+
         this.btrDisplay.drawNextLine((ctx, width, height) => {
-            // Background for the new line
+            // Background with faint sea-noise speckle
             ctx.fillStyle = '#000000';
             ctx.fillRect(0, 0, width, 1);
+
+            // Speckle noise
+            for (let i = 0; i < width; i += 4) {
+                if (Math.random() > 0.95) {
+                    const noiseVal = Math.random() * 0.15;
+                    ctx.fillStyle = `rgba(${theme.BACKGROUND[0]}, ${theme.BACKGROUND[1]}, ${theme.BACKGROUND[2]}, ${noiseVal})`;
+                    ctx.fillRect(i, 0, 2, 1);
+                }
+            }
 
             // Targets
             targets.forEach(target => {
                 if (!target.isPassivelyDetected && pingIntensity <= 0) return;
 
-                const targetX = (target.bearing / 360) * width;
-                let targetIntensity = Math.min(255, target.passiveSNR * 40);
+                // Add small bearing jitter based on SNR
+                const jitter = (Math.random() - 0.5) * (5.0 / (target.passiveSNR + 0.1));
+                const targetX = ((target.bearing + jitter) / 360) * width;
+
+                let targetIntensity = Math.min(1.0, (target.passiveSNR * 40) / 255);
 
                 // Boost intensity if target was recently detected by active sonar
                 if (target.detected) {
-                    targetIntensity = Math.max(targetIntensity, 200);
+                    targetIntensity = Math.max(targetIntensity, 0.8);
                 }
 
-                let color;
-                switch(target.type) {
-                    case 'SUBMARINE': color = `rgb(0, ${targetIntensity}, ${targetIntensity})`; break; // Cyan
-                    case 'BIOLOGICAL': color = `rgb(0, ${targetIntensity}, 0)`; break; // Green
-                    case 'STATIC': color = `rgb(${targetIntensity * 0.5}, ${targetIntensity * 0.5}, ${targetIntensity * 0.5})`; break; // Gray
-                    default: color = `rgb(0, ${targetIntensity}, ${targetIntensity * 0.5})`; break; // Orange-ish Green (Existing)
-                }
+                let baseColor = theme[target.type] || theme.SHIP;
 
-                ctx.fillStyle = color;
-                ctx.fillRect(targetX - 1, 0, 3, 1);
+                // Implement Smearing (Horizontal Gradient)
+                const grad = ctx.createLinearGradient(targetX - 4, 0, targetX + 4, 0);
+                grad.addColorStop(0, 'rgba(0,0,0,0)');
+                grad.addColorStop(0.5, `rgba(${baseColor[0]}, ${baseColor[1]}, ${baseColor[2]}, ${targetIntensity})`);
+                grad.addColorStop(1, 'rgba(0,0,0,0)');
+
+                ctx.fillStyle = grad;
+                ctx.fillRect(targetX - 5, 0, 10, 1);
             });
 
             // Self Noise
-            const selfNoiseIntensity = (currentRpm / 400) * 100;
-            if (selfNoiseIntensity > 5) {
+            const selfNoiseIntensity = (currentRpm / 400);
+            if (selfNoiseIntensity > 0.02) {
                 const centerBearing = 180;
                 const spread = 40 + (currentRpm / 10);
                 const selfX = (centerBearing / 360) * width;
                 const selfW = (spread / 360) * width;
-                ctx.fillStyle = `rgba(0, 100, 150, ${selfNoiseIntensity / 255})`;
+
+                const grad = ctx.createLinearGradient(selfX - selfW/2, 0, selfX + selfW/2, 0);
+                grad.addColorStop(0, 'rgba(0,0,0,0)');
+                grad.addColorStop(0.5, `rgba(${theme.SELF[0]}, ${theme.SELF[1]}, ${theme.SELF[2]}, ${selfNoiseIntensity * 0.5})`);
+                grad.addColorStop(1, 'rgba(0,0,0,0)');
+
+                ctx.fillStyle = grad;
                 ctx.fillRect(selfX - selfW/2, 0, selfW, 1);
 
-                // Add some noise across the whole spectrum
-                ctx.fillStyle = `rgba(0, 80, 80, ${selfNoiseIntensity / 1000})`;
+                // Wide background noise from self engines
+                ctx.fillStyle = `rgba(${theme.SELF[0]}, ${theme.SELF[1]}, ${theme.SELF[2]}, ${selfNoiseIntensity * 0.05})`;
                 ctx.fillRect(0, 0, width, 1);
             }
 
             // Ping Mask
             if (pingIntensity > 0) {
-                ctx.fillStyle = `rgba(200, 255, 255, ${pingIntensity})`;
+                ctx.fillStyle = `rgba(${theme.PING[0]}, ${theme.PING[1]}, ${theme.PING[2]}, ${pingIntensity * 0.6})`;
                 ctx.fillRect(0, 0, width, 1);
             }
         });

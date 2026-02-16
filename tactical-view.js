@@ -13,9 +13,62 @@ export class TacticalView {
         this.scanRadius = 0;
         this.scanActive = false;
 
+        // Selection HUD elements
+        this.selectionRing = null;
+
+        // Particle System (Marine Snow)
+        this.marineSnow = null;
+        this.pulse = 0;
+
         // Canvases
         this.twoDCanvas = null;
         this.twoDCtx = null;
+    }
+
+    // --- Terrain Noise Functions (Static) ---
+    static _noise(x, y) {
+        const n = Math.sin(x * 12.9898 + y * 78.233) * 43758.5453;
+        return n - Math.floor(n);
+    }
+
+    static _smoothNoise(x, y) {
+        const corners = (this._noise(x - 1, y - 1) + this._noise(x + 1, y - 1) + this._noise(x - 1, y + 1) + this._noise(x + 1, y + 1)) / 16;
+        const sides = (this._noise(x - 1, y) + this._noise(x + 1, y) + this._noise(x, y - 1) + this._noise(x, y + 1)) / 8;
+        const center = this._noise(x, y) / 4;
+        return corners + sides + center;
+    }
+
+    static _interpolatedNoise(x, y) {
+        const integerX = Math.floor(x);
+        const fractionalX = x - integerX;
+        const integerY = Math.floor(y);
+        const fractionalY = y - integerY;
+
+        const v1 = this._smoothNoise(integerX, integerY);
+        const v2 = this._smoothNoise(integerX + 1, integerY);
+        const v3 = this._smoothNoise(integerX, integerY + 1);
+        const v4 = this._smoothNoise(integerX + 1, integerY + 1);
+
+        const i1 = v1 * (1 - fractionalX) + v2 * fractionalX;
+        const i2 = v3 * (1 - fractionalX) + v4 * fractionalX;
+
+        return i1 * (1 - fractionalY) + i2 * fractionalY;
+    }
+
+    static terrainNoise(x, y) {
+        let total = 0;
+        const persistence = 0.5;
+        const octaves = 3;
+        for (let i = 0; i < octaves; i++) {
+            const frequency = Math.pow(2, i);
+            const amplitude = Math.pow(persistence, i);
+            total += this._interpolatedNoise(x * frequency * 0.05, y * frequency * 0.05) * amplitude;
+        }
+        return total;
+    }
+
+    getTerrainHeight(x, z) {
+        return TacticalView.terrainNoise(x, z) * 15 - 10;
     }
 
     init(containerId) {
@@ -58,6 +111,8 @@ export class TacticalView {
         this.container.addEventListener('click', (e) => this.handleCanvasClick(e));
 
         this.setupTerrain();
+        this.setupSelectionRing();
+        this.setupMarineSnow();
 
         // Debug cube
         const cube = new THREE.Mesh(new THREE.BoxGeometry(5, 5, 5), new THREE.MeshBasicMaterial({ color: 0x00ff00 }));
@@ -70,49 +125,44 @@ export class TacticalView {
         this.resize();
     }
 
+    setupSelectionRing() {
+        const geometry = new THREE.TorusGeometry(3, 0.05, 12, 32);
+        const material = new THREE.MeshBasicMaterial({ color: 0xff0000, transparent: true, opacity: 0.8 });
+        this.selectionRing = new THREE.Mesh(geometry, material);
+        this.selectionRing.rotation.x = Math.PI / 2;
+        this.selectionRing.visible = false;
+        this.scene.add(this.selectionRing);
+    }
+
+    setupMarineSnow() {
+        const count = 500;
+        const geometry = new THREE.BufferGeometry();
+        const positions = new Float32Array(count * 3);
+        const speeds = new Float32Array(count);
+
+        for (let i = 0; i < count; i++) {
+            positions[i * 3] = (Math.random() - 0.5) * 300;
+            positions[i * 3 + 1] = (Math.random() - 0.5) * 200;
+            positions[i * 3 + 2] = (Math.random() - 0.5) * 300;
+            speeds[i] = 0.02 + Math.random() * 0.05;
+        }
+
+        geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        geometry.userData = { speeds: speeds };
+
+        const material = new THREE.PointsMaterial({
+            color: 0xffffff,
+            size: 0.5,
+            transparent: true,
+            opacity: 0.3,
+            blending: THREE.AdditiveBlending
+        });
+
+        this.marineSnow = new THREE.Points(geometry, material);
+        this.scene.add(this.marineSnow);
+    }
+
     setupTerrain() {
-        // Simple noise function for terrain
-        const noise = (x, y) => {
-            const n = Math.sin(x * 12.9898 + y * 78.233) * 43758.5453;
-            return n - Math.floor(n);
-        };
-
-        const smoothNoise = (x, y) => {
-            const corners = (noise(x-1, y-1) + noise(x+1, y-1) + noise(x-1, y+1) + noise(x+1, y+1)) / 16;
-            const sides = (noise(x-1, y) + noise(x+1, y) + noise(x, y-1) + noise(x, y+1)) / 8;
-            const center = noise(x, y) / 4;
-            return corners + sides + center;
-        };
-
-        const interpolatedNoise = (x, y) => {
-            const integerX = Math.floor(x);
-            const fractionalX = x - integerX;
-            const integerY = Math.floor(y);
-            const fractionalY = y - integerY;
-
-            const v1 = smoothNoise(integerX, integerY);
-            const v2 = smoothNoise(integerX + 1, integerY);
-            const v3 = smoothNoise(integerX, integerY + 1);
-            const v4 = smoothNoise(integerX + 1, integerY + 1);
-
-            const i1 = v1 * (1 - fractionalX) + v2 * fractionalX;
-            const i2 = v3 * (1 - fractionalX) + v4 * fractionalX;
-
-            return i1 * (1 - fractionalY) + i2 * fractionalY;
-        };
-
-        const terrainNoise = (x, y) => {
-            let total = 0;
-            const persistence = 0.5;
-            const octaves = 3;
-            for (let i = 0; i < octaves; i++) {
-                const frequency = Math.pow(2, i);
-                const amplitude = Math.pow(persistence, i);
-                total += interpolatedNoise(x * frequency * 0.05, y * frequency * 0.05) * amplitude;
-            }
-            return total;
-        };
-
         const geometry = new THREE.PlaneGeometry(300, 300, 60, 60);
         geometry.rotateX(-Math.PI / 2);
 
@@ -121,7 +171,7 @@ export class TacticalView {
         for (let i = 0; i < pos.count; i++) {
             const x = pos.getX(i);
             const z = pos.getZ(i);
-            const y = terrainNoise(x, z) * 15 - 10; // Height and vertical offset
+            const y = this.getTerrainHeight(x, z);
             pos.setY(i, y);
         }
         geometry.computeVertexNormals();
@@ -207,7 +257,8 @@ export class TacticalView {
     updateTargetPosition(targetId, x, z, passive = false) {
         const mesh = this.targetMeshes.get(targetId);
         if (mesh) {
-            mesh.position.set(x, 1, z);
+            const y = this.getTerrainHeight(x, z) + 2.0;
+            mesh.position.set(x, y, z);
             if (passive) {
                 // Passive detection maintains a base visibility
                 if (mesh.material.opacity < 0.3) mesh.material.opacity = 0.3;
@@ -239,11 +290,36 @@ export class TacticalView {
     render(targets, ownShipCourse) {
         if (!this.container) return;
 
+        this.pulse = (Date.now() % 2000) / 2000; // 0 to 1 loop every 2 seconds
+
         if (this.viewMode === '3d') {
             // 3D Mode
             if (this.renderer && this.scene && this.camera) {
                 this.renderer.domElement.style.display = 'block';
                 if (this.twoDCanvas) this.twoDCanvas.style.display = 'none';
+
+                // Update Selection Ring
+                if (this.selectedTargetId && this.targetMeshes.has(this.selectedTargetId)) {
+                    const targetMesh = this.targetMeshes.get(this.selectedTargetId);
+                    this.selectionRing.position.copy(targetMesh.position);
+                    this.selectionRing.visible = targetMesh.material.opacity > 0.1;
+                    const s = 1.0 + Math.sin(this.pulse * Math.PI * 2) * 0.1;
+                    this.selectionRing.scale.set(s, s, s);
+                } else {
+                    this.selectionRing.visible = false;
+                }
+
+                // Update Marine Snow
+                if (this.marineSnow) {
+                    const positions = this.marineSnow.geometry.attributes.position.array;
+                    const speeds = this.marineSnow.geometry.userData.speeds;
+                    for (let i = 0; i < speeds.length; i++) {
+                        positions[i * 3 + 1] -= speeds[i];
+                        if (positions[i * 3 + 1] < -100) positions[i * 3 + 1] = 100;
+                    }
+                    this.marineSnow.geometry.attributes.position.needsUpdate = true;
+                }
+
                 this.renderer.render(this.scene, this.camera);
             }
         } else {
@@ -272,6 +348,36 @@ export class TacticalView {
             case 'STATIC': return '#888888';
             default: return '#ff8800';
         }
+    }
+
+    drawSelectionHUD(ctx, x, y, size, pulse) {
+        ctx.save();
+        ctx.translate(x, y);
+
+        // Pulsing glow circle
+        const glowAlpha = 0.2 + Math.sin(pulse * Math.PI * 2) * 0.1;
+        ctx.strokeStyle = `rgba(255, 0, 0, ${glowAlpha})`;
+        ctx.lineWidth = 4;
+        ctx.beginPath();
+        ctx.arc(0, 0, size * (1.1 + Math.sin(pulse * Math.PI * 2) * 0.05), 0, Math.PI * 2);
+        ctx.stroke();
+
+        // Corners
+        ctx.strokeStyle = '#ff0000';
+        ctx.lineWidth = 2;
+        const cornerLen = size * 0.4;
+        const offset = size * 1.2;
+
+        for (let i = 0; i < 4; i++) {
+            ctx.rotate(Math.PI / 2);
+            ctx.beginPath();
+            ctx.moveTo(offset - cornerLen, -offset);
+            ctx.lineTo(offset, -offset);
+            ctx.lineTo(offset, -offset + cornerLen);
+            ctx.stroke();
+        }
+
+        ctx.restore();
     }
 
     handleCanvasClick(e) {
@@ -390,8 +496,13 @@ export class TacticalView {
                 // Set transparency for passive detections
                 ctx.globalAlpha = t.detected ? 1.0 : 0.5;
 
+                // Draw Selection HUD if selected
+                if (isSelected) {
+                    this.drawSelectionHUD(ctx, dx, dy, 12, this.pulse);
+                }
+
                 // Draw Target based on type
-                ctx.fillStyle = isSelected ? '#ff0000' : this.getTypeColor(t.type);
+                ctx.fillStyle = this.getTypeColor(t.type);
                 ctx.strokeStyle = ctx.fillStyle;
                 ctx.lineWidth = 1;
 
@@ -516,7 +627,12 @@ export class TacticalView {
 
                 const isSelected = this.selectedTargetId === t.id;
                 ctx.globalAlpha = t.detected ? 1.0 : 0.5;
-                ctx.fillStyle = isSelected ? '#ff0000' : this.getTypeColor(t.type);
+
+                if (isSelected) {
+                    this.drawSelectionHUD(ctx, dx, dy, 10, this.pulse);
+                }
+
+                ctx.fillStyle = this.getTypeColor(t.type);
                 ctx.strokeStyle = ctx.fillStyle;
                 ctx.lineWidth = 1;
 

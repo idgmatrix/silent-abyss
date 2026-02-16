@@ -92,6 +92,12 @@ async function initSystems() {
         tacticalView.resize();
     }, 50);
 
+    // Theme selector
+    const themeSelect = document.getElementById('btr-theme-select');
+    if (themeSelect) {
+        themeSelect.onchange = (e) => sonarVisuals.setTheme(e.target.value);
+    }
+
     requestAnimationFrame(renderLoop);
 }
 
