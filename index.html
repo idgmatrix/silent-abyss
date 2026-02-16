@@ -15,13 +15,26 @@
         <h1 class="text-lg font-bold tracking-[0.2em] glow-text uppercase text-cyan-400">Tactical Command System v5.7</h1>
         <div class="flex gap-6 text-[11px]">
             <div>DEPTH: <span class="text-white">125m</span></div>
-            <div>SONAR: <span id="tactical-status" class="text-green-500 font-bold tracking-widest">PASSIVE MODE</span></div>
-            <div id="clock">00:00:00</div>
+            <div class="flex items-center gap-4">
+                <div class="flex gap-2 text-[10px] border border-cyan-900 px-2 py-1">
+                    <label class="cursor-pointer flex items-center gap-1">
+                        <input type="radio" name="view-mode" value="3d" checked> <span class="text-cyan-400">3D</span>
+                    </label>
+                    <label class="cursor-pointer flex items-center gap-1">
+                        <input type="radio" name="view-mode" value="radial"> <span class="text-cyan-400">RADAR</span>
+                    </label>
+                    <label class="cursor-pointer flex items-center gap-1">
+                        <input type="radio" name="view-mode" value="grid"> <span class="text-cyan-400">GRID</span>
+                    </label>
+                </div>
+                <div>SONAR: <span id="tactical-status" class="text-green-500 font-bold tracking-widest">PASSIVE MODE</span></div>
+                <div id="clock">00:00:00</div>
+            </div>
         </div>
     </header>
 
     <main class="flex-1 grid grid-cols-12 gap-3 overflow-hidden">
-        <section class="col-span-3 flex flex-col gap-3 overflow-hidden">
+        <section class="col-span-3 flex flex-col gap-3 overflow-hidden min-h-0">
             <div class="panel p-3 flex-none flex flex-col gap-2">
                 <div class="label-tech border-b border-cyan-900 pb-1">Main Drive Control</div>
 
@@ -47,7 +60,11 @@
 
             <div class="panel p-2 flex-none bg-cyan-950/10">
                 <div class="label-tech mb-2 border-b border-cyan-900">Target Acoustic Intelligence</div>
-                <div class="grid grid-cols-2 gap-2 text-[10px]">
+                <div class="grid grid-cols-2 gap-2 text-[10px] mb-2 border-b border-cyan-900 pb-2">
+                    <div class="col-span-2 flex justify-between items-center bg-cyan-950/30 px-2 py-1">
+                        <span class="text-cyan-700">TARGET ID</span>
+                        <span id="target-id-text" class="text-white font-bold text-sm">---</span>
+                    </div>
                     <div class="flex flex-col">
                         <span class="text-cyan-700">RANGE (RNG)</span>
                         <span id="target-range-text" class="text-white font-bold text-sm italic">---</span>
@@ -69,22 +86,22 @@
 
             <div class="panel p-2 flex-1">
                 <div class="label-tech">LOFAR (Narrowband Frequency)</div>
-                <div class="h-[calc(100%-15px)] bg-black/50 relative">
+                <div class="flex-1 bg-black/50 relative">
                     <canvas id="lofar-canvas"></canvas>
                 </div>
             </div>
 
             <div class="panel p-2 flex-1">
                 <div class="label-tech">DEMON (Propeller Signature)</div>
-                <div class="h-[calc(100%-15px)] bg-black/50 relative">
+                <div class="flex-1 bg-black/50 relative">
                     <canvas id="demon-canvas"></canvas>
                 </div>
             </div>
         </section>
 
-        <section class="col-span-6 flex flex-col gap-3">
+        <section class="col-span-6 flex flex-col gap-3 min-h-0">
             <div class="panel flex-[2] relative overflow-hidden">
-                <div id="sonar-viewport"></div>
+                <div id="tactical-viewport"></div>
                 <div id="contact-alert" class="absolute top-10 left-1/2 -translate-x-1/2 pointer-events-none hidden">
                     <div class="text-red-500 font-bold text-sm tracking-widest animate-pulse border border-red-500 px-4 py-1 bg-red-950/50 shadow-[0_0_20px_rgba(255,0,0,0.4)]">CONTACT ACQUIRED</div>
                 </div>
@@ -95,13 +112,13 @@
                     <span>BTR (Bearing Time Recorder)</span>
                     <span>000° <---> 360°</span>
                 </div>
-                <div class="h-[calc(100%-15px)]">
+                <div class="flex-1">
                     <canvas id="btr-canvas" class="bg-black"></canvas>
                 </div>
             </div>
         </section>
 
-        <section class="col-span-3 flex flex-col gap-3">
+        <section class="col-span-3 flex flex-col gap-3 overflow-hidden min-h-0">
             <div class="panel flex-1 flex flex-col">
                 <div class="p-2 border-b border-cyan-900 label-tech text-center">Broadband Waterfall (Ambient)</div>
                 <div id="waterfall-container" class="flex-1 bg-black overflow-hidden">

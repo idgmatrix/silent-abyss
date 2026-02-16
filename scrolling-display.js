@@ -13,22 +13,26 @@ export class ScrollingDisplay {
     resize() {
         if (!this.canvas) return;
         const dpr = window.devicePixelRatio || 1;
-        this.canvas.width = this.canvas.clientWidth * dpr;
-        this.canvas.height = this.canvas.clientHeight * dpr;
-        this.tempCanvas.width = this.canvas.width;
-        this.tempCanvas.height = this.canvas.height;
+        const width = this.canvas.clientWidth;
+        const height = this.canvas.clientHeight;
+
+        this.canvas.width = width * dpr;
+        this.canvas.height = height * dpr;
+        this.tempCanvas.width = width * dpr;
+        this.tempCanvas.height = height * dpr;
     }
 
     shiftDisplay() {
         if (!this.ctx || !this.canvas) return;
+        const dpr = window.devicePixelRatio || 1;
 
         // Copy current canvas to temp
         this.tempCtx.clearRect(0, 0, this.tempCanvas.width, this.tempCanvas.height);
         this.tempCtx.drawImage(this.canvas, 0, 0);
 
-        // Clear and draw back shifted by 1 pixel down
+        // Clear and draw back shifted by 1 pixel down (scaled by dpr)
         this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
-        this.ctx.drawImage(this.tempCanvas, 0, 1);
+        this.ctx.drawImage(this.tempCanvas, 0, dpr);
     }
 
     // Helper for drawing a single new line at the top (y=0)

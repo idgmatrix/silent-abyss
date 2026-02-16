@@ -48,7 +48,7 @@ const statusDisplay = document.getElementById('tactical-status');
 
 async function initSystems() {
     await audioSys.init();
-    tacticalView.init('sonar-viewport');
+    tacticalView.init('tactical-viewport');
     sonarVisuals.init();
 
     // Initialize Targets in subsystems
@@ -69,7 +69,13 @@ async function initSystems() {
     };
 
     simEngine.start(100);
-    tacticalView.resize();
+
+    // Final layout sync after DOM updates
+    setTimeout(() => {
+        sonarVisuals.resize();
+        tacticalView.resize();
+    }, 50);
+
     requestAnimationFrame(renderLoop);
 }
 
@@ -157,14 +163,16 @@ function renderLoop() {
     }
     tacticalView.updateTargetOpacities();
 
+    // Render Tactical View
+    const ownShipCourse = (performance.now() / 10000) * Math.PI * 2;
+    tacticalView.render(simEngine.targets, ownShipCourse);
+
     // Render Visuals
     const data = audioSys.getFrequencyData();
     const ctx = audioSys.getContext();
     if (ctx && data) {
          sonarVisuals.draw(data, simEngine.targets, currentRpmValue, pingActiveIntensity, ctx.sampleRate, audioSys.analyser.fftSize);
     }
-
-    tacticalView.render();
 }
 
 // Event Listeners
@@ -177,6 +185,25 @@ document.getElementById('rpm-slider').oninput = (e) => {
     if(rpmDisplay) rpmDisplay.innerText = `${rpm} RPM`;
     audioSys.setRpm(rpm);
 };
+
+// View Mode Switching
+document.querySelectorAll('input[name="view-mode"]').forEach(el => {
+    el.onchange = (e) => {
+        tacticalView.setViewMode(e.target.value);
+    };
+});
+
+// Target Selection
+document.getElementById('tactical-viewport').addEventListener('targetSelected', (e) => {
+    const targetId = e.detail.id;
+    console.log("Target Selected:", targetId);
+    const target = simEngine.targets.find(t => t.id === targetId);
+    if (target) {
+        const targetIdEl = document.getElementById('target-id-text');
+        if (targetIdEl) targetIdEl.innerText = targetId.toUpperCase();
+        updateDashboard(target);
+    }
+});
 
 // Clock
 setInterval(() => {
