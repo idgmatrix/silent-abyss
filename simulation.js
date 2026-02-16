@@ -74,6 +74,7 @@ export class SimulationTarget {
         this.patrolCenter = { x: this.x, z: this.z }; // Patrol around start position
         this.timeSinceLastTurn = 0;
         this.nextTurnInterval = 10 + (config.seed ?? 0.5) * 20; // Use provided seed or default
+        this.lastPulseId = -1;
     }
 
     // Compatibility Getters

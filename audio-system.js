@@ -238,6 +238,29 @@ export class AudioSystem {
         osc.stop(time + 1.3);
     }
 
+    createPingEcho(vol = 0.3, distance = 0) {
+        if (!this.ctx) return;
+        const time = this.ctx.currentTime;
+
+        const osc = this.ctx.createOscillator();
+        const g = this.ctx.createGain();
+
+        // Connect directly to analyser to bypass any sub-group ducking if implemented later,
+        // but for now analyser is the master bus.
+        osc.connect(g).connect(this.analyser);
+
+        // Sharper sweep for echo: 1100Hz -> 850Hz
+        osc.frequency.setValueAtTime(1100, time);
+        osc.frequency.exponentialRampToValueAtTime(850, time + 0.08);
+
+        g.gain.setValueAtTime(0, time);
+        g.gain.linearRampToValueAtTime(vol, time + 0.01);
+        g.gain.linearRampToValueAtTime(0, time + 0.6); // Shorter decay (0.6s)
+
+        osc.start(time);
+        osc.stop(time + 0.7);
+    }
+
     getFrequencyData() {
         if (this.analyser && this.dataArray) {
             this.analyser.getByteFrequencyData(this.dataArray);

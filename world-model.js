@@ -11,6 +11,7 @@ export class WorldModel {
         this.isScanning = false;
         this.scanRadius = 0;
         this.pingActiveIntensity = 0;
+        this.currentPulseId = 0;
         this.ownShipCourse = 0;
         this.elapsedTime = 0; // Simulation time in seconds
 
@@ -146,13 +147,13 @@ export class WorldModel {
 
         this.simEngine.targets.forEach(target => {
             // If scanning past target and it's not already tracked by active scan this pulse
-            // We use a temporary flag or checking if it was just detected in this scan
-            // For simplicity, let's say active scan always moves it to TRACKED
-            if (this.scanRadius >= target.distance && target.state !== TrackState.TRACKED) {
+            if (this.scanRadius >= target.distance && target.lastPulseId !== this.currentPulseId) {
+                target.lastPulseId = this.currentPulseId;
                 target.state = TrackState.TRACKED;
                 target.lastDetectedTime = this.elapsedTime;
 
-                this.audioSys.createPingTap(0.4, 1000, 980);
+                const echoVol = 0.6 * (1.0 - target.distance / 200);
+                this.audioSys.createPingEcho(echoVol, target.distance);
                 this.tacticalView.updateTargetPosition(target.id, target.x, target.z);
 
                 // Trigger UI Event
@@ -172,6 +173,7 @@ export class WorldModel {
         if (this.isScanning || !this.audioSys.getContext()) return;
         this.isScanning = true;
         this.scanRadius = 0;
+        this.currentPulseId++;
         this.pingActiveIntensity = 1.0;
         this.tacticalView.setScanExUniforms(0, true);
         this.audioSys.createPingTap(0.5, 1200, 900);
