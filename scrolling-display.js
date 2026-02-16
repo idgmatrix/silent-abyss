@@ -1,9 +1,7 @@
 export class ScrollingDisplay {
     constructor(canvasId) {
         this.canvas = document.getElementById(canvasId);
-        this.ctx = this.canvas ? this.canvas.getContext('2d') : null;
-        this.tempCanvas = document.createElement('canvas');
-        this.tempCtx = this.tempCanvas.getContext('2d');
+        this.ctx = this.canvas ? this.canvas.getContext('2d', { alpha: false }) : null;
         this._resizeHandler = () => this.resize();
         this.resize();
         if (this.canvas) {
@@ -16,9 +14,7 @@ export class ScrollingDisplay {
             window.removeEventListener('resize', this._resizeHandler);
         }
         this.ctx = null;
-        this.tempCtx = null;
         this.canvas = null;
-        this.tempCanvas = null;
     }
 
     resize() {
@@ -29,21 +25,20 @@ export class ScrollingDisplay {
 
         this.canvas.width = width * dpr;
         this.canvas.height = height * dpr;
-        this.tempCanvas.width = width * dpr;
-        this.tempCanvas.height = height * dpr;
     }
 
     shiftDisplay() {
         if (!this.ctx || !this.canvas) return;
         const dpr = window.devicePixelRatio || 1;
+        const w = this.canvas.width;
+        const h = this.canvas.height;
+        const shift = dpr;
 
-        // Copy current canvas to temp
-        this.tempCtx.clearRect(0, 0, this.tempCanvas.width, this.tempCanvas.height);
-        this.tempCtx.drawImage(this.canvas, 0, 0);
+        // Efficient self-copy scrolling
+        this.ctx.drawImage(this.canvas, 0, 0, w, h - shift, 0, shift, w, h - shift);
 
-        // Clear and draw back shifted by 1 pixel down (scaled by dpr)
-        this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
-        this.ctx.drawImage(this.tempCanvas, 0, dpr);
+        // Clear the top line
+        this.ctx.clearRect(0, 0, w, shift);
     }
 
     // Helper for drawing a single new line at the top (y=0)

@@ -19,80 +19,96 @@ const sonarVisuals = new SonarVisuals();
 const simEngine = new SimulationEngine();
 
 // Targets Setup
-simEngine.addTarget(new SimulationTarget('target-01', {
-    // Merchant Vessel (SHIP)
-    x: -90,
-    z: 30,
-    course: 0.2,
-    speed: 0.8,
-    type: 'SHIP',
-    rpm: 120,
-    bladeCount: 3,
-    isPatrolling: false
-}));
+function seedTargets() {
+    simEngine.targets = []; // Ensure clean state
+    simEngine.addTarget(new SimulationTarget('target-01', {
+        // Merchant Vessel (SHIP)
+        x: -90,
+        z: 30,
+        course: 0.2,
+        speed: 0.8,
+        type: 'SHIP',
+        rpm: 120,
+        bladeCount: 3,
+        isPatrolling: false
+    }));
 
-simEngine.addTarget(new SimulationTarget('target-02', {
-    // Stealthy Submarine (SUBMARINE)
-    distance: 60,
-    angle: Math.PI * 0.75,
-    speed: 0.3,
-    type: 'SUBMARINE',
-    rpm: 80,
-    bladeCount: 7,
-    isPatrolling: true,
-    patrolRadius: 80
-}));
+    simEngine.addTarget(new SimulationTarget('target-02', {
+        // Stealthy Submarine (SUBMARINE)
+        distance: 60,
+        angle: Math.PI * 0.75,
+        speed: 0.3,
+        type: 'SUBMARINE',
+        rpm: 80,
+        bladeCount: 7,
+        isPatrolling: true,
+        patrolRadius: 80
+    }));
 
-simEngine.addTarget(new SimulationTarget('target-03', {
-    // Erratic Whale (BIOLOGICAL)
-    distance: 40,
-    angle: -Math.PI * 0.25,
-    type: 'BIOLOGICAL',
-    isPatrolling: true,
-    patrolRadius: 30
-}));
+    simEngine.addTarget(new SimulationTarget('target-03', {
+        // Erratic Whale (BIOLOGICAL)
+        distance: 40,
+        angle: -Math.PI * 0.25,
+        type: 'BIOLOGICAL',
+        isPatrolling: true,
+        patrolRadius: 30
+    }));
 
-simEngine.addTarget(new SimulationTarget('target-04', {
-    // Volcanic Vent (STATIC)
-    x: 70,
-    z: -80,
-    type: 'STATIC',
-    isPatrolling: false
-}));
+    simEngine.addTarget(new SimulationTarget('target-04', {
+        // Volcanic Vent (STATIC)
+        x: 70,
+        z: -80,
+        type: 'STATIC',
+        isPatrolling: false
+    }));
 
-simEngine.addTarget(new SimulationTarget('target-05', {
-    // School of biologicals
-    distance: 110,
-    angle: Math.PI * 0.4,
-    type: 'BIOLOGICAL',
-    isPatrolling: true,
-    patrolRadius: 15
-}));
+    simEngine.addTarget(new SimulationTarget('target-05', {
+        // School of biologicals
+        distance: 110,
+        angle: Math.PI * 0.4,
+        type: 'BIOLOGICAL',
+        isPatrolling: true,
+        patrolRadius: 15
+    }));
 
-simEngine.addTarget(new SimulationTarget('target-06', {
-    // Derelict wreck
-    x: -120,
-    z: -40,
-    type: 'STATIC',
-    isPatrolling: false
-}));
+    simEngine.addTarget(new SimulationTarget('target-06', {
+        // Derelict wreck
+        x: -120,
+        z: -40,
+        type: 'STATIC',
+        isPatrolling: false
+    }));
 
-simEngine.addTarget(new SimulationTarget('target-07', {
-    // Inbound Torpedo
-    distance: 140,
-    angle: Math.PI * 1.1,
-    type: 'TORPEDO',
-    isPatrolling: true,
-    patrolRadius: 200,
-    targetCourse: Math.PI * 2.1 // Move towards center-ish
-}));
+    simEngine.addTarget(new SimulationTarget('target-07', {
+        // Inbound Torpedo
+        distance: 140,
+        angle: Math.PI * 1.1,
+        type: 'TORPEDO',
+        isPatrolling: true,
+        patrolRadius: 200,
+        targetCourse: Math.PI * 2.1 // Move towards center-ish
+    }));
+}
 
 // UI Elements
-const rpmDisplay = document.getElementById('rpm-display');
-const statusDisplay = document.getElementById('tactical-status');
+let rpmDisplay, statusDisplay, rangeEl, velEl, brgEl, sigEl, classEl, targetIdEl, contactAlertEl;
+
+function cacheDomElements() {
+    rpmDisplay = document.getElementById('rpm-display');
+    statusDisplay = document.getElementById('tactical-status');
+    rangeEl = document.getElementById('target-range-text');
+    velEl = document.getElementById('target-vel-text');
+    brgEl = document.getElementById('target-brg-text');
+    sigEl = document.getElementById('sig-text');
+    classEl = document.getElementById('target-class-text');
+    targetIdEl = document.getElementById('target-id-text');
+    contactAlertEl = document.getElementById('contact-alert');
+}
 
 async function initSystems() {
+    cacheDomElements();
     await audioSys.init();
+    seedTargets();
     tacticalView.init('tactical-viewport');
     sonarVisuals.init();
 
@@ -102,10 +118,25 @@ async function initSystems() {
         tacticalView.addTarget(target);
     });
 
-    document.getElementById('setup-screen').classList.add('hidden');
-    document.getElementById('engine-controls').classList.remove('hidden');
+    const setupScreen = document.getElementById('setup-screen');
+    const engineControls = document.getElementById('engine-controls');
+    if (setupScreen) setupScreen.classList.add('hidden');
+    if (engineControls) engineControls.classList.remove('hidden');
 
     simEngine.onTick = (targets) => {
+        // Update Passive Detection Logic (Moved from render loop)
+        targets.forEach(target => {
+            const sig = target.getAcousticSignature();
+            // Path loss: Inverse square law (simplified for this sim)
+            const snr = sig / (Math.pow(target.distance / 10, 1.5) + 1);
+            target.passiveSNR = snr;
+            target.isPassivelyDetected = snr > 1.5; // Detection threshold
+
+            if (target.isPassivelyDetected) {
+                tacticalView.updateTargetPosition(target.id, target.x, target.z, true);
+            }
+        });
+
         // Update Audio Distances
         targets.forEach(t => {
             audioSys.updateTargetVolume(t.id, t.distance);
@@ -144,6 +175,9 @@ async function initSystems() {
 
     if (renderRequest) cancelAnimationFrame(renderRequest);
     renderRequest = requestAnimationFrame(renderLoop);
+
+    // Ensure clock is running
+    startClock();
 }
 
 window.cleanupSystems = () => {
@@ -174,11 +208,6 @@ window.addEventListener('beforeunload', () => {
 
 function updateDashboard(target) {
     if (!target) return;
-    const rangeEl = document.getElementById('target-range-text');
-    const velEl = document.getElementById('target-vel-text');
-    const brgEl = document.getElementById('target-brg-text');
-    const sigEl = document.getElementById('sig-text');
-    const classEl = document.getElementById('target-class-text');
 
     if (rangeEl) rangeEl.innerText = `${(target.distance * 50).toFixed(0)}m`;
     if (velEl) velEl.innerText = `${Math.abs(target.velocity * 20).toFixed(1)}kts`;
@@ -217,19 +246,6 @@ function triggerPing() {
 function renderLoop() {
     renderRequest = requestAnimationFrame(renderLoop);
 
-    // Update Passive Detection Logic
-    simEngine.targets.forEach(target => {
-        const sig = target.getAcousticSignature();
-        // Path loss: Inverse square law (simplified for this sim)
-        const snr = sig / (Math.pow(target.distance / 10, 1.5) + 1);
-        target.passiveSNR = snr;
-        target.isPassivelyDetected = snr > 1.5; // Detection threshold
-
-        if (target.isPassivelyDetected) {
-            tacticalView.updateTargetPosition(target.id, target.x, target.z, true);
-        }
-    });
-
     // Update Scanning logic
     if (isScanning) {
         scanRadius += 1.5;
@@ -242,11 +258,9 @@ function renderLoop() {
 
                 tacticalView.updateTargetPosition(target.id, target.x, target.z);
 
-                const alert = document.getElementById('contact-alert');
-                if (alert) alert.classList.remove('hidden');
+                if (contactAlertEl) contactAlertEl.classList.remove('hidden');
                 setTimeout(() => {
-                    const alertEl = document.getElementById('contact-alert');
-                    if(alertEl) alertEl.classList.add('hidden');
+                    if(contactAlertEl) contactAlertEl.classList.add('hidden');
                 }, 1000);
             }
         });
@@ -312,7 +326,6 @@ const handleTargetSelected = (e) => {
     // Update Audio Focus
     audioSys.setFocusedTarget(selectedTargetId);
 
-    const targetIdEl = document.getElementById('target-id-text');
     if (!selectedTargetId) {
         if (targetIdEl) targetIdEl.innerText = "OWN-SHIP";
         // Reset dashboard or show own-ship stats?
@@ -328,8 +341,12 @@ const handleTargetSelected = (e) => {
 };
 
 // Clock
-if (clockInterval) clearInterval(clockInterval);
-clockInterval = setInterval(() => {
-    const clock = document.getElementById('clock');
-    if (clock) clock.innerText = new Date().toTimeString().split(' ')[0];
-}, 1000);
+function startClock() {
+    if (clockInterval) clearInterval(clockInterval);
+    clockInterval = setInterval(() => {
+        const clock = document.getElementById('clock');
+        if (clock) clock.innerText = new Date().toTimeString().split(' ')[0];
+    }, 1000);
+}
+
+startClock();

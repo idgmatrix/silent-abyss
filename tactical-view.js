@@ -120,11 +120,6 @@ export class TacticalView {
         this.setupSelectionRing();
         this.setupMarineSnow();
 
-        // Debug cube
-        const cube = new THREE.Mesh(new THREE.BoxGeometry(5, 5, 5), new THREE.MeshBasicMaterial({ color: 0x00ff00 }));
-        cube.position.y = 10;
-        this.scene.add(cube);
-
         window.addEventListener('resize', this._resizeHandler);
 
         // Initial resize to set canvas dimensions

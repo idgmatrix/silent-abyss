@@ -314,39 +314,56 @@ export class SonarVisuals {
     }
 
     drawWaterfall(dataArray) {
-        if (!this.waterfallDisplay) return;
+        if (!this.waterfallDisplay || !this.waterfallDisplay.ctx) return;
 
+        const ctx = this.waterfallDisplay.ctx;
+        const width = this.waterfallDisplay.canvas.width;
         const theme = BTR_THEMES[this.currentWaterfallTheme].WATERFALL;
 
         this.waterfallDisplay.drawNextLine((ctx, width, height) => {
-            const totalSamples = dataArray.length * 0.8;
-            const bw = width / totalSamples;
+            const totalSamples = Math.floor(dataArray.length * 0.8);
+            const imageData = ctx.createImageData(width, 1);
+            const data = imageData.data;
 
-            for(let i=0; i < totalSamples; i++) {
-                const val = dataArray[i]; // 0-255
-                if(val > 15) {
+            // Cache colors to avoid overhead in loop
+            const low = theme.low;
+            const mid = theme.mid;
+            const high = theme.high;
+
+            for (let x = 0; x < width; x++) {
+                const sampleIdx = Math.floor((x / width) * totalSamples);
+                const val = dataArray[sampleIdx];
+                const i = x * 4;
+
+                if (val > 15) {
                     const norm = val / 255;
                     let r, g, b;
 
                     if (norm < 0.5) {
                         const t = norm * 2;
-                        r = theme.low[0] * (1-t) + theme.mid[0] * t;
-                        g = theme.low[1] * (1-t) + theme.mid[1] * t;
-                        b = theme.low[2] * (1-t) + theme.mid[2] * t;
+                        r = low[0] * (1 - t) + mid[0] * t;
+                        g = low[1] * (1 - t) + mid[1] * t;
+                        b = low[2] * (1 - t) + mid[2] * t;
                     } else {
                         const t = (norm - 0.5) * 2;
-                        r = theme.mid[0] * (1-t) + theme.high[0] * t;
-                        g = theme.mid[1] * (1-t) + theme.high[1] * t;
-                        b = theme.mid[2] * (1-t) + theme.high[2] * t;
+                        r = mid[0] * (1 - t) + high[0] * t;
+                        g = mid[1] * (1 - t) + high[1] * t;
+                        b = mid[2] * (1 - t) + high[2] * t;
                     }
 
-                    ctx.fillStyle = `rgb(${r|0}, ${g|0}, ${b|0})`;
-                    ctx.fillRect(i * bw, 0, bw + 1, 1);
+                    data[i] = r | 0;
+                    data[i + 1] = g | 0;
+                    data[i + 2] = b | 0;
+                    data[i + 3] = 255;
                 } else {
-                    ctx.fillStyle = '#000';
-                    ctx.fillRect(i * bw, 0, bw + 1, 1);
+                    data[i] = 0;
+                    data[i + 1] = 0;
+                    data[i + 2] = 0;
+                    data[i + 3] = 255;
                 }
             }
+
+            ctx.putImageData(imageData, 0, 0);
         });
     }
 
