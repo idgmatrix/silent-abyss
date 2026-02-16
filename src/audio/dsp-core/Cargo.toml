@@ -1,0 +1,17 @@
+[package]
+name = "dsp-core"
+version = "0.1.0"
+edition = "2021"
+description = "High-performance submarine engine sound synthesis for Silent Abyss"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+wasm-bindgen = "0.2.92"
+js-sys = "0.3.69"
+
+[profile.release]
+# Optimize for small binary size and speed
+opt-level = "s"
+lto = true
