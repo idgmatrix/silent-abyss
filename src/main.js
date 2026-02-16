@@ -1,11 +1,11 @@
-import { SimulationEngine, SimulationTarget } from './simulation.js';
+import { SimulationEngine } from './simulation.js';
 import { AudioSystem } from './audio-system.js';
 import { TacticalView } from './tactical-view.js';
 import { SonarVisuals } from './sonar-visuals.js';
 import { WorldModel } from './world-model.js';
 
 // State
-let currentRpmValue = 0;
+let currentRpmValue = 60;
 let renderRequest = null;
 let clockInterval = null;
 
@@ -35,15 +35,20 @@ function cacheDomElements() {
 async function initSystems() {
     cacheDomElements();
     await audioSys.init();
+    audioSys.setRpm(currentRpmValue);
     worldModel.seedTargets();
     tacticalView.init('tactical-viewport');
     sonarVisuals.init();
 
     // Initialize Targets in subsystems
-    simEngine.targets.forEach(target => {
-        audioSys.createTargetAudio(target);
+    for (const target of simEngine.targets) {
+        await audioSys.createTargetAudio(target);
         tacticalView.addTarget(target);
-    });
+    }
+
+    if (rpmDisplay) rpmDisplay.innerText = `${currentRpmValue} RPM`;
+    const rpmSlider = document.getElementById('rpm-slider');
+    if (rpmSlider) rpmSlider.value = currentRpmValue;
 
     const setupScreen = document.getElementById('setup-screen');
     const engineControls = document.getElementById('engine-controls');
@@ -60,7 +65,7 @@ async function initSystems() {
     simEngine.start(100);
 
     // Event listeners from worldModel
-    window.addEventListener('sonar-contact', (e) => {
+    window.addEventListener('sonar-contact', () => {
         if (contactAlertEl) contactAlertEl.classList.remove('hidden');
         setTimeout(() => {
             if(contactAlertEl) contactAlertEl.classList.add('hidden');

@@ -1,11 +1,13 @@
+import { WasmAudioManager } from './audio/wasm-audio-manager.js';
+
 export class AudioSystem {
     constructor() {
         this.ctx = null;
-        this.engineNode = null;
-        this.engineGain = null;
+        this.wasmManager = new WasmAudioManager();
+        this.ownVoiceId = 0;
         this.analyser = null;
         this.dataArray = null;
-        this.targetNodes = new Map(); // Stores gain nodes for targets
+        this.targetNodes = new Map(); // Stores voice indices for targets
         this.focusedTargetId = null;
         this.bioTimeouts = new Set();
     }
@@ -16,85 +18,24 @@ export class AudioSystem {
         try {
             this.ctx = new (window.AudioContext || window.webkitAudioContext)();
 
-            const workletCode = `
-                class SoundEngineProcessor extends AudioWorkletProcessor {
-                    constructor() {
-                        super();
-                        this.targetRpm = 0;
-                        this.currentRpm = 0;
-                        this.phase = 0;
-                        this.bladeCount = 5;
-                        this.lastNoise = 0;
-                        this.port.onmessage = (e) => {
-                            if (e.data.type === 'SET_RPM') this.targetRpm = e.data.value;
-                        };
-                    }
-                    process(inputs, outputs) {
-                        const output = outputs[0][0];
-                        if (!output) return true;
-
-                        // Smooth RPM transition - faster response (0.99 vs 0.9997)
-                        this.currentRpm = this.currentRpm * 0.99 + this.targetRpm * 0.01;
-                        const activeRpm = this.currentRpm;
-
-                        if (activeRpm > 0.05) {
-                             const baseFreq = (activeRpm / 60) * this.bladeCount;
-                             const delta = (2 * Math.PI * baseFreq) / sampleRate;
-                             // Pre-calculate amplitude outside loop for efficiency
-                             const amplitude = Math.min(0.25, activeRpm / 200); // Higher max amplitude
-                             const cavitationIntensity = activeRpm > 100 ? (activeRpm - 100) / 300 : 0.01;
-                             const filterAlpha = 0.2; // Brighter noise
-
-                            for (let i = 0; i < output.length; i++) {
-                                this.phase = (this.phase + delta) % (2 * Math.PI);
-
-                                // 1. Blade Thump - Richer harmonics
-                                let harmonicSignal = Math.sin(this.phase) * 0.6; // Fundamental
-                                harmonicSignal += Math.sin(this.phase * 2) * 0.25; // 2nd harmonic
-                                harmonicSignal += Math.sin(this.phase * 3) * 0.15; // 3rd harmonic
-                                harmonicSignal += Math.sin(this.phase * 0.5) * 0.05; // Sub-harmonic (shaft)
-
-                                // Soft clipping shape for "thump"
-                                const thump = Math.tanh(harmonicSignal * 1.5);
-
-                                // 2. Cavitation Noise with Amplitude Modulation
-                                // Noise pulses aligned with blade phase
-                                const noiseRaw = (Math.random() * 2 - 1);
-                                this.lastNoise = this.lastNoise + filterAlpha * (noiseRaw - this.lastNoise);
-
-                                // AM: Noise is louder at peak of blade stroke
-                                const bladeMod = (Math.sin(this.phase) + 1) * 0.5;
-                                const noiseSignal = this.lastNoise * cavitationIntensity * (0.5 + 0.5 * bladeMod);
-
-                                output[i] = (thump * amplitude * 0.6) + (noiseSignal * 0.8);
-                            }
-                        } else {
-                            for (let i = 0; i < output.length; i++) output[i] = 0;
-                            this.lastNoise = 0;
-                        }
-                        return true;
-                    }
-                }
-                registerProcessor('sound-engine-processor', SoundEngineProcessor);
-            `;
-
-            const blob = new Blob([workletCode], { type: 'application/javascript' });
-            await this.ctx.audioWorklet.addModule(URL.createObjectURL(blob));
-
             this.analyser = this.ctx.createAnalyser();
             this.analyser.fftSize = 2048;
             this.analyser.smoothingTimeConstant = 0.85;
             this.dataArray = new Uint8Array(this.analyser.frequencyBinCount);
+            this.analyser.connect(this.ctx.destination);
 
-            this.engineNode = new AudioWorkletNode(this.ctx, 'sound-engine-processor');
-            this.engineGain = this.ctx.createGain();
-            this.engineGain.gain.value = 0;
+            // Initialize Wasm Manager with existing context and connect to analyser
+            await this.wasmManager.init({
+                ctx: this.ctx,
+                outputNode: this.analyser
+            });
 
-            this.engineNode.connect(this.engineGain).connect(this.analyser);
-            this.analyser.connect(this.ctx.destination); // Optional monitor, usually disabled in sonar ops but useful for dev
-
-            // Ramp up engine gain
-            this.engineGain.gain.linearRampToValueAtTime(1.0, this.ctx.currentTime + 0.5);
+            this.ownVoiceId = this.wasmManager.defaultVoiceId;
+            this.wasmManager.setGain(0.8, this.ownVoiceId);
+            this.wasmManager.setEngineMix(1.0, this.ownVoiceId);
+            this.wasmManager.setCavMix(0.3, this.ownVoiceId);
+            this.wasmManager.setBioMix(0.0, this.ownVoiceId); // Own ship shouldn't chirp like a dolphin
+            this.wasmManager.setBlades(5.0, this.ownVoiceId);
 
         } catch (e) {
             console.error("Audio initialization failed:", e);
@@ -102,99 +43,44 @@ export class AudioSystem {
     }
 
     setRpm(value) {
-        if (this.engineNode) {
-            this.engineNode.port.postMessage({ type: 'SET_RPM', value: value });
+        if (this.wasmManager && this.wasmManager.ready) {
+            this.wasmManager.setRpm(value, this.ownVoiceId);
         }
     }
 
-    createTargetAudio(target) {
-        if (!this.ctx) return;
+    async createTargetAudio(target) {
+        if (!this.ctx || !this.wasmManager.ready) return;
         const targetId = target.id;
         const type = target.type || 'SHIP';
 
-        let targetOsc = null;
-        let targetNoise = null;
-        let targetFilter = this.ctx.createBiquadFilter();
-        const gain = this.ctx.createGain();
-        gain.gain.value = 0.01;
+        // Request a new voice from Wasm
+        const voiceId = await this.wasmManager.addVoice();
+        if (voiceId === -1) {
+            console.warn("Max audio voices reached");
+            return;
+        }
+
+        // Configure voice based on target
+        this.wasmManager.setGain(0.01, voiceId);
+        this.wasmManager.setBlades(target.bladeCount || 5, voiceId);
+        this.wasmManager.setRpm(target.rpm || 0, voiceId);
 
         if (type === 'BIOLOGICAL') {
-            // No steady sound, just setup for bio loop later
+            this.wasmManager.setEngineMix(0.0, voiceId);
+            this.wasmManager.setCavMix(0.0, voiceId);
+            this.wasmManager.setBioMix(1.0, voiceId);
         } else if (type === 'STATIC') {
-            // Just steady low rumble noise
-            targetNoise = this.createNoiseSource(2.0);
-            targetFilter.type = 'lowpass';
-            targetFilter.frequency.value = 150;
-            targetNoise.connect(targetFilter);
+            this.wasmManager.setEngineMix(0.1, voiceId); // Low rumble
+            this.wasmManager.setCavMix(0.3, voiceId);
+            this.wasmManager.setBioMix(0.0, voiceId);
         } else {
             // SHIP or SUBMARINE
-            targetOsc = this.ctx.createOscillator();
-            targetOsc.type = type === 'SUBMARINE' ? 'sine' : 'triangle';
-
-            // Base frequency based on RPM and blade count
-            const baseFreq = (target.rpm / 60) * target.bladeCount;
-            targetOsc.frequency.value = Math.max(20, baseFreq * 2); // 2x for audible fundamental range
-
-            targetNoise = this.createNoiseSource(2.0);
-            targetFilter.type = 'lowpass';
-            targetFilter.frequency.value = type === 'SUBMARINE' ? 250 : 500;
-
-            targetOsc.connect(targetFilter);
-            targetNoise.connect(targetFilter);
-            targetOsc.start();
+            this.wasmManager.setEngineMix(1.0, voiceId);
+            this.wasmManager.setCavMix(type === 'SUBMARINE' ? 0.2 : 0.6, voiceId);
+            this.wasmManager.setBioMix(0.0, voiceId);
         }
 
-        if (targetNoise) targetNoise.start();
-        targetFilter.connect(gain).connect(this.analyser);
-
-        this.targetNodes.set(targetId, {
-            osc: targetOsc,
-            noise: targetNoise,
-            gain: gain,
-            type: type
-        });
-
-        if (type === 'BIOLOGICAL') {
-            // Random clicks/chirps instead of steady sound
-            this.createBioLoop(targetId, gain);
-        }
-    }
-
-    createNoiseSource(duration) {
-        const bSize = this.ctx.sampleRate * duration;
-        const buffer = this.ctx.createBuffer(1, bSize, this.ctx.sampleRate);
-        const dArr = buffer.getChannelData(0);
-        for(let i=0; i<bSize; i++) dArr[i] = Math.random() * 2 - 1;
-        const noise = this.ctx.createBufferSource();
-        noise.buffer = buffer;
-        noise.loop = true;
-        return noise;
-    }
-
-    createBioLoop(targetId, outputGain) {
-        const playClick = () => {
-            if (!this.targetNodes.has(targetId) || !this.ctx) return;
-
-            const osc = this.ctx.createOscillator();
-            const g = this.ctx.createGain();
-            osc.connect(g).connect(outputGain);
-
-            const freq = 800 + Math.random() * 2000;
-            osc.frequency.setValueAtTime(freq, this.ctx.currentTime);
-            osc.frequency.exponentialRampToValueAtTime(100, this.ctx.currentTime + 0.1);
-
-            g.gain.setValueAtTime(0, this.ctx.currentTime);
-            g.gain.linearRampToValueAtTime(0.5, this.ctx.currentTime + 0.01);
-            g.gain.linearRampToValueAtTime(0, this.ctx.currentTime + 0.1);
-
-            osc.start();
-            osc.stop(this.ctx.currentTime + 0.15);
-
-            // Schedule next click
-            const timeoutId = setTimeout(playClick, 500 + Math.random() * 3000);
-            this.bioTimeouts.add(timeoutId);
-        };
-        playClick();
+        this.targetNodes.set(targetId, { voiceId, type });
     }
 
     setFocusedTarget(targetId) {
@@ -203,7 +89,7 @@ export class AudioSystem {
 
     updateTargetVolume(targetId, distance) {
         const node = this.targetNodes.get(targetId);
-        if (node && this.ctx) {
+        if (node && this.wasmManager.ready) {
             // Increased base gain and scaling
             let vol = Math.max(0.015, (120 - distance) / 250) * 0.6;
 
@@ -214,7 +100,7 @@ export class AudioSystem {
                 vol *= 0.3; // Duck non-focused targets
             }
 
-            node.gain.gain.setTargetAtTime(vol, this.ctx.currentTime, 0.1);
+            this.wasmManager.setGain(vol, node.voiceId);
         }
     }
 
@@ -238,7 +124,7 @@ export class AudioSystem {
         osc.stop(time + 1.3);
     }
 
-    createPingEcho(vol = 0.3, distance = 0) {
+    createPingEcho(vol = 0.3) {
         if (!this.ctx) return;
         const time = this.ctx.currentTime;
 
@@ -274,25 +160,15 @@ export class AudioSystem {
     }
 
     dispose() {
+        if (this.wasmManager) {
+            this.wasmManager.dispose();
+        }
         if (this.ctx) {
             this.bioTimeouts.forEach(id => clearTimeout(id));
             this.bioTimeouts.clear();
 
-            this.targetNodes.forEach(node => {
-                if (node.osc) node.osc.stop();
-                if (node.noise) node.noise.stop();
-                if (node.gain) node.gain.disconnect();
-            });
             this.targetNodes.clear();
 
-            if (this.engineNode) {
-                this.engineNode.disconnect();
-                this.engineNode = null;
-            }
-            if (this.engineGain) {
-                this.engineGain.disconnect();
-                this.engineGain = null;
-            }
             if (this.analyser) {
                 this.analyser.disconnect();
                 this.analyser = null;

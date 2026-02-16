@@ -247,7 +247,7 @@ export class SonarVisuals {
 
         const theme = BTR_THEMES[this.currentTheme];
 
-        this.btrDisplay.drawNextLine((ctx, width, height) => {
+        this.btrDisplay.drawNextLine((ctx, width) => {
             // Background with faint sea-noise speckle
             ctx.fillStyle = '#000000';
             ctx.fillRect(0, 0, width, 1);
@@ -320,11 +320,9 @@ export class SonarVisuals {
     drawWaterfall(dataArray) {
         if (!this.waterfallDisplay || !this.waterfallDisplay.ctx) return;
 
-        const ctx = this.waterfallDisplay.ctx;
-        const width = this.waterfallDisplay.canvas.width;
         const theme = BTR_THEMES[this.currentWaterfallTheme].WATERFALL;
 
-        this.waterfallDisplay.drawNextLine((ctx, width, height) => {
+        this.waterfallDisplay.drawNextLine((ctx, width) => {
             const totalSamples = Math.floor(dataArray.length * 0.8);
             const imageData = ctx.createImageData(width, 1);
             const data = imageData.data;
