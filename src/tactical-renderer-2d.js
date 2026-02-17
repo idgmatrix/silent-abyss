@@ -374,8 +374,8 @@ export class Tactical2DRenderer {
         const centerY = height / 2;
         const worldSpan = Math.min(width, height) / scale;
         const maxWorld = worldSpan / 2;
-        const contourLevels = [-18, -12, -6, 0, 6];
-        const gridStep = 12;
+        const contourLevels = [-18, -14, -10, -6, -2, 2, 6];
+        const gridStep = 8;
         const layers = [];
 
         contourLevels.forEach((level, levelIndex) => {
