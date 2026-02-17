@@ -9,6 +9,8 @@ export const TargetType = {
 export const TrackState = {
     UNDETECTED: 'UNDETECTED',
     AMBIGUOUS: 'AMBIGUOUS', // Detected but not classified
+    CLASSIFIED: 'CLASSIFIED', // Signature match in progress
+    CONFIRMED: 'CONFIRMED', // Final identification
     TRACKED: 'TRACKED',
     LOST: 'LOST'
 };
@@ -82,8 +84,16 @@ export class SimulationTarget {
         this.nextTurnInterval = 10 + (config.seed ?? 0.5) * 20; // Use provided seed or default
         this.lastPulseId = -1;
         this.behaviorState = BehaviorState.NORMAL;
-        this.alertTimer = 0;
         this.cruiseSpeed = this.speed;
+
+        // Classification State
+        this.classId = config.classId ?? (this.type === TargetType.SUBMARINE ? 'triumph-class' : 'cargo-vessel');
+        this.classification = {
+            state: TrackState.UNDETECTED,
+            progress: 0, // 0.0 to 1.0
+            identifiedClass: null,
+            confirmed: false
+        };
     }
 
     // Compatibility Getters

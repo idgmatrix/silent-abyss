@@ -18,16 +18,18 @@ The Silent Abyss is a web-based simulation of a tactical submarine interface. It
   - Procedural terrain generation.
   - Unified 2D/3D interaction for target selection and tracking.
 - **Acoustic Realism**:
-  - Signal-to-Noise Ratio (SNR) calculations based on target distance, speed, and environment.
-  - Bathymetric occlusion and shadow zones.
-  - Real-time engine noise synthesis using Web Audio API.
+  - Signal-to-Noise Ratio (SNR) calculations based on multi-layer propagation and bathymetry.
+  - Classification state machine (`UNDETECTED` -> `CONFIRMED`) based on acoustic signatures.
+  - Real-time engine and cavitation synthesis using **Wasm/Rust** core.
+  - **WebGPU-accelerated** frequency analysis for precision sonar displays.
 
 ## Tech Stack
 
 - **Core**: Vanilla HTML5, JavaScript (ES modules).
 - **Styling**: CSS3 with Tailwind CSS and custom CRT/retro overlays.
 - **3D Engine**: [Three.js](https://threejs.org/)
-- **Audio**: Web Audio API with `AudioWorklet`.
+- **Audio**: Web Audio API with `AudioWorklet` and high-performance **Wasm** (Rust) synthesis.
+- **Compute**: **WebGPU** for real-time FFT frequency analysis and high-density signal processing.
 - **Tooling**: [Vite](https://vitejs.dev/) (Build/Dev), [Vitest](https://vitest.dev/) (Testing), ESLint, Prettier.
 
 ## Getting Started

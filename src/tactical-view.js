@@ -17,6 +17,7 @@ export class TacticalView {
         this._lastTargets = [];
         this._resizeHandler = null;
         this._clickHandler = null;
+        this._targetSelectedHandler = null;
         this._lastRenderTime = 0;
     }
 
@@ -78,8 +79,12 @@ export class TacticalView {
 
         this._resizeHandler = () => this.resize();
         this._clickHandler = (e) => this.handleCanvasClick(e);
+        this._targetSelectedHandler = (e) => {
+            this.selectedTargetId = e?.detail?.id ?? null;
+        };
 
         this.container.addEventListener('click', this._clickHandler);
+        this.container.addEventListener('targetSelected', this._targetSelectedHandler);
         window.addEventListener('resize', this._resizeHandler);
 
         this.resize();
@@ -93,6 +98,9 @@ export class TacticalView {
         if (this.container && this._clickHandler) {
             this.container.removeEventListener('click', this._clickHandler);
         }
+        if (this.container && this._targetSelectedHandler) {
+            this.container.removeEventListener('targetSelected', this._targetSelectedHandler);
+        }
 
         this.renderer3D.dispose();
         this.renderer2D.dispose();
@@ -101,6 +109,7 @@ export class TacticalView {
         this._lastTargets = [];
         this._resizeHandler = null;
         this._clickHandler = null;
+        this._targetSelectedHandler = null;
         this._lastRenderTime = 0;
     }
 

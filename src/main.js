@@ -168,7 +168,19 @@ function updateDashboard(target) {
     if (rangeEl) rangeEl.innerText = `${(target.distance * 50).toFixed(0)}m`;
     if (velEl) velEl.innerText = `${Math.abs(target.velocity * 20).toFixed(1)}kts`;
     if (brgEl) brgEl.innerText = `${target.bearing.toFixed(1)}° (T)`;
-    if (classEl) classEl.innerText = target.type;
+
+    if (classEl) {
+        if (target.classification && target.classification.confirmed) {
+            classEl.innerText = target.classification.identifiedClass?.toUpperCase() || target.type;
+            classEl.className = "text-green-500 font-bold";
+        } else if (target.classification && target.classification.state === 'CLASSIFIED') {
+            classEl.innerText = "ANALYZING...";
+            classEl.className = "text-orange-400";
+        } else {
+            classEl.innerText = target.type;
+            classEl.className = "text-white";
+        }
+    }
 
     if (target.distance < 50) {
         if(sigEl) {
@@ -208,8 +220,13 @@ function renderLoop(now) {
     const data = audioSys.getFrequencyData();
     const timeDomainData = audioSys.getTimeDomainData();
     const ctx = audioSys.getContext();
+
+    const selectedTarget = worldModel.getSelectedTarget();
+    if (selectedTarget) {
+        updateDashboard(selectedTarget);
+    }
+
     if (ctx && data) {
-        const selectedTarget = worldModel.getSelectedTarget();
         const activeRpm = selectedTarget ? selectedTarget.rpm : currentRpmValue;
 
         sonarVisuals.draw(

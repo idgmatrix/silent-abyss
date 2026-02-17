@@ -84,13 +84,6 @@ export class Tactical3DRenderer {
     dispose() {
         this.cavitationParticles.dispose();
 
-        if (this.renderer) {
-            this.renderer.dispose();
-            if (this.renderer.domElement && this.renderer.domElement.parentElement) {
-                this.renderer.domElement.parentElement.removeChild(this.renderer.domElement);
-            }
-        }
-
         if (this.scene) {
             this.scene.traverse((object) => {
                 if (object.geometry) object.geometry.dispose();
@@ -102,6 +95,13 @@ export class Tactical3DRenderer {
                     }
                 }
             });
+        }
+
+        if (this.renderer) {
+            this.renderer.dispose();
+            if (this.renderer.domElement && this.renderer.domElement.parentElement) {
+                this.renderer.domElement.parentElement.removeChild(this.renderer.domElement);
+            }
         }
 
         this.container = null;

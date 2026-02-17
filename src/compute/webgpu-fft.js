@@ -213,8 +213,8 @@ struct Params {
 @group(0) @binding(1) var<storage, read_write> outputData : array<f32>;
 @group(0) @binding(2) var<uniform> params : Params;
 
-var<workgroup> sharedReal : array<f32, 2048>;
-var<workgroup> sharedImag : array<f32, 2048>;
+var<workgroup> sharedReal : array<f32, 4096>;
+var<workgroup> sharedImag : array<f32, 4096>;
 
 fn bit_reverse(v: u32, bits: u32) -> u32 {
     return reverseBits(v) >> (32u - bits);
@@ -395,11 +395,11 @@ fn main(@builtin(local_invocation_id) lid : vec3<u32>) {
         const out = new Float32Array(spectrum.length);
         const LOG_SCALE_FACTOR = 100;
         const LOG_SCALE_NORMALIZER = Math.log1p(LOG_SCALE_FACTOR);
-        const REFERENCE_DECAY = 0.94;
-        const REFERENCE_FLOOR = 0.08;
+        const REFERENCE_DECAY = 0.92;
+        const REFERENCE_FLOOR = 0.04;
 
-        // Filter more low-frequency bins with a smoother ramp
-        const DC_SKIP = 16;
+        // Filter fewer low-frequency bins to preserve engine harmonics
+        const DC_SKIP = 4;
         let framePeak = 0;
 
         for (let i = 0; i < spectrum.length; i++) {

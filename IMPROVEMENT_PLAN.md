@@ -23,3 +23,16 @@ This document outlines the prioritized improvements for the Silent Abyss simulat
 - [x] **Directory Reorganization**: Move all source files to `src/` and tests to `tests/`.
 - [x] **Linter/Formatter**: Add ESLint and Prettier for code consistency.
 - [ ] **CI/CD Baseline**: (Optional) Add GitHub Actions for automated linting and testing.
+
+## Phase 5: Realism & Technical Modernization (Completed)
+- [x] **Acoustic Foundation**: Depth-dependent sound propagation and environment noise.
+- [x] **Wasm Audio Core**: High-performance Rust/Wasm DSP for engine synthesis.
+- [x] **WebGPU Compute**: GPU-accelerated FFT processing for LOFAR/Waterfall.
+- [x] **Classification Gameplay**: Data-driven target identification and harmonic matching.
+- [x] **UI & Systems Integration**: Command interface completion and platform health components.
+- [x] **Optimization**: Implemented acoustic physics normalization and WebGPU FFT stabilization.
+
+## Phase 6: Polish & Expansion (Planned)
+- [ ] **Multi-Contact Management**: Advanced track labeling and manual solution entry.
+- [ ] **Environmental Effects**: Surface ducting and convergence zones.
+- [ ] **Campaign System**: Integration of missions and persistence.

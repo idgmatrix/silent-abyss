@@ -1,5 +1,6 @@
 import { TrackState, SimulationTarget } from './simulation.js';
 import { EnvironmentModel } from './acoustics/environment-model.js';
+import { getSignature } from './data/ship-signatures.js';
 
 export class WorldModel {
     constructor(simEngine, spatialService, callbacks = {}) {
@@ -43,6 +44,7 @@ export class WorldModel {
             course: 0.2,
             speed: 0.8,
             type: 'SHIP',
+            classId: 'cargo-vessel',
             rpm: 120,
             bladeCount: 3,
             isPatrolling: false,
@@ -55,6 +57,7 @@ export class WorldModel {
             angle: Math.PI * 0.75,
             speed: 0.3,
             type: 'SUBMARINE',
+            classId: 'triumph-class',
             rpm: 80,
             bladeCount: 7,
             isPatrolling: true,
@@ -101,13 +104,15 @@ export class WorldModel {
         }));
 
         this.simEngine.addTarget(new SimulationTarget('target-07', {
-            // Inbound Torpedo
-            distance: 140,
-            angle: Math.PI * 1.1,
-            type: 'TORPEDO',
+            // Fishing Trawler
+            distance: 120,
+            angle: Math.PI * 1.6,
+            type: 'SHIP',
+            classId: 'fishery-trawler',
+            speed: 1.2,
+            rpm: 180,
             isPatrolling: true,
-            patrolRadius: 200,
-            targetCourse: Math.PI * 2.1, // Move towards center-ish
+            patrolRadius: 100,
             seed: this.simEngine.random()
         }));
     }
@@ -122,6 +127,7 @@ export class WorldModel {
         }
 
         this.processPassiveDetection();
+        this.processClassification(dt);
         if (this.isScanning) {
             this.processActiveScanning();
         }
@@ -174,6 +180,45 @@ export class WorldModel {
                 // If we were tracking but SNR dropped, move to LOST
                 if (this.elapsedTime - target.lastDetectedTime > this.lostTrackTimeout) {
                     target.state = TrackState.LOST;
+                }
+            }
+        });
+    }
+
+    processClassification(dt) {
+        this.simEngine.targets.forEach(target => {
+            if (target.state === TrackState.UNDETECTED || target.state === TrackState.LOST) {
+                target.classification.state = TrackState.UNDETECTED;
+                target.classification.progress = 0;
+                return;
+            }
+
+            // Classification requires a certain SNR to start identifying features
+            const classificationThreshold = this.detectionThreshold + 2.0;
+            const isSelected = target.id === this.selectedTargetId;
+
+            if (target.snr > classificationThreshold) {
+                // If tracked and SNR is good, advance classification
+                // If selected, it advances faster (focused analysis)
+                const rate = isSelected ? 0.06 : 0.015;
+                target.classification.progress = Math.min(1.0, target.classification.progress + rate * dt);
+
+                if (target.classification.progress > 0.2 && target.classification.progress < 0.6) {
+                    target.classification.state = TrackState.AMBIGUOUS;
+                } else if (target.classification.progress >= 0.6 && target.classification.progress < 0.95) {
+                    target.classification.state = TrackState.CLASSIFIED;
+                    target.classification.identifiedClass = target.classId;
+                } else if (target.classification.progress >= 0.95) {
+                    target.classification.state = TrackState.CONFIRMED;
+                    target.classification.confirmed = true;
+                }
+            } else {
+                // Decay progress if SNR is too low
+                target.classification.progress = Math.max(0, target.classification.progress - 0.01 * dt);
+
+                // If progress drops too low, revert state
+                if (target.classification.progress < 0.1) {
+                    target.classification.state = TrackState.UNDETECTED;
                 }
             }
         });

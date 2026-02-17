@@ -82,6 +82,9 @@ export class SonarVisuals {
         this.lofarSpectrum = null;
         this._lofarPending = null;
         this._lofarFrameCounter = 0;
+
+        this.lineHistory = [];
+        this.maxLineHistory = 15;
     }
 
     init() {
@@ -94,10 +97,10 @@ export class SonarVisuals {
         if (this.dCanvas) this.dCtx = this.dCanvas.getContext('2d');
 
         this.btrDisplay = new ScrollingDisplay('btr-canvas');
-        this.btrDisplay.setDecayRate(0.005); // Very slow decay for BTR
+        this.btrDisplay.setDecayRate(0.0015); // Slower decay to preserve deeper BTR history
 
         this.waterfallDisplay = new ScrollingDisplay('waterfall-canvas');
-        this.waterfallDisplay.setDecayRate(0.002); // Even slower for Waterfall to show long history
+        this.waterfallDisplay.setDecayRate(0.0008); // Slower decay to preserve broadband waterfall history
 
         this._btrClickHandler = (e) => this.handleBTRClick(e);
 
@@ -201,7 +204,7 @@ export class SonarVisuals {
             const x = (i / viewLength) * cvs.width;
             const sampleValue = source[i] ?? 0;
             const normalized = sourceIsFloat ? sampleValue : sampleValue / 255;
-            const h = normalized * cvs.height;
+            const h = normalized * (cvs.height * 0.5);
             if(i===0) ctx.moveTo(x, cvs.height - h);
             else ctx.lineTo(x, cvs.height - h);
         }
@@ -216,6 +219,47 @@ export class SonarVisuals {
                 ctx.fillText("RPM PEAK", x + 2, cvs.height - 10);
             }
         }
+
+        // Draw classification lines
+        this._processAndDrawLines(ctx, cvs, source, viewLength);
+    }
+
+    _processAndDrawLines(ctx, cvs, source, viewLength) {
+        const threshold = 0.2;
+        const currentPeaks = [];
+
+        for (let i = 4; i < viewLength - 1; i++) {
+            if (source[i] > threshold && source[i] > source[i-1] && source[i] > source[i+1]) {
+                currentPeaks.push(i);
+            }
+        }
+
+        this.lineHistory.push(currentPeaks);
+        if (this.lineHistory.length > this.maxLineHistory) this.lineHistory.shift();
+
+        // Calculate persistence (how many times a bin was a peak in history)
+        const persistence = new Float32Array(viewLength);
+        this.lineHistory.forEach(frame => {
+            frame.forEach(idx => {
+                if (idx < viewLength) persistence[idx] += 1.0 / this.maxLineHistory;
+            });
+        });
+
+        // Draw stable lines
+        ctx.save();
+        for (let i = 0; i < viewLength; i++) {
+            if (persistence[i] > 0.4) {
+                const x = (i / viewLength) * cvs.width;
+                const alpha = (persistence[i] - 0.4) * 1.5;
+                ctx.strokeStyle = `rgba(255, 255, 255, ${alpha})`;
+                ctx.setLineDash([2, 4]);
+                ctx.beginPath();
+                ctx.moveTo(x, 0);
+                ctx.lineTo(x, cvs.height);
+                ctx.stroke();
+            }
+        }
+        ctx.restore();
     }
 
     _updateLofarSpectrum(dataArray, timeDomainData, fftSize) {
@@ -267,6 +311,23 @@ export class SonarVisuals {
         ctx.font = '9px Arial';
         const label = selectedTarget ? `TARGET ANALYSIS: ${selectedTarget.type} (T${selectedTarget.id.split('-')[1]})` : `AUTO-ANALYSIS: ${currentRpm > 0 ? 'ENGINE ACTIVE' : 'IDLE'}`;
         ctx.fillText(label, 10, 15);
+
+        if (selectedTarget && selectedTarget.classification) {
+            const cls = selectedTarget.classification;
+            ctx.fillStyle = '#ffffff';
+            ctx.font = '10px monospace';
+            ctx.fillText(`STATUS: ${cls.state}`, 10, 30);
+
+            // Progress bar
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.2)';
+            ctx.fillRect(10, 35, 100, 4);
+            ctx.fillStyle = cls.confirmed ? '#00ff00' : '#ffffff';
+            ctx.fillRect(10, 35, cls.progress * 100, 4);
+
+            if (cls.identifiedClass) {
+                ctx.fillText(`CLASS: ${cls.identifiedClass.toUpperCase()}`, 10, 50);
+            }
+        }
     }
 
     setTheme(themeName) {
