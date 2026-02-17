@@ -1,12 +1,13 @@
 import { TrackState } from './simulation.js';
 
 export class Tactical2DRenderer {
-    constructor() {
+    constructor(getTerrainHeight) {
         this.container = null;
         this.canvas = null;
         this.ctx = null;
         this.scanRadius = 0;
         this.scanActive = false;
+        this.getTerrainHeight = typeof getTerrainHeight === 'function' ? getTerrainHeight : (() => 0);
     }
 
     init(container) {
@@ -124,6 +125,8 @@ export class Tactical2DRenderer {
             ctx.stroke();
         });
 
+        this.drawTerrainContours(ctx, w, h, scale, angleOffset, true);
+
         ctx.font = '10px monospace';
         if (Array.isArray(targets)) {
             targets.forEach((t) => {
@@ -143,6 +146,7 @@ export class Tactical2DRenderer {
                 }
 
                 this.drawTargetGlyph(ctx, t.type, dx, dy, true);
+                this.drawDepthCue(ctx, t, dx, dy);
 
                 ctx.fillStyle = '#ffffff';
                 ctx.globalAlpha = 1.0;
@@ -215,6 +219,8 @@ export class Tactical2DRenderer {
         ctx.lineTo(centerX, h);
         ctx.stroke();
 
+        this.drawTerrainContours(ctx, w, h, scale, 0, false);
+
         if (Array.isArray(targets)) {
             targets.forEach((t) => {
                 if (t.state !== TrackState.TRACKED) return;
@@ -231,6 +237,7 @@ export class Tactical2DRenderer {
                 }
 
                 this.drawTargetGlyph(ctx, t.type, dx, dy, false);
+                this.drawDepthCue(ctx, t, dx, dy);
 
                 ctx.fillStyle = '#ffffff';
                 ctx.font = '8px monospace';
@@ -325,6 +332,80 @@ export class Tactical2DRenderer {
         }
 
         ctx.fillRect(dx - 5, dy - 5, 10, 10);
+    }
+
+    drawDepthCue(ctx, target, dx, dy) {
+        if (!target) return;
+
+        const terrainY = this.getTerrainHeight(target.x, target.z);
+        const depth = Math.max(1, -terrainY - 2);
+        const normalized = Math.max(0, Math.min(1, depth / 200));
+        const hue = 190 + normalized * 40;
+        const lightness = 60 - normalized * 20;
+
+        ctx.save();
+        ctx.strokeStyle = `hsl(${hue}, 100%, ${lightness}%)`;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(dx + 8, dy - 8);
+        ctx.lineTo(dx + 8, dy + 8);
+        ctx.stroke();
+        ctx.restore();
+    }
+
+    drawTerrainContours(ctx, width, height, scale, angleOffset, radialMode) {
+        const centerX = width / 2;
+        const centerY = height / 2;
+        const worldSpan = Math.min(width, height) / scale;
+        const maxWorld = worldSpan / 2;
+        const contourLevels = [-18, -14, -10, -6, -2, 2, 6];
+
+        contourLevels.forEach((level, levelIndex) => {
+            const major = levelIndex % 2 === 0;
+            ctx.strokeStyle = major ? 'rgba(0, 120, 130, 0.38)' : 'rgba(0, 95, 105, 0.25)';
+            ctx.lineWidth = major ? 1 : 0.6;
+
+            for (let wx = -maxWorld; wx <= maxWorld; wx += 8) {
+                let drawing = false;
+                ctx.beginPath();
+
+                for (let wz = -maxWorld; wz <= maxWorld; wz += 6) {
+                    const h = this.getTerrainHeight(wx, wz);
+                    const nearContour = Math.abs(h - level) < 1.2;
+                    if (!nearContour) {
+                        drawing = false;
+                        continue;
+                    }
+
+                    const mapped = this.mapWorldToScreen(wx, wz, centerX, centerY, scale, angleOffset, radialMode);
+                    if (!mapped) continue;
+
+                    if (!drawing) {
+                        ctx.moveTo(mapped.x, mapped.y);
+                        drawing = true;
+                    } else {
+                        ctx.lineTo(mapped.x, mapped.y);
+                    }
+                }
+                if (drawing) ctx.stroke();
+            }
+        });
+    }
+
+    mapWorldToScreen(wx, wz, centerX, centerY, scale, angleOffset, radialMode) {
+        if (radialMode) {
+            const rotX = wx * Math.cos(angleOffset) - wz * Math.sin(angleOffset);
+            const rotZ = wx * Math.sin(angleOffset) + wz * Math.cos(angleOffset);
+            return {
+                x: centerX + rotX * scale,
+                y: centerY + rotZ * scale
+            };
+        }
+
+        return {
+            x: centerX + wx * scale,
+            y: centerY + wz * scale
+        };
     }
 
     getTypeColor(type) {

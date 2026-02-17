@@ -103,8 +103,14 @@
 
         <section class="col-span-6 flex flex-col gap-3 min-h-0">
             <div class="panel flex-[2] relative overflow-hidden">
-                <div id="tactical-viewport"></div>
-                <div id="contact-alert" class="absolute top-10 left-1/2 -translate-x-1/2 pointer-events-none hidden">
+                <div class="h-full flex">
+                    <div id="tactical-viewport" class="flex-1"></div>
+                    <div id="depth-profile-panel" class="w-16 border-l border-cyan-900 bg-black/40 p-1">
+                        <div class="text-[8px] text-cyan-600 text-center mb-1">WATER COLUMN</div>
+                        <canvas id="depth-profile-canvas"></canvas>
+                    </div>
+                </div>
+                <div id="contact-alert" class="absolute top-10 left-[44%] -translate-x-1/2 pointer-events-none hidden">
                     <div class="text-red-500 font-bold text-sm tracking-widest animate-pulse border border-red-500 px-4 py-1 bg-red-950/50 shadow-[0_0_20px_rgba(255,0,0,0.4)]">CONTACT ACQUIRED</div>
                 </div>
             </div>

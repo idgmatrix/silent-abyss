@@ -37,4 +37,24 @@ describe('EnvironmentModel', () => {
 
         expect(deepNoise).toBeLessThan(surfaceNoise); // Slightly quieter deep down
     });
+
+    it('should detect when depths are inside the surface duct', () => {
+        expect(env.isInSurfaceDuct(10)).toBe(true);
+        expect(env.isInSurfaceDuct(40)).toBe(true);
+        expect(env.isInSurfaceDuct(120)).toBe(false);
+    });
+
+    it('should provide positive acoustic modifiers in duct and convergence conditions', () => {
+        const boosted = env.getAcousticModifiers(20, 30, 900);
+        expect(boosted.snrModifierDb).toBeGreaterThan(0);
+        expect(boosted.echoGain).toBeGreaterThan(1);
+        expect(boosted.notes.length).toBeGreaterThan(0);
+    });
+
+    it('should expose sampled water-column data', () => {
+        const samples = env.sampleWaterColumn(50, 200);
+        expect(samples.length).toBeGreaterThan(3);
+        expect(samples[0].depth).toBe(0);
+        expect(samples[samples.length - 1].depth).toBe(200);
+    });
 });

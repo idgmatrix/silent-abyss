@@ -60,10 +60,10 @@ Acceptance criteria:
 - Lost/reacquired tracks follow deterministic lifecycle rules.
 
 ### 6.3 Environmental Effects
-- [ ] Extend `EnvironmentModel` with surface duct and convergence zone modifiers.
-- [ ] Apply new modifiers to passive detection and active ping return consistently.
-- [ ] Add operator-facing indicators for current acoustic conditions and expected detection impact.
-- [ ] Add deterministic tests for each environmental effect and combined edge cases.
+- [x] Extend `EnvironmentModel` with surface duct and convergence zone modifiers.
+- [x] Apply new modifiers to passive detection and active ping return consistently.
+- [x] Add operator-facing indicators for current acoustic conditions and expected detection impact.
+- [x] Add deterministic tests for each environmental effect and combined edge cases.
 
 Acceptance criteria:
 - Detection outcomes change predictably by depth/range/environment profile.

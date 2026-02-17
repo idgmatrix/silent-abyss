@@ -12,7 +12,7 @@ export class TacticalView {
         this.pulse = 0;
 
         this.renderer3D = new Tactical3DRenderer((x, z) => this.getTerrainHeight(x, z));
-        this.renderer2D = new Tactical2DRenderer();
+        this.renderer2D = new Tactical2DRenderer((x, z) => this.getTerrainHeight(x, z));
 
         this._lastTargets = [];
         this._resizeHandler = null;

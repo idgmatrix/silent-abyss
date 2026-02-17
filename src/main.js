@@ -5,6 +5,7 @@ import { SonarVisuals } from './sonar-visuals.js';
 import { WorldModel } from './world-model.js';
 import { WebGPUFFTProcessor } from './compute/webgpu-fft.js';
 import { ContactManager } from './contact-manager.js';
+import { DepthProfileDisplay } from './depth-profile-display.js';
 
 // State
 let currentRpmValue = 60;
@@ -39,6 +40,7 @@ const worldModel = new WorldModel(simEngine, tacticalView, {
         }
     }
 });
+const depthProfileDisplay = new DepthProfileDisplay(worldModel.environment);
 const webgpuFft = new WebGPUFFTProcessor({ fftSize: 1024, smoothing: 0.82 });
 
 // UI Elements
@@ -231,6 +233,8 @@ function bindContactUiHandlers() {
 async function initSystems() {
     cacheDomElements();
     bindContactUiHandlers();
+    depthProfileDisplay.environment = worldModel.environment;
+    depthProfileDisplay.init('depth-profile-canvas');
     await webgpuFft.init();
     await audioSys.init();
     audioSys.setComputeProcessor(webgpuFft);
@@ -288,6 +292,7 @@ async function initSystems() {
     setTimeout(() => {
         sonarVisuals.resize();
         tacticalView.resize();
+        depthProfileDisplay.resize();
     }, 50);
 
     // Theme selector
@@ -402,9 +407,16 @@ function renderLoop(now) {
     const ctx = audioSys.getContext();
 
     const selectedTarget = worldModel.getSelectedTarget();
+    const acousticContext = worldModel.getAcousticContextForTarget(selectedTarget);
     if (selectedTarget) {
         updateDashboard(selectedTarget);
     }
+
+    depthProfileDisplay.render({
+        ownDepth: worldModel.getOwnShipDepth(),
+        targetDepth: acousticContext?.targetDepth,
+        modifiers: acousticContext?.modifiers
+    });
 
     if (ctx && data) {
         const activeRpm = selectedTarget ? selectedTarget.rpm : currentRpmValue;

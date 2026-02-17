@@ -70,16 +70,18 @@ export class WorldModel {
         this.simEngine.targets.forEach(target => {
             const targetDepth = this.getTargetDepth(target);
             const ambientNoise = this.environment.getAmbientNoise(targetDepth);
+            const rangeMeters = Math.max(1.0, target.distance * 10);
+            const modifiers = this.environment.getAcousticModifiers(ownShipDepth, targetDepth, rangeMeters);
 
             // Normalized Source Level (SL) from target
             const sl = target.getAcousticSignature();
 
             // Transmission Loss (TL) = 20 * log10(Range) - Spherical Spreading
-            const rangeMeters = Math.max(1.0, target.distance * 10);
             const transmissionLoss = 20 * Math.log10(rangeMeters);
 
             // Passive Sonar Equation: SNR = SL - TL - NL
             let snr = sl - transmissionLoss - ambientNoise;
+            snr += modifiers.snrModifierDb;
 
             // Layer crossing attenuation (Thermocline shadow zone)
             if (this.environment.isThermoclineBetween(ownShipDepth, targetDepth)) {
@@ -97,6 +99,7 @@ export class WorldModel {
             }
 
             target.snr = snr; // Store current SNR for UI
+            target.environmentEffects = modifiers;
 
             const isDetected = snr > this.detectionThreshold;
 
@@ -173,6 +176,7 @@ export class WorldModel {
     processActiveScanning() {
         this.scanRadius += 15.0;
         this.callbacks.onScanUpdate(this.scanRadius, true);
+        const ownShipDepth = this.getOwnShipDepth();
 
         this.simEngine.targets.forEach(target => {
             if (this.scanRadius >= target.distance && target.lastPulseId !== this.currentPulseId) {
@@ -186,7 +190,10 @@ export class WorldModel {
                 target.lastDetectedTime = this.elapsedTime;
                 target.reactToPing();
 
-                const echoVol = 0.6 * (1.0 - target.distance / 200);
+                const targetDepth = this.getTargetDepth(target);
+                const rangeMeters = Math.max(1.0, target.distance * 10);
+                const modifiers = this.environment.getAcousticModifiers(ownShipDepth, targetDepth, rangeMeters);
+                const echoVol = (0.6 * (1.0 - target.distance / 200)) * modifiers.echoGain;
                 this.callbacks.onPingEcho(echoVol, target.distance);
                 this.callbacks.onSonarContact(target, false);
             }
@@ -239,5 +246,20 @@ export class WorldModel {
 
     getSelectedTarget() {
         return this.simEngine.targets.find(t => t.id === this.selectedTargetId);
+    }
+
+    getAcousticContextForTarget(target) {
+        if (!target) return null;
+        const ownShipDepth = this.getOwnShipDepth();
+        const targetDepth = this.getTargetDepth(target);
+        const rangeMeters = Math.max(1.0, target.distance * 10);
+        const modifiers = this.environment.getAcousticModifiers(ownShipDepth, targetDepth, rangeMeters);
+
+        return {
+            ownShipDepth,
+            targetDepth,
+            rangeMeters,
+            modifiers
+        };
     }
 }

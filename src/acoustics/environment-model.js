@@ -11,13 +11,21 @@ export class EnvironmentModel {
                 surfaceTemp: 20, // Celsius
                 thermoclineDepth: 200, // Meters
                 isothermalDepth: 1000,
-                bottomDepth: 4000
+                bottomDepth: 4000,
+                surfaceDuctDepth: 60,
+                convergenceZoneStart: 900,
+                convergenceZoneInterval: 800,
+                convergenceZoneWidth: 120
             },
             COASTAL: {
                 surfaceTemp: 15,
                 thermoclineDepth: 50,
                 isothermalDepth: 150,
-                bottomDepth: 300
+                bottomDepth: 300,
+                surfaceDuctDepth: 35,
+                convergenceZoneStart: 450,
+                convergenceZoneInterval: 450,
+                convergenceZoneWidth: 80
             }
         };
 
@@ -108,5 +116,84 @@ export class EnvironmentModel {
      */
     getRefractionGradient() {
         return 0.5; // Placeholder for ray-bending intensity
+    }
+
+    isInSurfaceDuct(depth) {
+        const d = Math.max(0, Number(depth) || 0);
+        return d <= this.currentProfile.surfaceDuctDepth;
+    }
+
+    getConvergenceZoneBand(rangeMeters) {
+        const range = Math.max(0, Number(rangeMeters) || 0);
+        const start = this.currentProfile.convergenceZoneStart;
+        const interval = this.currentProfile.convergenceZoneInterval;
+        const width = this.currentProfile.convergenceZoneWidth;
+
+        if (range < start) {
+            return { inBand: false, bandIndex: -1, offset: range - start };
+        }
+
+        const relative = range - start;
+        const bandIndex = Math.max(0, Math.round(relative / interval));
+        const center = start + bandIndex * interval;
+        const offset = range - center;
+        const inBand = Math.abs(offset) <= width;
+
+        return { inBand, bandIndex, offset };
+    }
+
+    getAcousticModifiers(ownDepth, targetDepth, rangeMeters) {
+        const own = Math.max(0, Number(ownDepth) || 0);
+        const target = Math.max(0, Number(targetDepth) || 0);
+        const range = Math.max(1, Number(rangeMeters) || 1);
+
+        let snrModifierDb = 0;
+        let echoGain = 1;
+        let notes = [];
+
+        const ownInDuct = this.isInSurfaceDuct(own);
+        const targetInDuct = this.isInSurfaceDuct(target);
+        const ductActive = ownInDuct && targetInDuct && range >= 200 && range <= 2200;
+
+        if (ductActive) {
+            // Surface duct channels acoustic energy near the surface.
+            snrModifierDb += 4.5;
+            echoGain *= 1.16;
+            notes.push('surface-duct');
+        }
+
+        const convergence = this.getConvergenceZoneBand(range);
+        const deepEnough = own >= this.currentProfile.surfaceDuctDepth || target >= this.currentProfile.surfaceDuctDepth;
+        if (deepEnough && convergence.inBand) {
+            // Convergence zone can improve long-range detectability in repeating bands.
+            snrModifierDb += 3.0;
+            echoGain *= 1.1;
+            notes.push(`cz-${convergence.bandIndex + 1}`);
+        }
+
+        return {
+            snrModifierDb,
+            echoGain,
+            notes,
+            ductActive,
+            convergenceBand: convergence.inBand ? convergence.bandIndex + 1 : null
+        };
+    }
+
+    sampleWaterColumn(depthStep = 25, maxDepth = null) {
+        const step = Math.max(5, depthStep);
+        const limit = Math.max(step, maxDepth ?? this.currentProfile.bottomDepth);
+        const samples = [];
+
+        for (let depth = 0; depth <= limit; depth += step) {
+            samples.push({
+                depth,
+                temperature: this.getTemperature(depth),
+                soundSpeed: this.getSoundSpeed(depth),
+                inSurfaceDuct: this.isInSurfaceDuct(depth)
+            });
+        }
+
+        return samples;
     }
 }
