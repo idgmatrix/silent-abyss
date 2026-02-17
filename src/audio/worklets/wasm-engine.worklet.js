@@ -38,7 +38,6 @@ try {
 
 // --- BEGIN INLINED dsp_core.js ---
 let wasm;
-let wasmModule;
 let cachedUint8ArrayMemory0 = null;
 let cachedTextDecoder = null;
 
@@ -147,9 +146,8 @@ function decodeText(ptr, len) {
     return cachedTextDecoder.decode(getUint8ArrayMemory0().subarray(ptr, ptr + len));
 }
 
-function __wbg_finalize_init(instance, module) {
+function __wbg_finalize_init(instance) {
     wasm = instance.exports;
-    wasmModule = module;
     cachedUint8ArrayMemory0 = null;
     wasm.__wbindgen_start();
     return wasm;
@@ -159,7 +157,7 @@ function initSync(module) {
     if (wasm !== undefined) return wasm;
     const imports = __wbg_get_imports();
     const instance = new WebAssembly.Instance(module, imports);
-    return __wbg_finalize_init(instance, module);
+    return __wbg_finalize_init(instance);
 }
 // --- END INLINED dsp_core.js ---
 

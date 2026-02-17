@@ -82,10 +82,10 @@ Acceptance criteria:
 - Scenario/mission data can be extended without engine code changes.
 
 ### 6.5 Hardening & Delivery
-- [ ] Resolve current lint failures and restore clean ESLint baseline.
-- [ ] Add CI pipeline (`lint`, `test`, and build smoke check).
-- [ ] Add scenario snapshot tests and one campaign smoke test.
-- [ ] Update docs for developers (scenario/mission authoring) and players (contact-management workflow).
+- [x] Resolve current lint failures and restore clean ESLint baseline.
+- [x] Add CI pipeline (`lint`, `test`, and build smoke check).
+- [x] Add scenario snapshot tests and one campaign smoke test.
+- [x] Update docs for developers (scenario/mission authoring) and players (contact-management workflow).
 
 Acceptance criteria:
 - CI is green on `main`.
@@ -94,7 +94,7 @@ Acceptance criteria:
 
 ## Current Snapshot (2026-02-17)
 
-- `npm test`: passing (3 test files, 15 tests)
-- `npm run lint`: failing (2 errors, both unused symbols)
-- No `.github/workflows` pipeline currently exists
+- `npm test`: passing (8 test files, 31 tests)
+- `npm run lint`: passing
+- CI workflow present at `.github/workflows/ci.yml` (`lint`, `test`, `build`)
 - Repository contains generated Rust `target/` artifacts under `src/audio/dsp-core/` and should keep them ignored from source control

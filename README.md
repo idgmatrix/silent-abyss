@@ -47,11 +47,10 @@ App URL: `http://localhost:5173`
 
 ## Repository Health (Reviewed 2026-02-17)
 
-- Tests: passing (`15/15`)
-- Lint: failing due to 2 unused symbols:
-  - `src/world-model.js` (`getSignature`)
-  - `src/audio/worklets/wasm-engine.worklet.js` (`wasmModule`)
-- CI: no GitHub Actions workflow is present yet
+- Tests: passing (`31/31`)
+- Lint: passing
+- Build: passing (`npm run build`)
+- CI: GitHub Actions workflow present at `.github/workflows/ci.yml`
 
 ## Project Layout
 
@@ -63,8 +62,12 @@ App URL: `http://localhost:5173`
 - `src/tactical-renderer-2d.js`: 2D tactical renderer
 - `src/sonar-visuals.js`: LOFAR/DEMON/BTR/Waterfall drawing
 - `src/audio/`: AudioWorklet manager and Rust/Wasm DSP assets
+- `src/campaign-manager.js`: mission progression and campaign persistence
+- `src/data/missions.js`: campaign mission definitions
 - `tests/`: Vitest coverage for simulation, environment, classification
 - `documents/The_Silent_Abyss_GDD.md`: game design document (Korean)
+- `documents/SCENARIO_MISSION_AUTHORING.md`: developer guide for scenario/mission data
+- `documents/PLAYER_CONTACT_WORKFLOW.md`: player/operator workflow guide
 
 ## License
 
