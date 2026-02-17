@@ -169,14 +169,15 @@ export class WebGPUFFTProcessor {
         const pass = encoder.beginComputePass({ label: 'lofar-fft-pass' });
         pass.setPipeline(this.pipeline);
         pass.setBindGroup(0, this.bindGroup);
-        pass.dispatchWorkgroups(Math.ceil(bins / 64));
+        // Single workgroup for shared-memory FFT (supports up to 1024 points)
+        pass.dispatchWorkgroups(1);
         pass.end();
 
         encoder.copyBufferToBuffer(this.outputBuffer, 0, this.readbackBuffer, 0, bins * 4);
 
         this.device.queue.submit([encoder.finish()]);
-        await this.device.queue.onSubmittedWorkDone();
 
+        // mapAsync handles synchronization with the GPU queue internally
         await this.readbackBuffer.mapAsync(GPU_MAP_MODE.READ);
         const copied = new Float32Array(this.readbackBuffer.getMappedRange()).slice();
         this.readbackBuffer.unmap();
@@ -186,6 +187,14 @@ export class WebGPUFFTProcessor {
 
     _ensureGpuResources(fftSize) {
         if (this._bufferLength === fftSize && this.pipeline && this.bindGroup) return;
+
+        // Cleanup existing resources if size changed
+        if (this._bufferLength !== fftSize) {
+            this.inputBuffer?.destroy();
+            this.outputBuffer?.destroy();
+            this.readbackBuffer?.destroy();
+            this.paramsBuffer?.destroy();
+        }
 
         const bins = fftSize >> 1;
         this._bufferLength = fftSize;
@@ -204,38 +213,70 @@ struct Params {
 @group(0) @binding(1) var<storage, read_write> outputData : array<f32>;
 @group(0) @binding(2) var<uniform> params : Params;
 
-@compute @workgroup_size(64)
-fn main(@builtin(global_invocation_id) gid : vec3<u32>) {
-    let idx = gid.x;
-    let n = u32(params.length);
-    let bins = n / 2u;
+var<workgroup> sharedReal : array<f32, 2048>;
+var<workgroup> sharedImag : array<f32, 2048>;
 
-    if (idx >= bins) {
+fn bit_reverse(v: u32, bits: u32) -> u32 {
+    return reverseBits(v) >> (32u - bits);
+}
+
+@compute @workgroup_size(256)
+fn main(@builtin(local_invocation_id) lid : vec3<u32>) {
+    let n = u32(params.length);
+    let logN = u32(log2(params.length));
+
+    // Mode 1: Pass-through magnitude (subsampling frequency data)
+    if (u32(params.mode) == 1u) {
+        // Simple parallel copy for bypass mode
+        for (var i = lid.x; i < n / 2u; i += 256u) {
+            outputData[i] = max(inputData[i * 2u], 0.0);
+        }
         return;
     }
 
-    var value = 0.0;
-
-    if (u32(params.mode) == 0u) {
-        var real = 0.0;
-        var imag = 0.0;
-        let k = f32(idx);
-        let len = f32(n);
-
-        for (var sampleIndex = 0u; sampleIndex < n; sampleIndex = sampleIndex + 1u) {
-            let phase = -2.0 * 3.14159265359 * k * f32(sampleIndex) / len;
-            let sample = inputData[sampleIndex];
-            real = real + sample * cos(phase);
-            imag = imag + sample * sin(phase);
-        }
-
-        value = sqrt(real * real + imag * imag) / len;
-    } else {
-        let sourceIndex = min(idx * 2u, n - 1u);
-        value = max(inputData[sourceIndex], 0.0);
+    // 1. Bit-reversed loading from Global to Shared Memory
+    // Handle multiple elements per thread to support up to 2048 with 256 threads
+    for (var i = lid.x; i < n; i += 256u) {
+        sharedReal[i] = inputData[bit_reverse(i, logN)];
+        sharedImag[i] = 0.0;
     }
 
-    outputData[idx] = value;
+    workgroupBarrier();
+
+    // 2. Cooley-Tukey Iterative FFT
+    for (var s = 1u; s <= logN; s = s + 1u) {
+        let m = 1u << s;
+        let m2 = m >> 1u;
+
+        // Process butterflies in parallel
+        // Each thread handles (n/2)/256 butterflies
+        for (var butterflyIdx = lid.x; butterflyIdx < n / 2u; butterflyIdx += 256u) {
+            let section = butterflyIdx / m2;
+            let k = butterflyIdx % m2;
+            let i = section * m + k;
+            let j = i + m2;
+
+            let angle = -2.0 * 3.14159265359 * f32(k) / f32(m);
+            let wr = cos(angle);
+            let wi = sin(angle);
+
+            let tr = wr * sharedReal[j] - wi * sharedImag[j];
+            let ti = wr * sharedImag[j] + wi * sharedReal[j];
+
+            sharedReal[j] = sharedReal[i] - tr;
+            sharedImag[j] = sharedImag[i] - ti;
+            sharedReal[i] = sharedReal[i] + tr;
+            sharedImag[i] = sharedImag[i] + ti;
+        }
+
+        workgroupBarrier();
+    }
+
+    // 3. Output Magnitude
+    for (var i = lid.x; i < n / 2u; i += 256u) {
+        let mag = sqrt(sharedReal[i] * sharedReal[i] + sharedImag[i] * sharedImag[i]) / f32(n);
+        outputData[i] = mag;
+    }
 }
 `
         });

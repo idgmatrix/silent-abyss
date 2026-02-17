@@ -2,11 +2,17 @@ import { TrackState, SimulationTarget } from './simulation.js';
 import { EnvironmentModel } from './acoustics/environment-model.js';
 
 export class WorldModel {
-    constructor(simEngine, audioSys, tacticalView, sonarVisuals) {
+    constructor(simEngine, spatialService, callbacks = {}) {
         this.simEngine = simEngine;
-        this.audioSys = audioSys;
-        this.tacticalView = tacticalView;
-        this.sonarVisuals = sonarVisuals;
+        this.spatialService = spatialService; // Must provide getTerrainHeight(x, z)
+
+        this.callbacks = {
+            onTargetUpdate: callbacks.onTargetUpdate || (() => {}),
+            onScanUpdate: callbacks.onScanUpdate || (() => {}),
+            onScanComplete: callbacks.onScanComplete || (() => {}),
+            onPingEcho: callbacks.onPingEcho || (() => {}),
+            onSonarContact: callbacks.onSonarContact || (() => {})
+        };
 
         this.environment = new EnvironmentModel();
 
@@ -19,12 +25,12 @@ export class WorldModel {
         this.elapsedTime = 0; // Simulation time in seconds
 
         // Configuration
-        this.detectionThreshold = 1.5;
+        this.detectionThreshold = 8.0; // dB
         this.lostTrackTimeout = 5.0; // 5 seconds
         this.losSampleCount = 10;
-        this.passiveOcclusionAttenuation = 0.15;
-        this.shadowZoneAttenuation = 0.4; // More aggressive attenuation for layer crossing
-        this.multiPathStrength = 0.2;
+        this.passiveOcclusionAttenuation = 25.0; // dB loss
+        this.shadowZoneAttenuation = 15.0; // dB loss (Thermocline shadow)
+        this.multiPathStrength = 3.0; // dB variation
         this.multiPathFrequency = 0.5;
     }
 
@@ -120,13 +126,8 @@ export class WorldModel {
             this.processActiveScanning();
         }
 
-        // Update Audio Volume/Focus
-        this.simEngine.targets.forEach(t => {
-            this.audioSys.updateTargetVolume(t.id, t.distance);
-        });
-        this.audioSys.updateOwnShipFocusGain();
-
-        this.tacticalView.updateTargetOpacities();
+        // Notify that targets have been updated (for audio volume, etc.)
+        this.callbacks.onTargetUpdate(this.simEngine.targets);
     }
 
     processPassiveDetection() {
@@ -136,25 +137,31 @@ export class WorldModel {
             const targetDepth = this.getTargetDepth(target);
             const ambientNoise = this.environment.getAmbientNoise(targetDepth);
 
-            // Normalized signature with distance-based transmission loss
-            const sig = target.getAcousticSignature();
-            const transmissionLoss = Math.pow(target.distance / 10, 1.5);
+            // Normalized Source Level (SL) from target
+            const sl = target.getAcousticSignature();
 
-            // SNR calculation incorporating environmental background noise
-            let snr = sig / (transmissionLoss * (ambientNoise / 60) + 1);
+            // Transmission Loss (TL) = 20 * log10(Range) - Spherical Spreading
+            const rangeMeters = Math.max(1.0, target.distance * 10);
+            const transmissionLoss = 20 * Math.log10(rangeMeters);
+
+            // Passive Sonar Equation: SNR = SL - TL - NL
+            let snr = sl - transmissionLoss - ambientNoise;
 
             // Layer crossing attenuation (Thermocline shadow zone)
             if (this.environment.isThermoclineBetween(ownShipDepth, targetDepth)) {
-                snr *= this.shadowZoneAttenuation;
+                snr -= this.shadowZoneAttenuation;
             }
 
-            const multiPathFactor = 1 + Math.sin(target.distance * this.multiPathFrequency) * this.multiPathStrength;
-            snr *= multiPathFactor;
+            // Multipath interference
+            const multiPathEffect = Math.sin(target.distance * this.multiPathFrequency) * this.multiPathStrength;
+            snr += multiPathEffect;
 
+            // Terrain Occlusion
             const hasLineOfSight = this.checkLineOfSight(target);
             if (!hasLineOfSight) {
-                snr *= this.passiveOcclusionAttenuation;
+                snr -= this.passiveOcclusionAttenuation;
             }
+
             target.snr = snr; // Store current SNR for UI
 
             const isDetected = snr > this.detectionThreshold;
@@ -162,7 +169,7 @@ export class WorldModel {
             if (isDetected) {
                 target.state = TrackState.TRACKED;
                 target.lastDetectedTime = this.elapsedTime;
-                this.tacticalView.updateTargetPosition(target.id, target.x, target.z, true, target.speed);
+                this.callbacks.onSonarContact(target, true);
             } else if (target.state === TrackState.TRACKED) {
                 // If we were tracking but SNR dropped, move to LOST
                 if (this.elapsedTime - target.lastDetectedTime > this.lostTrackTimeout) {
@@ -173,30 +180,28 @@ export class WorldModel {
     }
 
     getOwnShipDepth() {
-        if (!this.tacticalView || typeof this.tacticalView.getTerrainHeight !== 'function') {
-            return 5.0; // Default shallow depth
+        if (!this.spatialService || typeof this.spatialService.getTerrainHeight !== 'function') {
+            return 5.0;
         }
 
-        const height = this.tacticalView.getTerrainHeight(0, 0);
-        // Assuming surface is at 0, depth is distance below surface
-        return Math.max(1.0, -height - 5.0); // 5m above seabed
+        const height = this.spatialService.getTerrainHeight(0, 0);
+        return Math.max(1.0, -height - 5.0);
     }
 
     getTargetDepth(target) {
-        if (!this.tacticalView || typeof this.tacticalView.getTerrainHeight !== 'function') {
+        if (!this.spatialService || typeof this.spatialService.getTerrainHeight !== 'function') {
             return 10.0;
         }
 
-        const height = this.tacticalView.getTerrainHeight(target.x, target.z);
-        return Math.max(1.0, -height - 2.0); // 2m above seabed
+        const height = this.spatialService.getTerrainHeight(target.x, target.z);
+        return Math.max(1.0, -height - 2.0);
     }
 
     processActiveScanning() {
         this.scanRadius += 15.0;
-        this.tacticalView.setScanExUniforms(this.scanRadius, true);
+        this.callbacks.onScanUpdate(this.scanRadius, true);
 
         this.simEngine.targets.forEach(target => {
-            // If scanning past target and it's not already tracked by active scan this pulse
             if (this.scanRadius >= target.distance && target.lastPulseId !== this.currentPulseId) {
                 target.lastPulseId = this.currentPulseId;
                 const hasLineOfSight = this.checkLineOfSight(target);
@@ -209,24 +214,21 @@ export class WorldModel {
                 target.reactToPing();
 
                 const echoVol = 0.6 * (1.0 - target.distance / 200);
-                this.audioSys.createPingEcho(echoVol, target.distance);
-                this.tacticalView.updateTargetPosition(target.id, target.x, target.z, false, target.speed);
-
-                // Trigger UI Event
-                window.dispatchEvent(new CustomEvent('sonar-contact', { detail: { id: target.id } }));
+                this.callbacks.onPingEcho(echoVol, target.distance);
+                this.callbacks.onSonarContact(target, false);
             }
         });
 
         if (this.scanRadius > 150) {
             this.isScanning = false;
             this.pingActiveIntensity = 0;
-            this.tacticalView.setScanExUniforms(this.scanRadius, false);
-            window.dispatchEvent(new CustomEvent('sonar-scan-complete'));
+            this.callbacks.onScanUpdate(this.scanRadius, false);
+            this.callbacks.onScanComplete();
         }
     }
 
     checkLineOfSight(target) {
-        if (!this.tacticalView || typeof this.tacticalView.getTerrainHeight !== 'function') {
+        if (!this.spatialService || typeof this.spatialService.getTerrainHeight !== 'function') {
             return true;
         }
 
@@ -235,15 +237,15 @@ export class WorldModel {
         const endX = target.x;
         const endZ = target.z;
 
-        const ownShipY = this.tacticalView.getTerrainHeight(startX, startZ) + 5.0;
-        const targetY = this.tacticalView.getTerrainHeight(endX, endZ) + 2.0;
+        const ownShipY = this.spatialService.getTerrainHeight(startX, startZ) + 5.0;
+        const targetY = this.spatialService.getTerrainHeight(endX, endZ) + 2.0;
 
         for (let i = 1; i < this.losSampleCount; i++) {
             const t = i / this.losSampleCount;
             const sx = startX + (endX - startX) * t;
             const sz = startZ + (endZ - startZ) * t;
             const losY = ownShipY + (targetY - ownShipY) * t;
-            const terrainY = this.tacticalView.getTerrainHeight(sx, sz);
+            const terrainY = this.spatialService.getTerrainHeight(sx, sz);
 
             if (terrainY > losY) {
                 return false;
@@ -254,13 +256,12 @@ export class WorldModel {
     }
 
     triggerPing() {
-        if (this.isScanning || !this.audioSys.getContext()) return;
+        if (this.isScanning) return;
         this.isScanning = true;
         this.scanRadius = 0;
         this.currentPulseId++;
         this.pingActiveIntensity = 1.0;
-        this.tacticalView.setScanExUniforms(0, true);
-        this.audioSys.createPingTap(0.5, 1200, 900);
+        this.callbacks.onScanUpdate(0, true);
     }
 
     getSelectedTarget() {

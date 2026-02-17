@@ -15,7 +15,28 @@ const audioSys = new AudioSystem();
 const tacticalView = new TacticalView();
 const sonarVisuals = new SonarVisuals();
 const simEngine = new SimulationEngine();
-const worldModel = new WorldModel(simEngine, audioSys, tacticalView, sonarVisuals);
+const worldModel = new WorldModel(simEngine, tacticalView, {
+    onTargetUpdate: (targets) => {
+        targets.forEach(t => audioSys.updateTargetVolume(t.id, t.distance));
+        audioSys.updateOwnShipFocusGain();
+        tacticalView.updateTargetOpacities();
+    },
+    onScanUpdate: (radius, active) => {
+        tacticalView.setScanExUniforms(radius, active);
+    },
+    onScanComplete: () => {
+        window.dispatchEvent(new CustomEvent('sonar-scan-complete'));
+    },
+    onPingEcho: (volume, distance) => {
+        audioSys.createPingEcho(volume, distance);
+    },
+    onSonarContact: (target, isPassive) => {
+        tacticalView.updateTargetPosition(target.id, target.x, target.z, isPassive, target.speed);
+        if (!isPassive) {
+            window.dispatchEvent(new CustomEvent('sonar-contact', { detail: { id: target.id } }));
+        }
+    }
+});
 const webgpuFft = new WebGPUFFTProcessor({ fftSize: 1024, smoothing: 0.82 });
 
 // UI Elements
@@ -163,7 +184,10 @@ function updateDashboard(target) {
 }
 
 function triggerPing() {
+    if (worldModel.isScanning || !audioSys.getContext()) return;
+
     worldModel.triggerPing();
+    audioSys.createPingTap(0.5, 1200, 900);
 
     if (statusDisplay) {
         statusDisplay.innerText = "ACTIVE PINGING";
