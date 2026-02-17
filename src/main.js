@@ -6,6 +6,8 @@ import { WorldModel } from './world-model.js';
 import { WebGPUFFTProcessor } from './compute/webgpu-fft.js';
 import { ContactManager } from './contact-manager.js';
 import { DepthProfileDisplay } from './depth-profile-display.js';
+import { CampaignManager } from './campaign-manager.js';
+import { CAMPAIGN_MISSIONS } from './data/missions.js';
 
 // State
 let currentRpmValue = 60;
@@ -18,6 +20,7 @@ const tacticalView = new TacticalView();
 const sonarVisuals = new SonarVisuals();
 const simEngine = new SimulationEngine();
 const contactManager = new ContactManager({ lostTimeout: 10 });
+const campaignManager = new CampaignManager(CAMPAIGN_MISSIONS);
 const worldModel = new WorldModel(simEngine, tacticalView, {
     onTargetUpdate: (targets) => {
         targets.forEach(t => audioSys.updateTargetVolume(t.id, t.distance));
@@ -48,6 +51,7 @@ let rpmDisplay, statusDisplay, rangeEl, velEl, brgEl, sigEl, classEl, targetIdEl
 let contactListEl, contactFilterEl, contactSortEl, contactPinBtn, contactRelabelInput, contactRelabelBtn;
 let contactClearLostBtn, solutionBearingInput, solutionRangeInput, solutionCourseInput, solutionSpeedInput;
 let solutionSaveBtn, solutionConfidenceEl;
+let missionSelectEl, missionResetBtn, missionTitleEl, missionStatusEl, missionBriefingEl, missionObjectivesEl;
 
 function cacheDomElements() {
     rpmDisplay = document.getElementById('rpm-display');
@@ -73,6 +77,12 @@ function cacheDomElements() {
     solutionSpeedInput = document.getElementById('solution-speed');
     solutionSaveBtn = document.getElementById('solution-save-btn');
     solutionConfidenceEl = document.getElementById('solution-confidence');
+    missionSelectEl = document.getElementById('mission-select');
+    missionResetBtn = document.getElementById('mission-reset-btn');
+    missionTitleEl = document.getElementById('mission-title');
+    missionStatusEl = document.getElementById('mission-status');
+    missionBriefingEl = document.getElementById('mission-briefing');
+    missionObjectivesEl = document.getElementById('mission-objectives');
 }
 
 function getTargetById(targetId) {
@@ -230,9 +240,64 @@ function bindContactUiHandlers() {
     }
 }
 
+function renderCampaignPanel() {
+    if (!missionSelectEl) return;
+    const unlocked = campaignManager.getUnlockedMissions();
+    const active = campaignManager.getActiveMission();
+
+    missionSelectEl.innerHTML = unlocked
+        .map((mission) => `<option value="${mission.id}">${mission.name}</option>`)
+        .join('');
+    if (active) {
+        missionSelectEl.value = active.id;
+    }
+
+    if (!active) {
+        if (missionTitleEl) missionTitleEl.innerText = '--';
+        if (missionStatusEl) missionStatusEl.innerText = 'NO MISSION';
+        if (missionBriefingEl) missionBriefingEl.innerText = '--';
+        if (missionObjectivesEl) missionObjectivesEl.innerHTML = '';
+        return;
+    }
+
+    const complete = campaignManager.isMissionCompleted(active.id);
+    if (missionTitleEl) missionTitleEl.innerText = active.name;
+    if (missionStatusEl) missionStatusEl.innerText = complete ? 'STATUS: COMPLETED' : 'STATUS: IN PROGRESS';
+    if (missionBriefingEl) missionBriefingEl.innerText = active.briefing;
+    if (missionObjectivesEl) {
+        missionObjectivesEl.innerHTML = active.objectives
+            .map((objective) => {
+                const done = campaignManager.getObjectiveState(active.id, objective.id);
+                return `<div>${done ? '[x]' : '[ ]'} ${objective.description}</div>`;
+            })
+            .join('');
+    }
+}
+
+function bindCampaignUiHandlers() {
+    if (missionSelectEl) {
+        missionSelectEl.onchange = (event) => {
+            const missionId = event.target.value;
+            if (campaignManager.setActiveMission(missionId)) {
+                renderCampaignPanel();
+            }
+        };
+    }
+
+    if (missionResetBtn) {
+        missionResetBtn.onclick = () => {
+            campaignManager.reset();
+            renderCampaignPanel();
+        };
+    }
+}
+
 async function initSystems() {
     cacheDomElements();
     bindContactUiHandlers();
+    bindCampaignUiHandlers();
+    campaignManager.load();
+    renderCampaignPanel();
     depthProfileDisplay.environment = worldModel.environment;
     depthProfileDisplay.init('depth-profile-canvas');
     await webgpuFft.init();
@@ -264,7 +329,18 @@ async function initSystems() {
     simEngine.onTick = (targets, dt) => {
         worldModel.update(dt);
         contactManager.update(targets, worldModel.elapsedTime);
+        const selectedTarget = worldModel.getSelectedTarget();
+        const selectedAcousticContext = worldModel.getAcousticContextForTarget(selectedTarget);
+        campaignManager.evaluate({
+            targets,
+            contacts: contactManager.getContacts(),
+            selectedTargetId: worldModel.selectedTargetId,
+            selectedTarget,
+            selectedAcousticContext,
+            elapsedTime: worldModel.elapsedTime
+        });
         renderContactRegistry();
+        renderCampaignPanel();
         if (depthEl) {
             depthEl.innerText = `${worldModel.getOwnShipDepth().toFixed(0)}m`;
         }

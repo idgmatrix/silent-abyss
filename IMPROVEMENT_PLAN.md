@@ -71,10 +71,10 @@ Acceptance criteria:
 - Regression tests cover baseline and effect-enabled scenarios.
 
 ### 6.4 Campaign Vertical Slice
-- [ ] Define mission schema (objectives, triggers, scripted events, win/loss conditions).
-- [ ] Implement campaign state persistence (progress, mission outcomes, unlock flow).
-- [ ] Deliver 1-2 missions that exercise multi-contact workflows and environmental mechanics.
-- [ ] Add tests for mission transitions and save/load integrity.
+- [x] Define mission schema (objectives, triggers, scripted events, win/loss conditions).
+- [x] Implement campaign state persistence (progress, mission outcomes, unlock flow).
+- [x] Deliver 1-2 missions that exercise multi-contact workflows and environmental mechanics.
+- [x] Add tests for mission transitions and save/load integrity.
 
 Acceptance criteria:
 - Users can complete at least one full mission loop with persistent progress.
