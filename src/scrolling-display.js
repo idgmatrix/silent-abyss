@@ -45,9 +45,10 @@ export class ScrollingDisplay {
 
         // Subtle phosphor decay for history
         if (this.decayRate > 0) {
+            const effectiveDecay = this.decayRate;
             this.ctx.save();
             this.ctx.globalCompositeOperation = 'source-over';
-            this.ctx.fillStyle = `rgba(0, 0, 0, ${this.decayRate})`;
+            this.ctx.fillStyle = `rgba(0, 0, 0, ${effectiveDecay})`;
             this.ctx.fillRect(0, shift, w, h - shift);
             this.ctx.restore();
         }

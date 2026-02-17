@@ -12,11 +12,13 @@ export class TacticalView {
         this.pulse = 0;
 
         this.renderer3D = new Tactical3DRenderer((x, z) => this.getTerrainHeight(x, z));
-        this.renderer2D = new Tactical2DRenderer();
+        this.renderer2D = new Tactical2DRenderer((x, z) => this.getTerrainHeight(x, z));
 
         this._lastTargets = [];
         this._resizeHandler = null;
         this._clickHandler = null;
+        this._targetSelectedHandler = null;
+        this._lastRenderTime = 0;
     }
 
     // --- Terrain Noise Functions (Static) ---
@@ -65,20 +67,24 @@ export class TacticalView {
         return TacticalView.terrainNoise(x, z) * 15 - 10;
     }
 
-    init(containerId) {
+    async init(containerId) {
         if (this.container) return;
 
         this.container = document.getElementById(containerId);
         if (!this.container) return;
 
-        this.renderer3D.init(this.container);
+        await this.renderer3D.init(this.container);
         this.renderer2D.init(this.container);
         this.renderer2D.setScanState(this.scanRadius, this.scanActive);
 
         this._resizeHandler = () => this.resize();
         this._clickHandler = (e) => this.handleCanvasClick(e);
+        this._targetSelectedHandler = (e) => {
+            this.selectedTargetId = e?.detail?.id ?? null;
+        };
 
         this.container.addEventListener('click', this._clickHandler);
+        this.container.addEventListener('targetSelected', this._targetSelectedHandler);
         window.addEventListener('resize', this._resizeHandler);
 
         this.resize();
@@ -92,6 +98,9 @@ export class TacticalView {
         if (this.container && this._clickHandler) {
             this.container.removeEventListener('click', this._clickHandler);
         }
+        if (this.container && this._targetSelectedHandler) {
+            this.container.removeEventListener('targetSelected', this._targetSelectedHandler);
+        }
 
         this.renderer3D.dispose();
         this.renderer2D.dispose();
@@ -100,14 +109,16 @@ export class TacticalView {
         this._lastTargets = [];
         this._resizeHandler = null;
         this._clickHandler = null;
+        this._targetSelectedHandler = null;
+        this._lastRenderTime = 0;
     }
 
     addTarget(target) {
         this.renderer3D.addTarget(target);
     }
 
-    updateTargetPosition(targetId, x, z, passive = false) {
-        this.renderer3D.updateTargetPosition(targetId, x, z, passive);
+    updateTargetPosition(targetId, x, z, passive = false, speed = 0) {
+        this.renderer3D.updateTargetPosition(targetId, x, z, passive, speed);
     }
 
     updateTargetOpacities(decayFactor = 0.98) {
@@ -125,13 +136,16 @@ export class TacticalView {
     render(targets, ownShipCourse) {
         if (!this.container) return;
 
+        const now = performance.now();
+        const dt = this._lastRenderTime > 0 ? (now - this._lastRenderTime) / 1000 : 0.016;
+        this._lastRenderTime = now;
         this.pulse = (Date.now() % 2000) / 2000;
         this._lastTargets = Array.isArray(targets) ? targets : [];
 
         if (this.viewMode === '3d') {
             this.renderer3D.setVisible(true);
             this.renderer2D.setVisible(false);
-            this.renderer3D.render(ownShipCourse, this.selectedTargetId, this.pulse);
+            this.renderer3D.render(ownShipCourse, this.selectedTargetId, this.pulse, this._lastTargets, dt);
             return;
         }
 

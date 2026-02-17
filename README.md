@@ -1,79 +1,74 @@
 # Silent Abyss
 
-A tactical submarine sonar and command system simulation built with modern web technologies.
+A browser-based tactical submarine sonar simulation with 2D acoustic displays, a 3D tactical view, and real-time audio synthesis.
 
-## Overview
+## Features
 
-The Silent Abyss is a web-based simulation of a tactical submarine interface. It provides real-time acoustic analysis visualizations and a 3D tactical viewport with procedural terrain, allowing for the simulation of submarine detection and navigation.
-
-### Key Features
-
-- **Acoustic Analysis Displays**:
-  - **LOFAR** (Low Frequency Analysis and Recording): Spectrographic display for narrowband frequency analysis.
-  - **DEMON** (Detection of Envelope Modulation on Noise): Analysis of propeller cavitation and engine turn rates.
-  - **BTR** (Bearing Time Recorder): Wideband detection and tracking of noise sources across all bearings.
-  - **Waterfall**: Historical display of acoustic signals.
-- **Tactical Viewport**:
-  - 3D visualization using Three.js.
-  - Procedural terrain generation.
-  - Unified 2D/3D interaction for target selection and tracking.
-- **Acoustic Realism**:
-  - Signal-to-Noise Ratio (SNR) calculations based on target distance, speed, and environment.
-  - Bathymetric occlusion and shadow zones.
-  - Real-time engine noise synthesis using Web Audio API.
+- LOFAR, DEMON, BTR, and Waterfall acoustic displays
+- Passive detection plus active ping scanning
+- Track/classification state progression (`UNDETECTED` to `CONFIRMED`)
+- Three.js tactical rendering with 2D/3D view modes
+- WebAudio + AudioWorklet pipeline backed by Rust/Wasm DSP
+- WebGPU FFT path with CPU fallback when WebGPU is unavailable
 
 ## Tech Stack
 
-- **Core**: Vanilla HTML5, JavaScript (ES modules).
-- **Styling**: CSS3 with Tailwind CSS and custom CRT/retro overlays.
-- **3D Engine**: [Three.js](https://threejs.org/)
-- **Audio**: Web Audio API with `AudioWorklet`.
-- **Tooling**: [Vite](https://vitejs.dev/) (Build/Dev), [Vitest](https://vitest.dev/) (Testing), ESLint, Prettier.
+- Core: HTML + JavaScript (ES modules), Vite
+- Rendering: Three.js
+- Styling: Tailwind utility classes via CDN in `index.html` plus custom CSS in `src/style.css`
+- Audio: Web Audio API + AudioWorklet + Rust/Wasm (`src/audio/dsp-core/pkg`)
+- Testing/Quality: Vitest, ESLint, Prettier
 
-## Getting Started
+## Requirements
 
-### Prerequisites
+- Node.js 18+ (Node.js 20 verified)
+- npm
+- A modern Chromium-based browser is recommended for best WebGPU support
 
-- [Node.js](https://nodejs.org/) (v18 or higher recommended)
-- [npm](https://www.npmjs.com/)
-
-### Installation
+## Quick Start
 
 ```bash
-git clone https://github.com/idgmatrix/silent-abyss.git
-cd silent-abyss
 npm install
-```
-
-### Development
-
-Run the development server:
-
-```bash
 npm run dev
 ```
 
-The application will be available at `http://localhost:5173`.
+App URL: `http://localhost:5173`
 
-### Production Build
+## Scripts
 
-Create a production build in the `dist` directory:
+- `npm run dev`: start dev server
+- `npm run build`: create production build in `dist/`
+- `npm run preview`: serve production build locally
+- `npm test`: run Vitest suite
+- `npm run lint`: run ESLint
+- `npm run lint:fix`: auto-fix lint issues where possible
+- `npm run format`: format with Prettier
+- `npm run format:check`: check formatting only
 
-```bash
-npm run build
-```
+## Repository Health (Reviewed 2026-02-17)
 
-## Project Structure
+- Tests: passing (`31/31`)
+- Lint: passing
+- Build: passing (`npm run build`)
+- CI: GitHub Actions workflow present at `.github/workflows/ci.yml`
 
-- `index.html`: Main entry point and layout.
-- `src/`: Source code.
-  - `main.js`: Core simulation orchestration.
-  - `simulation.js`: Physics engine and target logic.
-  - `world-model.js`: Detection logic and state management.
-  - `tactical-renderer-3d.js` & `tactical-renderer-2d.js`: Three.js and Canvas rendering logic.
-  - `sonar-visuals.js`: Implementation of acoustic displays.
-- `tests/`: Unit tests using Vitest.
+## Project Layout
+
+- `index.html`: shell UI and panel layout
+- `src/main.js`: app bootstrap and subsystem wiring
+- `src/world-model.js`: detection/classification and ping logic
+- `src/simulation.js`: target simulation engine
+- `src/tactical-renderer-3d.js`: 3D tactical renderer
+- `src/tactical-renderer-2d.js`: 2D tactical renderer
+- `src/sonar-visuals.js`: LOFAR/DEMON/BTR/Waterfall drawing
+- `src/audio/`: AudioWorklet manager and Rust/Wasm DSP assets
+- `src/campaign-manager.js`: mission progression and campaign persistence
+- `src/data/missions.js`: campaign mission definitions
+- `tests/`: Vitest coverage for simulation, environment, classification
+- `documents/The_Silent_Abyss_GDD.md`: game design document (Korean)
+- `documents/SCENARIO_MISSION_AUTHORING.md`: developer guide for scenario/mission data
+- `documents/PLAYER_CONTACT_WORKFLOW.md`: player/operator workflow guide
 
 ## License
 
-MIT
+No `LICENSE` file is currently present in this repository.

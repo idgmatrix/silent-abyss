@@ -9,6 +9,8 @@ export const TargetType = {
 export const TrackState = {
     UNDETECTED: 'UNDETECTED',
     AMBIGUOUS: 'AMBIGUOUS', // Detected but not classified
+    CLASSIFIED: 'CLASSIFIED', // Signature match in progress
+    CONFIRMED: 'CONFIRMED', // Final identification
     TRACKED: 'TRACKED',
     LOST: 'LOST'
 };
@@ -82,8 +84,16 @@ export class SimulationTarget {
         this.nextTurnInterval = 10 + (config.seed ?? 0.5) * 20; // Use provided seed or default
         this.lastPulseId = -1;
         this.behaviorState = BehaviorState.NORMAL;
-        this.alertTimer = 0;
         this.cruiseSpeed = this.speed;
+
+        // Classification State
+        this.classId = config.classId ?? (this.type === TargetType.SUBMARINE ? 'triumph-class' : 'cargo-vessel');
+        this.classification = {
+            state: TrackState.UNDETECTED,
+            progress: 0, // 0.0 to 1.0
+            identifiedClass: null,
+            confirmed: false
+        };
     }
 
     // Compatibility Getters
@@ -113,24 +123,26 @@ export class SimulationTarget {
     }
 
     getAcousticSignature() {
-        // Base noise depends on type
-        let base = 0;
+        // Source Levels (SL) in dB re 1uPa @ 1m
+        let sl = 0;
         switch (this.type) {
-            case 'SHIP': base = 50; break;
-            case 'SUBMARINE': base = 25; break;
-            case 'BIOLOGICAL': base = 15; break;
-            case 'STATIC': base = 5; break;
-            case 'TORPEDO': base = 80; break;
-            default: base = 10;
+            case 'SHIP': sl = 155; break;
+            case 'SUBMARINE': sl = 130; break;
+            case 'BIOLOGICAL': sl = 140; break;
+            case 'STATIC': sl = 110; break;
+            case 'TORPEDO': sl = 170; break;
+            default: sl = 120;
         }
 
-        // RPM contribution
-        const rpmFactor = this.rpm / 60; // normalized around 60rpm
-
         // Speed contribution (cavitation/flow noise)
-        const speedFactor = Math.pow(this.speed * 5, 1.5);
+        // 20 * log10(1 + speed * scale) provides a realistic dB increase with speed
+        const speedScale = 10.0;
+        const speedFactor = 20 * Math.log10(1 + this.speed * speedScale);
 
-        return base * (1 + rpmFactor * 0.5 + speedFactor);
+        // Machinery/RPM contribution
+        const machineryFactor = this.rpm > 0 ? 5 * Math.log10(1 + this.rpm / 60) : 0;
+
+        return sl + speedFactor + machineryFactor;
     }
 
     set velocity(val) {

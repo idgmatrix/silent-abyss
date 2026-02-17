@@ -31,11 +31,16 @@ The Silent Abyss is a web-based simulation of a tactical submarine sonar and com
     - `sonar-visuals.js`: Acoustic displays (LOFAR, DEMON, BTR, Waterfall).
     - `scrolling-display.js`: Waterfall helpers.
     - `audio-system.js`: Web Audio API management.
+    - `data/ship-signatures.js`: Acoustic signature database.
+    - `compute/webgpu-fft.js`: WebGPU compute orchestration.
 - **Tests** (`tests/`):
     - `simulation.test.js`: Core physics and math tests.
+    - `classification.test.js`: Classification state machine tests.
 
 ## Key Implementation Details
-- **Passive Detection**: `world-model.js` calculates Signal-to-Noise Ratio (SNR) for each target.
-- **Interaction Model**: Selection is unified via the `targetSelected` custom event.
+- **Passive Detection**: `world-model.js` calculates Signal-to-Noise Ratio (SNR) and manages classification states (`UNDETECTED` to `CONFIRMED`).
+- **WebGPU Compute**: `compute/webgpu-fft.js` performs real-time FFT on the GPU, with optimized normalization and smoothing.
+- **Acoustic Focus**: `audio-system.js` implements selective gain and focus mechanisms for active target tracking.
+- **Interaction Model**: Selection is unified via the `targetSelected` custom event; dashboard updates automatically.
 - **Coordinate System**: North is +Z in 3D, and Up (0°) in North-Up 2D modes.
-- **DPR Scaling**: All canvases use `devicePixelRatio` scaling.
+- **DPR Scaling**: All canvases use `devicePixelRatio` scaling for high-resolution displays.

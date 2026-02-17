@@ -65,7 +65,7 @@ export const BTR_THEMES = {
 };
 
 export class SonarVisuals {
-    constructor() {
+    constructor(options = {}) {
         this.lCanvas = null;
         this.dCanvas = null;
         this.lCtx = null;
@@ -77,6 +77,14 @@ export class SonarVisuals {
         this.lastTargets = [];
         this.currentTheme = 'CYAN';
         this.currentWaterfallTheme = 'CYAN';
+
+        this.fftProcessor = options.fftProcessor || null;
+        this.lofarSpectrum = null;
+        this._lofarPending = null;
+        this._lofarFrameCounter = 0;
+
+        this.lineHistory = [];
+        this.maxLineHistory = 15;
     }
 
     init() {
@@ -89,10 +97,10 @@ export class SonarVisuals {
         if (this.dCanvas) this.dCtx = this.dCanvas.getContext('2d');
 
         this.btrDisplay = new ScrollingDisplay('btr-canvas');
-        this.btrDisplay.setDecayRate(0.005); // Very slow decay for BTR
+        this.btrDisplay.setDecayRate(0.0015); // Slower decay to preserve deeper BTR history
 
         this.waterfallDisplay = new ScrollingDisplay('waterfall-canvas');
-        this.waterfallDisplay.setDecayRate(0.002); // Even slower for Waterfall to show long history
+        this.waterfallDisplay.setDecayRate(0.0008); // Slower decay to preserve broadband waterfall history
 
         this._btrClickHandler = (e) => this.handleBTRClick(e);
 
@@ -155,9 +163,14 @@ export class SonarVisuals {
         }
     }
 
-    draw(dataArray, targets, currentRpm, pingIntensity, sampleRate, fftSize, selectedTarget = null) {
+    setFFTProcessor(processor) {
+        this.fftProcessor = processor || null;
+    }
+
+    draw(dataArray, targets, currentRpm, pingIntensity, sampleRate, fftSize, selectedTarget = null, timeDomainData = null) {
         if (!dataArray) return;
         this.lastTargets = targets;
+        this._updateLofarSpectrum(dataArray, timeDomainData, fftSize);
         this.drawLOFAR(dataArray, currentRpm, sampleRate, fftSize, selectedTarget);
         this.drawDEMON(dataArray, currentRpm, selectedTarget);
         this.drawBTR(targets, currentRpm, pingIntensity);
@@ -168,6 +181,8 @@ export class SonarVisuals {
         if (!this.lCtx || !this.lCanvas) return;
         const ctx = this.lCtx;
         const cvs = this.lCanvas;
+        const source = this.lofarSpectrum || dataArray;
+        const sourceIsFloat = source instanceof Float32Array;
 
         ctx.fillStyle = 'rgba(0, 5, 10, 0.9)';
         ctx.fillRect(0, 0, cvs.width, cvs.height);
@@ -184,10 +199,12 @@ export class SonarVisuals {
         ctx.beginPath();
         ctx.strokeStyle = selectedTarget ? '#ff3333' : '#00ffcc';
         ctx.lineWidth = 1.2;
-        const viewLength = dataArray.length * 0.7; // Limit high frequency view
+        const viewLength = source.length * 0.7; // Limit high frequency view
         for(let i=0; i<viewLength; i++) {
             const x = (i / viewLength) * cvs.width;
-            const h = (dataArray[i] / 255) * cvs.height;
+            const sampleValue = source[i] ?? 0;
+            const normalized = sourceIsFloat ? sampleValue : sampleValue / 255;
+            const h = normalized * (cvs.height * 1.0);
             if(i===0) ctx.moveTo(x, cvs.height - h);
             else ctx.lineTo(x, cvs.height - h);
         }
@@ -202,6 +219,72 @@ export class SonarVisuals {
                 ctx.fillText("RPM PEAK", x + 2, cvs.height - 10);
             }
         }
+
+        // Draw classification lines
+        this._processAndDrawLines(ctx, cvs, source, viewLength);
+    }
+
+    _processAndDrawLines(ctx, cvs, source, viewLength) {
+        const threshold = 0.2;
+        const currentPeaks = [];
+
+        for (let i = 4; i < viewLength - 1; i++) {
+            if (source[i] > threshold && source[i] > source[i-1] && source[i] > source[i+1]) {
+                currentPeaks.push(i);
+            }
+        }
+
+        this.lineHistory.push(currentPeaks);
+        if (this.lineHistory.length > this.maxLineHistory) this.lineHistory.shift();
+
+        // Calculate persistence (how many times a bin was a peak in history)
+        const persistence = new Float32Array(viewLength);
+        this.lineHistory.forEach(frame => {
+            frame.forEach(idx => {
+                if (idx < viewLength) persistence[idx] += 1.0 / this.maxLineHistory;
+            });
+        });
+
+        // Draw stable lines
+        ctx.save();
+        for (let i = 0; i < viewLength; i++) {
+            if (persistence[i] > 0.4) {
+                const x = (i / viewLength) * cvs.width;
+                const alpha = (persistence[i] - 0.4) * 1.5;
+                ctx.strokeStyle = `rgba(255, 255, 255, ${alpha})`;
+                ctx.setLineDash([2, 4]);
+                ctx.beginPath();
+                ctx.moveTo(x, 0);
+                ctx.lineTo(x, cvs.height);
+                ctx.stroke();
+            }
+        }
+        ctx.restore();
+    }
+
+    _updateLofarSpectrum(dataArray, timeDomainData, fftSize) {
+        if (!this.fftProcessor || this._lofarPending) return;
+        if (!dataArray || dataArray.length === 0) return;
+
+        // Run compute every other frame to reduce contention with rendering.
+        this._lofarFrameCounter++;
+        if (this._lofarFrameCounter % 2 !== 0) return;
+
+        this._lofarPending = this.fftProcessor.computeLOFARSpectrum(dataArray, {
+            fftSize,
+            timeDomainData
+        })
+            .then((spectrum) => {
+                if (spectrum && spectrum.length > 0) {
+                    this.lofarSpectrum = new Float32Array(spectrum);
+                }
+            })
+            .catch((error) => {
+                console.warn('LOFAR compute failed, using analyser bins:', error);
+            })
+            .finally(() => {
+                this._lofarPending = null;
+            });
     }
 
     drawDEMON(dataArray, currentRpm, selectedTarget) {
@@ -228,6 +311,23 @@ export class SonarVisuals {
         ctx.font = '9px Arial';
         const label = selectedTarget ? `TARGET ANALYSIS: ${selectedTarget.type} (T${selectedTarget.id.split('-')[1]})` : `AUTO-ANALYSIS: ${currentRpm > 0 ? 'ENGINE ACTIVE' : 'IDLE'}`;
         ctx.fillText(label, 10, 15);
+
+        if (selectedTarget && selectedTarget.classification) {
+            const cls = selectedTarget.classification;
+            ctx.fillStyle = '#ffffff';
+            ctx.font = '10px monospace';
+            ctx.fillText(`STATUS: ${cls.state}`, 10, 30);
+
+            // Progress bar
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.2)';
+            ctx.fillRect(10, 35, 100, 4);
+            ctx.fillStyle = cls.confirmed ? '#00ff00' : '#ffffff';
+            ctx.fillRect(10, 35, cls.progress * 100, 4);
+
+            if (cls.identifiedClass) {
+                ctx.fillText(`CLASS: ${cls.identifiedClass.toUpperCase()}`, 10, 50);
+            }
+        }
     }
 
     setTheme(themeName) {
@@ -247,7 +347,7 @@ export class SonarVisuals {
 
         const theme = BTR_THEMES[this.currentTheme];
 
-        this.btrDisplay.drawNextLine((ctx, width, height) => {
+        this.btrDisplay.drawNextLine((ctx, width) => {
             // Background with faint sea-noise speckle
             ctx.fillStyle = '#000000';
             ctx.fillRect(0, 0, width, 1);
@@ -320,12 +420,12 @@ export class SonarVisuals {
     drawWaterfall(dataArray) {
         if (!this.waterfallDisplay || !this.waterfallDisplay.ctx) return;
 
-        const ctx = this.waterfallDisplay.ctx;
-        const width = this.waterfallDisplay.canvas.width;
         const theme = BTR_THEMES[this.currentWaterfallTheme].WATERFALL;
+        const source = this.lofarSpectrum || dataArray;
+        const sourceIsFloat = source instanceof Float32Array;
 
-        this.waterfallDisplay.drawNextLine((ctx, width, height) => {
-            const totalSamples = Math.floor(dataArray.length * 0.8);
+        this.waterfallDisplay.drawNextLine((ctx, width) => {
+            const totalSamples = Math.floor(source.length * 0.8);
             const imageData = ctx.createImageData(width, 1);
             const data = imageData.data;
 
@@ -336,11 +436,11 @@ export class SonarVisuals {
 
             for (let x = 0; x < width; x++) {
                 const sampleIdx = Math.floor((x / width) * totalSamples);
-                const val = dataArray[sampleIdx];
+                const val = source[sampleIdx] ?? 0;
+                const norm = sourceIsFloat ? val : val / 255;
                 const i = x * 4;
 
-                if (val > 15) {
-                    const norm = val / 255;
+                if (norm > 0.06) { // Equivalent to 15/255
                     let r, g, b;
 
                     if (norm < 0.5) {
@@ -349,7 +449,7 @@ export class SonarVisuals {
                         g = low[1] * (1 - t) + mid[1] * t;
                         b = low[2] * (1 - t) + mid[2] * t;
                     } else {
-                        const t = (norm - 0.5) * 2;
+                        const t = Math.min(1.0, (norm - 0.5) * 2);
                         r = mid[0] * (1 - t) + high[0] * t;
                         g = mid[1] * (1 - t) + high[1] * t;
                         b = mid[2] * (1 - t) + high[2] * t;
@@ -390,5 +490,8 @@ export class SonarVisuals {
         this.dCtx = null;
         this.lCanvas = null;
         this.dCanvas = null;
+        this.fftProcessor = null;
+        this.lofarSpectrum = null;
+        this._lofarPending = null;
     }
 }

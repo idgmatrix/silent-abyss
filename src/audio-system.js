@@ -1,13 +1,42 @@
+import { WasmAudioManager } from './audio/wasm-audio-manager.js';
+
 export class AudioSystem {
     constructor() {
         this.ctx = null;
-        this.engineNode = null;
-        this.engineGain = null;
+        this.wasmManager = new WasmAudioManager();
+        this.ownVoiceId = 0;
+        this.ownBaseGain = 0.8;
+        this.ownCurrentGain = this.ownBaseGain;
+        this.lastOwnGainUpdateTime = 0;
         this.analyser = null;
         this.dataArray = null;
-        this.targetNodes = new Map(); // Stores gain nodes for targets
+        this.targetNodes = new Map(); // Stores voice indices for targets
         this.focusedTargetId = null;
         this.bioTimeouts = new Set();
+        this.timeDomainArray = null;
+        this.computeProcessor = null;
+        this.outputGain = null;
+        this.startupFadeDelay = 0.12;
+        this.startupFadeDuration = 0.28;
+        this.focusSettings = {
+            gainFloor: 0.005,
+            distanceMax: 150,
+            distanceScale: 300,
+            baseDistanceGainMultiplier: 0.5,
+            focusedTargetBoost: 4.0, // Significant boost
+            backgroundDuck: 0.05, // More aggressive ducking
+            ownShipDuck: 0.08,
+            gainAttack: 0.05,
+            gainRelease: 0.2,
+            mixAttack: 0.08,
+            mixRelease: 0.25,
+            focusedEngineFactor: 1.2,
+            focusedCavFactor: 1.2,
+            focusedBioFactor: 1.0,
+            backgroundEngineFactor: 0.4, // Muffle background
+            backgroundCavFactor: 0.05,
+            backgroundBioFactor: 0.1, // Near-mute background biologicals
+        };
     }
 
     async init() {
@@ -16,85 +45,36 @@ export class AudioSystem {
         try {
             this.ctx = new (window.AudioContext || window.webkitAudioContext)();
 
-            const workletCode = `
-                class SoundEngineProcessor extends AudioWorkletProcessor {
-                    constructor() {
-                        super();
-                        this.targetRpm = 0;
-                        this.currentRpm = 0;
-                        this.phase = 0;
-                        this.bladeCount = 5;
-                        this.lastNoise = 0;
-                        this.port.onmessage = (e) => {
-                            if (e.data.type === 'SET_RPM') this.targetRpm = e.data.value;
-                        };
-                    }
-                    process(inputs, outputs) {
-                        const output = outputs[0][0];
-                        if (!output) return true;
-
-                        // Smooth RPM transition - faster response (0.99 vs 0.9997)
-                        this.currentRpm = this.currentRpm * 0.99 + this.targetRpm * 0.01;
-                        const activeRpm = this.currentRpm;
-
-                        if (activeRpm > 0.05) {
-                             const baseFreq = (activeRpm / 60) * this.bladeCount;
-                             const delta = (2 * Math.PI * baseFreq) / sampleRate;
-                             // Pre-calculate amplitude outside loop for efficiency
-                             const amplitude = Math.min(0.25, activeRpm / 200); // Higher max amplitude
-                             const cavitationIntensity = activeRpm > 100 ? (activeRpm - 100) / 300 : 0.01;
-                             const filterAlpha = 0.2; // Brighter noise
-
-                            for (let i = 0; i < output.length; i++) {
-                                this.phase = (this.phase + delta) % (2 * Math.PI);
-
-                                // 1. Blade Thump - Richer harmonics
-                                let harmonicSignal = Math.sin(this.phase) * 0.6; // Fundamental
-                                harmonicSignal += Math.sin(this.phase * 2) * 0.25; // 2nd harmonic
-                                harmonicSignal += Math.sin(this.phase * 3) * 0.15; // 3rd harmonic
-                                harmonicSignal += Math.sin(this.phase * 0.5) * 0.05; // Sub-harmonic (shaft)
-
-                                // Soft clipping shape for "thump"
-                                const thump = Math.tanh(harmonicSignal * 1.5);
-
-                                // 2. Cavitation Noise with Amplitude Modulation
-                                // Noise pulses aligned with blade phase
-                                const noiseRaw = (Math.random() * 2 - 1);
-                                this.lastNoise = this.lastNoise + filterAlpha * (noiseRaw - this.lastNoise);
-
-                                // AM: Noise is louder at peak of blade stroke
-                                const bladeMod = (Math.sin(this.phase) + 1) * 0.5;
-                                const noiseSignal = this.lastNoise * cavitationIntensity * (0.5 + 0.5 * bladeMod);
-
-                                output[i] = (thump * amplitude * 0.6) + (noiseSignal * 0.8);
-                            }
-                        } else {
-                            for (let i = 0; i < output.length; i++) output[i] = 0;
-                            this.lastNoise = 0;
-                        }
-                        return true;
-                    }
-                }
-                registerProcessor('sound-engine-processor', SoundEngineProcessor);
-            `;
-
-            const blob = new Blob([workletCode], { type: 'application/javascript' });
-            await this.ctx.audioWorklet.addModule(URL.createObjectURL(blob));
-
             this.analyser = this.ctx.createAnalyser();
             this.analyser.fftSize = 2048;
             this.analyser.smoothingTimeConstant = 0.85;
+            this.analyser.minDecibels = -120;
+            this.analyser.maxDecibels = -30;
             this.dataArray = new Uint8Array(this.analyser.frequencyBinCount);
+            this.timeDomainArray = new Float32Array(this.analyser.fftSize);
+            this.outputGain = this.ctx.createGain();
+            const now = this.ctx.currentTime;
+            this.outputGain.gain.setValueAtTime(0, now);
+            this.outputGain.gain.linearRampToValueAtTime(0, now + this.startupFadeDelay);
+            this.outputGain.gain.linearRampToValueAtTime(1, now + this.startupFadeDelay + this.startupFadeDuration);
+            this.outputGain.connect(this.analyser);
+            this.analyser.connect(this.ctx.destination);
 
-            this.engineNode = new AudioWorkletNode(this.ctx, 'sound-engine-processor');
-            this.engineGain = this.ctx.createGain();
-            this.engineGain.gain.value = 0;
+            // Initialize Wasm Manager with existing context and connect to analyser
+            await this.wasmManager.init({
+                ctx: this.ctx,
+                outputNode: this.outputGain,
+                maxVoices: 32 // Increase to support many targets
+            });
 
-            this.engineNode.connect(this.engineGain).connect(this.analyser);
-            this.analyser.connect(this.ctx.destination); // Optional monitor, usually disabled in sonar ops but useful for dev
-
-            // Ramp up engine gain
-            this.engineGain.gain.linearRampToValueAtTime(1.0, this.ctx.currentTime + 0.5);
+            this.ownVoiceId = this.wasmManager.defaultVoiceId;
+            this.ownCurrentGain = this.ownBaseGain;
+            this.lastOwnGainUpdateTime = this.ctx.currentTime;
+            this.wasmManager.setGain(this.ownBaseGain, this.ownVoiceId);
+            this.wasmManager.setEngineMix(1.0, this.ownVoiceId);
+            this.wasmManager.setCavMix(0.3, this.ownVoiceId);
+            this.wasmManager.setBioMix(0.0, this.ownVoiceId); // Own ship shouldn't chirp like a dolphin
+            this.wasmManager.setBlades(5.0, this.ownVoiceId);
 
         } catch (e) {
             console.error("Audio initialization failed:", e);
@@ -102,120 +82,158 @@ export class AudioSystem {
     }
 
     setRpm(value) {
-        if (this.engineNode) {
-            this.engineNode.port.postMessage({ type: 'SET_RPM', value: value });
+        if (this.wasmManager && this.wasmManager.ready) {
+            this.wasmManager.setRpm(value, this.ownVoiceId);
         }
     }
 
-    createTargetAudio(target) {
-        if (!this.ctx) return;
+    setComputeProcessor(processor) {
+        this.computeProcessor = processor || null;
+    }
+
+    async createTargetAudio(target) {
+        if (!this.ctx || !this.wasmManager.ready) return;
         const targetId = target.id;
         const type = target.type || 'SHIP';
+        const now = this.ctx.currentTime;
 
-        let targetOsc = null;
-        let targetNoise = null;
-        let targetFilter = this.ctx.createBiquadFilter();
-        const gain = this.ctx.createGain();
-        gain.gain.value = 0.01;
+        // Request a new voice from Wasm
+        const voiceId = await this.wasmManager.addVoice();
+        if (voiceId === -1) {
+            console.warn("Max audio voices reached");
+            return;
+        }
+
+        // Configure voice based on target
+        const initialGain = 0.01;
+        this.wasmManager.setGain(initialGain, voiceId);
+        this.wasmManager.setBlades(target.bladeCount || 5, voiceId);
+        this.wasmManager.setRpm(target.rpm || 0, voiceId);
+        let baseEngineMix = 1.0;
+        let baseCavMix = 0.6;
+        let baseBioMix = 0.0;
 
         if (type === 'BIOLOGICAL') {
-            // No steady sound, just setup for bio loop later
+            baseEngineMix = 0.0;
+            baseCavMix = 0.0;
+            baseBioMix = 1.0;
         } else if (type === 'STATIC') {
-            // Just steady low rumble noise
-            targetNoise = this.createNoiseSource(2.0);
-            targetFilter.type = 'lowpass';
-            targetFilter.frequency.value = 150;
-            targetNoise.connect(targetFilter);
+            baseEngineMix = 0.1; // Low rumble
+            baseCavMix = 0.3;
+            baseBioMix = 0.0;
         } else {
             // SHIP or SUBMARINE
-            targetOsc = this.ctx.createOscillator();
-            targetOsc.type = type === 'SUBMARINE' ? 'sine' : 'triangle';
-
-            // Base frequency based on RPM and blade count
-            const baseFreq = (target.rpm / 60) * target.bladeCount;
-            targetOsc.frequency.value = Math.max(20, baseFreq * 2); // 2x for audible fundamental range
-
-            targetNoise = this.createNoiseSource(2.0);
-            targetFilter.type = 'lowpass';
-            targetFilter.frequency.value = type === 'SUBMARINE' ? 250 : 500;
-
-            targetOsc.connect(targetFilter);
-            targetNoise.connect(targetFilter);
-            targetOsc.start();
+            baseEngineMix = 1.0;
+            baseCavMix = type === 'SUBMARINE' ? 0.2 : 0.6;
+            baseBioMix = 0.0;
         }
 
-        if (targetNoise) targetNoise.start();
-        targetFilter.connect(gain).connect(this.analyser);
+        this.wasmManager.setEngineMix(baseEngineMix, voiceId);
+        this.wasmManager.setCavMix(baseCavMix, voiceId);
+        this.wasmManager.setBioMix(baseBioMix, voiceId);
 
         this.targetNodes.set(targetId, {
-            osc: targetOsc,
-            noise: targetNoise,
-            gain: gain,
-            type: type
+            voiceId,
+            type,
+            baseEngineMix,
+            baseCavMix,
+            baseBioMix,
+            currentGain: initialGain,
+            currentEngineMix: baseEngineMix,
+            currentCavMix: baseCavMix,
+            currentBioMix: baseBioMix,
+            lastUpdateTime: now,
         });
-
-        if (type === 'BIOLOGICAL') {
-            // Random clicks/chirps instead of steady sound
-            this.createBioLoop(targetId, gain);
-        }
-    }
-
-    createNoiseSource(duration) {
-        const bSize = this.ctx.sampleRate * duration;
-        const buffer = this.ctx.createBuffer(1, bSize, this.ctx.sampleRate);
-        const dArr = buffer.getChannelData(0);
-        for(let i=0; i<bSize; i++) dArr[i] = Math.random() * 2 - 1;
-        const noise = this.ctx.createBufferSource();
-        noise.buffer = buffer;
-        noise.loop = true;
-        return noise;
-    }
-
-    createBioLoop(targetId, outputGain) {
-        const playClick = () => {
-            if (!this.targetNodes.has(targetId) || !this.ctx) return;
-
-            const osc = this.ctx.createOscillator();
-            const g = this.ctx.createGain();
-            osc.connect(g).connect(outputGain);
-
-            const freq = 800 + Math.random() * 2000;
-            osc.frequency.setValueAtTime(freq, this.ctx.currentTime);
-            osc.frequency.exponentialRampToValueAtTime(100, this.ctx.currentTime + 0.1);
-
-            g.gain.setValueAtTime(0, this.ctx.currentTime);
-            g.gain.linearRampToValueAtTime(0.5, this.ctx.currentTime + 0.01);
-            g.gain.linearRampToValueAtTime(0, this.ctx.currentTime + 0.1);
-
-            osc.start();
-            osc.stop(this.ctx.currentTime + 0.15);
-
-            // Schedule next click
-            const timeoutId = setTimeout(playClick, 500 + Math.random() * 3000);
-            this.bioTimeouts.add(timeoutId);
-        };
-        playClick();
     }
 
     setFocusedTarget(targetId) {
-        this.focusedTargetId = targetId;
+        const nextFocus = (targetId !== null && targetId !== undefined && this.targetNodes.has(targetId))
+            ? targetId
+            : null;
+        if (this.focusedTargetId === nextFocus) return;
+
+        this.focusedTargetId = nextFocus;
+        this.updateOwnShipFocusGain();
     }
 
     updateTargetVolume(targetId, distance) {
         const node = this.targetNodes.get(targetId);
-        if (node && this.ctx) {
-            // Increased base gain and scaling
-            let vol = Math.max(0.015, (120 - distance) / 250) * 0.6;
+        if (node && this.wasmManager.ready) {
+            const now = this.ctx ? this.ctx.currentTime : performance.now() / 1000;
+            const dt = Math.max(0, Math.min(0.2, now - (node.lastUpdateTime || now)));
+            node.lastUpdateTime = now;
 
-            // Apply Acoustic Focus boost/ducking
-            if (this.focusedTargetId === targetId) {
-                vol *= 2.5; // Focus boost
-            } else if (this.focusedTargetId) {
-                vol *= 0.3; // Duck non-focused targets
+            // Distance attenuation baseline
+            const cfg = this.focusSettings;
+            let targetGain = Math.max(cfg.gainFloor, (cfg.distanceMax - distance) / cfg.distanceScale) * cfg.baseDistanceGainMultiplier;
+
+            const hasFocus = this.focusedTargetId !== null;
+            const isFocused = this.focusedTargetId === targetId;
+            if (isFocused) {
+                targetGain *= cfg.focusedTargetBoost;
+            } else if (hasFocus) {
+                targetGain *= cfg.backgroundDuck;
             }
 
-            node.gain.gain.setTargetAtTime(vol, this.ctx.currentTime, 0.1);
+            const gainRising = targetGain > node.currentGain;
+            const gainTau = gainRising ? cfg.gainAttack : cfg.gainRelease;
+            const gainAlpha = 1 - Math.exp(-dt / Math.max(0.001, gainTau));
+            node.currentGain += (targetGain - node.currentGain) * gainAlpha;
+            this.wasmManager.setGain(node.currentGain, node.voiceId);
+
+            // Tactical spectral focus (pseudo low-pass on background contacts)
+            const engineFactor = isFocused
+                ? cfg.focusedEngineFactor
+                : hasFocus
+                    ? cfg.backgroundEngineFactor
+                    : 1.0;
+            const cavFactor = isFocused
+                ? cfg.focusedCavFactor
+                : hasFocus
+                    ? cfg.backgroundCavFactor
+                    : 1.0;
+            const bioFactor = isFocused
+                ? cfg.focusedBioFactor
+                : hasFocus
+                    ? cfg.backgroundBioFactor
+                    : 1.0;
+
+            const targetEngineMix = Math.min(1, Math.max(0, node.baseEngineMix * engineFactor));
+            const targetCavMix = Math.min(1, Math.max(0, node.baseCavMix * cavFactor));
+            const targetBioMix = Math.min(1, Math.max(0, node.baseBioMix * bioFactor));
+
+            const mixRising = targetEngineMix > node.currentEngineMix ||
+                targetCavMix > node.currentCavMix ||
+                targetBioMix > node.currentBioMix;
+            const mixTau = mixRising ? cfg.mixAttack : cfg.mixRelease;
+            const mixAlpha = 1 - Math.exp(-dt / Math.max(0.001, mixTau));
+
+            node.currentEngineMix += (targetEngineMix - node.currentEngineMix) * mixAlpha;
+            node.currentCavMix += (targetCavMix - node.currentCavMix) * mixAlpha;
+            node.currentBioMix += (targetBioMix - node.currentBioMix) * mixAlpha;
+
+            this.wasmManager.setEngineMix(node.currentEngineMix, node.voiceId);
+            this.wasmManager.setCavMix(node.currentCavMix, node.voiceId);
+            this.wasmManager.setBioMix(node.currentBioMix, node.voiceId);
         }
+    }
+
+    updateOwnShipFocusGain(now = this.ctx ? this.ctx.currentTime : performance.now() / 1000) {
+        if (!this.wasmManager || !this.wasmManager.ready) return;
+
+        const dt = Math.max(0, Math.min(0.2, now - (this.lastOwnGainUpdateTime || now)));
+        this.lastOwnGainUpdateTime = now;
+
+        const focusActive = this.focusedTargetId !== null;
+        const targetOwnGain = focusActive
+            ? this.ownBaseGain * this.focusSettings.ownShipDuck
+            : this.ownBaseGain;
+        const ownRising = targetOwnGain > this.ownCurrentGain;
+        const ownTau = ownRising ? this.focusSettings.gainAttack : this.focusSettings.gainRelease;
+        const ownAlpha = 1 - Math.exp(-dt / Math.max(0.001, ownTau));
+        this.ownCurrentGain += (targetOwnGain - this.ownCurrentGain) * ownAlpha;
+
+        this.wasmManager.setGain(this.ownCurrentGain, this.ownVoiceId);
     }
 
     createPingTap(vol = 0.5, startFreq = 1200, endFreq = 900) {
@@ -225,7 +243,7 @@ export class AudioSystem {
         const osc = this.ctx.createOscillator();
         const g = this.ctx.createGain();
 
-        osc.connect(g).connect(this.analyser);
+        osc.connect(g).connect(this.outputGain);
 
         osc.frequency.setValueAtTime(startFreq, time);
         osc.frequency.exponentialRampToValueAtTime(endFreq, time + 0.1);
@@ -238,16 +256,15 @@ export class AudioSystem {
         osc.stop(time + 1.3);
     }
 
-    createPingEcho(vol = 0.3, distance = 0) {
+    createPingEcho(vol = 0.3) {
         if (!this.ctx) return;
         const time = this.ctx.currentTime;
 
         const osc = this.ctx.createOscillator();
         const g = this.ctx.createGain();
 
-        // Connect directly to analyser to bypass any sub-group ducking if implemented later,
-        // but for now analyser is the master bus.
-        osc.connect(g).connect(this.analyser);
+        // Route through the same startup-gated bus used by Wasm voices.
+        osc.connect(g).connect(this.outputGain);
 
         // Sharper sweep for echo: 1100Hz -> 850Hz
         osc.frequency.setValueAtTime(1100, time);
@@ -273,31 +290,35 @@ export class AudioSystem {
         return this.ctx;
     }
 
+    getTimeDomainData() {
+        if (this.analyser && this.timeDomainArray) {
+            this.analyser.getFloatTimeDomainData(this.timeDomainArray);
+            return this.timeDomainArray;
+        }
+        return null;
+    }
+
     dispose() {
+        if (this.wasmManager) {
+            this.wasmManager.dispose();
+        }
         if (this.ctx) {
             this.bioTimeouts.forEach(id => clearTimeout(id));
             this.bioTimeouts.clear();
 
-            this.targetNodes.forEach(node => {
-                if (node.osc) node.osc.stop();
-                if (node.noise) node.noise.stop();
-                if (node.gain) node.gain.disconnect();
-            });
             this.targetNodes.clear();
 
-            if (this.engineNode) {
-                this.engineNode.disconnect();
-                this.engineNode = null;
-            }
-            if (this.engineGain) {
-                this.engineGain.disconnect();
-                this.engineGain = null;
-            }
             if (this.analyser) {
                 this.analyser.disconnect();
                 this.analyser = null;
             }
+            if (this.outputGain) {
+                this.outputGain.disconnect();
+                this.outputGain = null;
+            }
 
+            this.timeDomainArray = null;
+            this.computeProcessor = null;
             this.ctx.close();
             this.ctx = null;
         }

@@ -1,12 +1,14 @@
 import { TrackState } from './simulation.js';
 
 export class Tactical2DRenderer {
-    constructor() {
+    constructor(getTerrainHeight) {
         this.container = null;
         this.canvas = null;
         this.ctx = null;
         this.scanRadius = 0;
         this.scanActive = false;
+        this.getTerrainHeight = typeof getTerrainHeight === 'function' ? getTerrainHeight : (() => 0);
+        this.contourCache = new Map();
     }
 
     init(container) {
@@ -31,6 +33,7 @@ export class Tactical2DRenderer {
         this.container = null;
         this.canvas = null;
         this.ctx = null;
+        this.contourCache.clear();
     }
 
     setVisible(visible) {
@@ -44,6 +47,7 @@ export class Tactical2DRenderer {
         this.canvas.width = width * dpr;
         this.canvas.height = height * dpr;
         this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        this.contourCache.clear();
     }
 
     setScanState(radius, active) {
@@ -124,6 +128,8 @@ export class Tactical2DRenderer {
             ctx.stroke();
         });
 
+        this.drawTerrainContours(ctx, w, h, scale, angleOffset, true);
+
         ctx.font = '10px monospace';
         if (Array.isArray(targets)) {
             targets.forEach((t) => {
@@ -143,6 +149,7 @@ export class Tactical2DRenderer {
                 }
 
                 this.drawTargetGlyph(ctx, t.type, dx, dy, true);
+                this.drawDepthCue(ctx, t, dx, dy);
 
                 ctx.fillStyle = '#ffffff';
                 ctx.globalAlpha = 1.0;
@@ -215,6 +222,8 @@ export class Tactical2DRenderer {
         ctx.lineTo(centerX, h);
         ctx.stroke();
 
+        this.drawTerrainContours(ctx, w, h, scale, 0, false);
+
         if (Array.isArray(targets)) {
             targets.forEach((t) => {
                 if (t.state !== TrackState.TRACKED) return;
@@ -231,6 +240,7 @@ export class Tactical2DRenderer {
                 }
 
                 this.drawTargetGlyph(ctx, t.type, dx, dy, false);
+                this.drawDepthCue(ctx, t, dx, dy);
 
                 ctx.fillStyle = '#ffffff';
                 ctx.font = '8px monospace';
@@ -325,6 +335,149 @@ export class Tactical2DRenderer {
         }
 
         ctx.fillRect(dx - 5, dy - 5, 10, 10);
+    }
+
+    drawDepthCue(ctx, target, dx, dy) {
+        if (!target) return;
+
+        const terrainY = this.getTerrainHeight(target.x, target.z);
+        const depth = Math.max(1, -terrainY - 2);
+        const normalized = Math.max(0, Math.min(1, depth / 200));
+        const hue = 190 + normalized * 40;
+        const lightness = 60 - normalized * 20;
+
+        ctx.save();
+        ctx.strokeStyle = `hsl(${hue}, 100%, ${lightness}%)`;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(dx + 8, dy - 8);
+        ctx.lineTo(dx + 8, dy + 8);
+        ctx.stroke();
+        ctx.restore();
+    }
+
+    drawTerrainContours(ctx, width, height, scale, angleOffset, radialMode) {
+        const layers = this.getContourLayers(width, height, scale, angleOffset, radialMode);
+        for (const layer of layers) {
+            ctx.strokeStyle = layer.strokeStyle;
+            ctx.lineWidth = layer.lineWidth;
+            ctx.stroke(layer.path);
+        }
+    }
+
+    getContourLayers(width, height, scale, angleOffset, radialMode) {
+        const key = `${radialMode ? 'radial' : 'grid'}:${width}:${height}:${scale}:${angleOffset}`;
+        const cached = this.contourCache.get(key);
+        if (cached) return cached;
+
+        const centerX = width / 2;
+        const centerY = height / 2;
+        const worldSpan = Math.min(width, height) / scale;
+        const maxWorld = worldSpan / 2;
+        const contourLevels = [-18, -14, -10, -6, -2, 2, 6];
+        const gridStep = 8;
+        const layers = [];
+
+        contourLevels.forEach((level, levelIndex) => {
+            const major = levelIndex % 2 === 0;
+            const path = new Path2D();
+
+            for (let wx = -maxWorld; wx < maxWorld; wx += gridStep) {
+                for (let wz = -maxWorld; wz < maxWorld; wz += gridStep) {
+                    const p00 = { x: wx, y: wz, h: this.getTerrainHeight(wx, wz) };
+                    const p10 = { x: wx + gridStep, y: wz, h: this.getTerrainHeight(wx + gridStep, wz) };
+                    const p11 = { x: wx + gridStep, y: wz + gridStep, h: this.getTerrainHeight(wx + gridStep, wz + gridStep) };
+                    const p01 = { x: wx, y: wz + gridStep, h: this.getTerrainHeight(wx, wz + gridStep) };
+
+                    const caseCode =
+                        (p00.h >= level ? 1 : 0) |
+                        (p10.h >= level ? 2 : 0) |
+                        (p11.h >= level ? 4 : 0) |
+                        (p01.h >= level ? 8 : 0);
+
+                    if (caseCode === 0 || caseCode === 15) continue;
+
+                    const e0 = this.interpolateEdgePoint(p00, p10, level);
+                    const e1 = this.interpolateEdgePoint(p10, p11, level);
+                    const e2 = this.interpolateEdgePoint(p11, p01, level);
+                    const e3 = this.interpolateEdgePoint(p01, p00, level);
+
+                    const segments = this.getContourSegments(caseCode, e0, e1, e2, e3);
+                    segments.forEach(([a, b]) => {
+                        const sa = this.mapWorldToScreen(a.x, a.y, centerX, centerY, scale, angleOffset, radialMode);
+                        const sb = this.mapWorldToScreen(b.x, b.y, centerX, centerY, scale, angleOffset, radialMode);
+                        path.moveTo(sa.x, sa.y);
+                        path.lineTo(sb.x, sb.y);
+                    });
+                }
+            }
+
+            layers.push({
+                path,
+                strokeStyle: major ? 'rgba(0, 120, 130, 0.34)' : 'rgba(0, 95, 105, 0.22)',
+                lineWidth: major ? 1 : 0.6
+            });
+        });
+
+        this.contourCache.set(key, layers);
+        return layers;
+    }
+
+    interpolateEdgePoint(a, b, level) {
+        const da = level - a.h;
+        const db = b.h - a.h;
+        let t = db === 0 ? 0.5 : da / db;
+        if (!Number.isFinite(t)) t = 0.5;
+        t = Math.max(0, Math.min(1, t));
+        return {
+            x: a.x + (b.x - a.x) * t,
+            y: a.y + (b.y - a.y) * t
+        };
+    }
+
+    getContourSegments(caseCode, e0, e1, e2, e3) {
+        switch (caseCode) {
+            case 1:
+            case 14:
+                return [[e3, e0]];
+            case 2:
+            case 13:
+                return [[e0, e1]];
+            case 3:
+            case 12:
+                return [[e3, e1]];
+            case 4:
+            case 11:
+                return [[e1, e2]];
+            case 5:
+                return [[e3, e2], [e0, e1]];
+            case 6:
+            case 9:
+                return [[e0, e2]];
+            case 7:
+            case 8:
+                return [[e3, e2]];
+            case 10:
+                return [[e0, e3], [e1, e2]];
+            default:
+                return [];
+        }
+    }
+
+    mapWorldToScreen(wx, wz, centerX, centerY, scale, angleOffset, radialMode) {
+        if (radialMode) {
+            const rotX = wx * Math.cos(angleOffset) - wz * Math.sin(angleOffset);
+            const rotZ = wx * Math.sin(angleOffset) + wz * Math.cos(angleOffset);
+            return {
+                x: centerX + rotX * scale,
+                y: centerY + rotZ * scale
+            };
+        }
+
+        return {
+            x: centerX + wx * scale,
+            y: centerY + wz * scale
+        };
     }
 
     getTypeColor(type) {

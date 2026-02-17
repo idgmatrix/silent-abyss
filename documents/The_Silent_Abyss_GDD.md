@@ -14,7 +14,7 @@
 | **사운드 합성** | **WebAssembly (Rust/C++)** | 물리 기반 오디오 합성(엔진, 생물), 실시간 DSP 필터링, 정밀 수치 연산. |
 | **연산 가속** | **WebGPU (Compute)** | 실시간 FFT(주파수 분석), 대규모 기포(Cavitation) 사운드 입자 계산, 음향 레이트레이싱. |
 | **비주얼 엔진** | **Three.js (WebGPU)** | 중앙 스코프 내 3D 지형 렌더링, HUD 포스트 프로세싱(CRT, Bloom 효과). |
-| **2D/UI** | **React + Canvas2D** | 전술 정보창(2D), 워터폴(LOFAR) 고속 렌더링, 시스템 상태 관리. |
+| **2D/UI** | **Vanilla JS + Canvas2D** | 전술 정보창(2D), 워터폴(LOFAR) 고속 렌더링, 시스템 상태 관리. |
 | **오디오 출력** | **Web Audio API** | AudioWorklet을 통한 저지연 출력, 3D 공간 음향(PannerNode). |
 
 ---
@@ -47,6 +47,7 @@
 ### [3D 레이어: 중앙 전술 스코프]
 * **Tactical Wireframe:** 능동 소나 발사 시 Three.js로 구현된 해저 지형과 함선 실루엣이 입체적으로 스캔되어 나타납니다.
 * **Scan Decay:** 스캔된 3D 정보는 시간이 지남에 따라 노이즈와 함께 서서히 사라지며 플레이어의 긴장감을 유발합니다.
+* **Acoustic Focus:** 선택된 목표에 대한 음향 수신 감도를 집중시켜 세밀한 주파수 분석(LOFAR)과 프로펠러 시그니처(DEMON) 분석을 가능하게 합니다. 선택 시 배경 소음과 생물 음향(Bio-Acoustics)을 억제(Ducking)하고 목표물의 개별 기계음을 강조하는 멀티보이스 오디오 필터링 시스템을 포함합니다.
 
 ---
 
@@ -60,9 +61,10 @@
 
 ## 5. 개발 로드맵 (Roadmap)
 
-1.  **Phase 1:** AudioWorklet + Wasm 기반의 기초 사운드 합성 엔진 구축.
-2.  **Phase 2:** WebGPU를 이용한 실시간 FFT 분석 및 2D 워터폴 UI 구현.
-3.  **Phase 3:** Three.js WebGPURenderer 연동 및 3D 지형 스캔 셰이더 개발.
-4.  **Phase 4:** 게임 루프(잠입, 식별, 교전) 및 환경 물리 효과 통합.
+1.  **Phase 1:** AudioWorklet + Wasm 기반의 기초 사운드 합성 엔진 구축. (완료)
+2.  **Phase 2:** WebGPU를 이용한 실시간 FFT 분석 및 2D 워터폴 UI 구현. (완료)
+3.  **Phase 3:** Three.js WebGPURenderer 연동 및 3D 지형 스캔 셰이더 개발. (완료)
+4.  **Phase 4:** 게임 루프(잠입, 식별, 교전) 및 환경 물리 효과 통합. (완료)
+5.  **Phase 5:** 음향 물리 정밀화, WebGPU 최적화, 고도화된 식별 시스템 및 멀티보이스 오디오 포커싱 시스템 최적화. (완료)
 
 ---

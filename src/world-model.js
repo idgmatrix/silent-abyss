@@ -1,11 +1,21 @@
 import { TrackState, SimulationTarget } from './simulation.js';
+import { EnvironmentModel } from './acoustics/environment-model.js';
+import { buildScenarioTargets, getDefaultScenario } from './data/scenario-loader.js';
 
 export class WorldModel {
-    constructor(simEngine, audioSys, tacticalView, sonarVisuals) {
+    constructor(simEngine, spatialService, callbacks = {}) {
         this.simEngine = simEngine;
-        this.audioSys = audioSys;
-        this.tacticalView = tacticalView;
-        this.sonarVisuals = sonarVisuals;
+        this.spatialService = spatialService; // Must provide getTerrainHeight(x, z)
+
+        this.callbacks = {
+            onTargetUpdate: callbacks.onTargetUpdate || (() => {}),
+            onScanUpdate: callbacks.onScanUpdate || (() => {}),
+            onScanComplete: callbacks.onScanComplete || (() => {}),
+            onPingEcho: callbacks.onPingEcho || (() => {}),
+            onSonarContact: callbacks.onSonarContact || (() => {})
+        };
+
+        this.environment = new EnvironmentModel();
 
         this.selectedTargetId = null;
         this.isScanning = false;
@@ -16,92 +26,23 @@ export class WorldModel {
         this.elapsedTime = 0; // Simulation time in seconds
 
         // Configuration
-        this.detectionThreshold = 1.5;
-        this.lostTrackTimeout = 5.0; // 5 seconds
+        this.detectionThreshold = 6.0; // dB
+        this.lostTrackTimeout = 10.0; // 10 seconds
         this.losSampleCount = 10;
-        this.passiveOcclusionAttenuation = 0.15;
-        this.soundLayerDepth = -5.0;
-        this.shadowZoneAttenuation = 0.5;
-        this.multiPathStrength = 0.2;
+        this.passiveOcclusionAttenuation = 25.0; // dB loss
+        this.shadowZoneAttenuation = 15.0; // dB loss (Thermocline shadow)
+        this.multiPathStrength = 3.0; // dB variation
         this.multiPathFrequency = 0.5;
     }
 
     seedTargets() {
         this.simEngine.targets = []; // Ensure clean state
-        this.simEngine.addTarget(new SimulationTarget('target-01', {
-            // Merchant Vessel (SHIP)
-            x: -90,
-            z: 30,
-            course: 0.2,
-            speed: 0.8,
-            type: 'SHIP',
-            rpm: 120,
-            bladeCount: 3,
-            isPatrolling: false,
-            seed: this.simEngine.random()
-        }));
+        const scenario = getDefaultScenario();
+        const targetConfigs = buildScenarioTargets(scenario, () => this.simEngine.random());
 
-        this.simEngine.addTarget(new SimulationTarget('target-02', {
-            // Stealthy Submarine (SUBMARINE)
-            distance: 60,
-            angle: Math.PI * 0.75,
-            speed: 0.3,
-            type: 'SUBMARINE',
-            rpm: 80,
-            bladeCount: 7,
-            isPatrolling: true,
-            patrolRadius: 80,
-            seed: this.simEngine.random()
-        }));
-
-        this.simEngine.addTarget(new SimulationTarget('target-03', {
-            // Erratic Whale (BIOLOGICAL)
-            distance: 40,
-            angle: -Math.PI * 0.25,
-            type: 'BIOLOGICAL',
-            isPatrolling: true,
-            patrolRadius: 30,
-            seed: this.simEngine.random()
-        }));
-
-        this.simEngine.addTarget(new SimulationTarget('target-04', {
-            // Volcanic Vent (STATIC)
-            x: 70,
-            z: -80,
-            type: 'STATIC',
-            isPatrolling: false,
-            seed: this.simEngine.random()
-        }));
-
-        this.simEngine.addTarget(new SimulationTarget('target-05', {
-            // School of biologicals
-            distance: 110,
-            angle: Math.PI * 0.4,
-            type: 'BIOLOGICAL',
-            isPatrolling: true,
-            patrolRadius: 15,
-            seed: this.simEngine.random()
-        }));
-
-        this.simEngine.addTarget(new SimulationTarget('target-06', {
-            // Derelict wreck
-            x: -120,
-            z: -40,
-            type: 'STATIC',
-            isPatrolling: false,
-            seed: this.simEngine.random()
-        }));
-
-        this.simEngine.addTarget(new SimulationTarget('target-07', {
-            // Inbound Torpedo
-            distance: 140,
-            angle: Math.PI * 1.1,
-            type: 'TORPEDO',
-            isPatrolling: true,
-            patrolRadius: 200,
-            targetCourse: Math.PI * 2.1, // Move towards center-ish
-            seed: this.simEngine.random()
-        }));
+        targetConfigs.forEach((config) => {
+            this.simEngine.addTarget(new SimulationTarget(config.id, config));
+        });
     }
 
     update(dt) {
@@ -114,48 +55,58 @@ export class WorldModel {
         }
 
         this.processPassiveDetection();
+        this.processClassification(dt);
         if (this.isScanning) {
             this.processActiveScanning();
         }
 
-        // Update Audio Volume/Focus
-        this.simEngine.targets.forEach(t => {
-            this.audioSys.updateTargetVolume(t.id, t.distance);
-        });
-
-        this.tacticalView.updateTargetOpacities();
+        // Notify that targets have been updated (for audio volume, etc.)
+        this.callbacks.onTargetUpdate(this.simEngine.targets);
     }
 
     processPassiveDetection() {
         const ownShipDepth = this.getOwnShipDepth();
 
         this.simEngine.targets.forEach(target => {
-            const sig = target.getAcousticSignature();
-            let snr = sig / (Math.pow(target.distance / 10, 1.5) + 1);
-
             const targetDepth = this.getTargetDepth(target);
-            const acrossLayer =
-                (ownShipDepth > this.soundLayerDepth && targetDepth < this.soundLayerDepth) ||
-                (ownShipDepth < this.soundLayerDepth && targetDepth > this.soundLayerDepth);
-            if (acrossLayer) {
-                snr *= this.shadowZoneAttenuation;
+            const ambientNoise = this.environment.getAmbientNoise(targetDepth);
+            const rangeMeters = Math.max(1.0, target.distance * 10);
+            const modifiers = this.environment.getAcousticModifiers(ownShipDepth, targetDepth, rangeMeters);
+
+            // Normalized Source Level (SL) from target
+            const sl = target.getAcousticSignature();
+
+            // Transmission Loss (TL) = 20 * log10(Range) - Spherical Spreading
+            const transmissionLoss = 20 * Math.log10(rangeMeters);
+
+            // Passive Sonar Equation: SNR = SL - TL - NL
+            let snr = sl - transmissionLoss - ambientNoise;
+            snr += modifiers.snrModifierDb;
+
+            // Layer crossing attenuation (Thermocline shadow zone)
+            if (this.environment.isThermoclineBetween(ownShipDepth, targetDepth)) {
+                snr -= this.shadowZoneAttenuation;
             }
 
-            const multiPathFactor = 1 + Math.sin(target.distance * this.multiPathFrequency) * this.multiPathStrength;
-            snr *= multiPathFactor;
+            // Multipath interference
+            const multiPathEffect = Math.sin(target.distance * this.multiPathFrequency) * this.multiPathStrength;
+            snr += multiPathEffect;
 
+            // Terrain Occlusion
             const hasLineOfSight = this.checkLineOfSight(target);
             if (!hasLineOfSight) {
-                snr *= this.passiveOcclusionAttenuation;
+                snr -= this.passiveOcclusionAttenuation;
             }
+
             target.snr = snr; // Store current SNR for UI
+            target.environmentEffects = modifiers;
 
             const isDetected = snr > this.detectionThreshold;
 
             if (isDetected) {
                 target.state = TrackState.TRACKED;
                 target.lastDetectedTime = this.elapsedTime;
-                this.tacticalView.updateTargetPosition(target.id, target.x, target.z, true);
+                this.callbacks.onSonarContact(target, true);
             } else if (target.state === TrackState.TRACKED) {
                 // If we were tracking but SNR dropped, move to LOST
                 if (this.elapsedTime - target.lastDetectedTime > this.lostTrackTimeout) {
@@ -165,28 +116,69 @@ export class WorldModel {
         });
     }
 
+    processClassification(dt) {
+        this.simEngine.targets.forEach(target => {
+            if (target.state === TrackState.UNDETECTED || target.state === TrackState.LOST) {
+                target.classification.state = TrackState.UNDETECTED;
+                target.classification.progress = 0;
+                return;
+            }
+
+            // Classification requires a certain SNR to start identifying features
+            const classificationThreshold = this.detectionThreshold + 2.0;
+            const isSelected = target.id === this.selectedTargetId;
+
+            if (target.snr > classificationThreshold) {
+                // If tracked and SNR is good, advance classification
+                // If selected, it advances faster (focused analysis)
+                const rate = isSelected ? 0.06 : 0.015;
+                target.classification.progress = Math.min(1.0, target.classification.progress + rate * dt);
+
+                if (target.classification.progress > 0.2 && target.classification.progress < 0.6) {
+                    target.classification.state = TrackState.AMBIGUOUS;
+                } else if (target.classification.progress >= 0.6 && target.classification.progress < 0.95) {
+                    target.classification.state = TrackState.CLASSIFIED;
+                    target.classification.identifiedClass = target.classId;
+                } else if (target.classification.progress >= 0.95) {
+                    target.classification.state = TrackState.CONFIRMED;
+                    target.classification.confirmed = true;
+                }
+            } else {
+                // Decay progress if SNR is too low
+                target.classification.progress = Math.max(0, target.classification.progress - 0.01 * dt);
+
+                // If progress drops too low, revert state
+                if (target.classification.progress < 0.1) {
+                    target.classification.state = TrackState.UNDETECTED;
+                }
+            }
+        });
+    }
+
     getOwnShipDepth() {
-        if (!this.tacticalView || typeof this.tacticalView.getTerrainHeight !== 'function') {
-            return 0;
+        if (!this.spatialService || typeof this.spatialService.getTerrainHeight !== 'function') {
+            return 5.0;
         }
 
-        return this.tacticalView.getTerrainHeight(0, 0) + 5.0;
+        const height = this.spatialService.getTerrainHeight(0, 0);
+        return Math.max(1.0, -height - 5.0);
     }
 
     getTargetDepth(target) {
-        if (!this.tacticalView || typeof this.tacticalView.getTerrainHeight !== 'function') {
-            return 0;
+        if (!this.spatialService || typeof this.spatialService.getTerrainHeight !== 'function') {
+            return 10.0;
         }
 
-        return this.tacticalView.getTerrainHeight(target.x, target.z) + 2.0;
+        const height = this.spatialService.getTerrainHeight(target.x, target.z);
+        return Math.max(1.0, -height - 2.0);
     }
 
     processActiveScanning() {
         this.scanRadius += 15.0;
-        this.tacticalView.setScanExUniforms(this.scanRadius, true);
+        this.callbacks.onScanUpdate(this.scanRadius, true);
+        const ownShipDepth = this.getOwnShipDepth();
 
         this.simEngine.targets.forEach(target => {
-            // If scanning past target and it's not already tracked by active scan this pulse
             if (this.scanRadius >= target.distance && target.lastPulseId !== this.currentPulseId) {
                 target.lastPulseId = this.currentPulseId;
                 const hasLineOfSight = this.checkLineOfSight(target);
@@ -198,25 +190,25 @@ export class WorldModel {
                 target.lastDetectedTime = this.elapsedTime;
                 target.reactToPing();
 
-                const echoVol = 0.6 * (1.0 - target.distance / 200);
-                this.audioSys.createPingEcho(echoVol, target.distance);
-                this.tacticalView.updateTargetPosition(target.id, target.x, target.z);
-
-                // Trigger UI Event
-                window.dispatchEvent(new CustomEvent('sonar-contact', { detail: { id: target.id } }));
+                const targetDepth = this.getTargetDepth(target);
+                const rangeMeters = Math.max(1.0, target.distance * 10);
+                const modifiers = this.environment.getAcousticModifiers(ownShipDepth, targetDepth, rangeMeters);
+                const echoVol = (0.6 * (1.0 - target.distance / 200)) * modifiers.echoGain;
+                this.callbacks.onPingEcho(echoVol, target.distance);
+                this.callbacks.onSonarContact(target, false);
             }
         });
 
         if (this.scanRadius > 150) {
             this.isScanning = false;
             this.pingActiveIntensity = 0;
-            this.tacticalView.setScanExUniforms(this.scanRadius, false);
-            window.dispatchEvent(new CustomEvent('sonar-scan-complete'));
+            this.callbacks.onScanUpdate(this.scanRadius, false);
+            this.callbacks.onScanComplete();
         }
     }
 
     checkLineOfSight(target) {
-        if (!this.tacticalView || typeof this.tacticalView.getTerrainHeight !== 'function') {
+        if (!this.spatialService || typeof this.spatialService.getTerrainHeight !== 'function') {
             return true;
         }
 
@@ -225,15 +217,15 @@ export class WorldModel {
         const endX = target.x;
         const endZ = target.z;
 
-        const ownShipY = this.tacticalView.getTerrainHeight(startX, startZ) + 5.0;
-        const targetY = this.tacticalView.getTerrainHeight(endX, endZ) + 2.0;
+        const ownShipY = this.spatialService.getTerrainHeight(startX, startZ) + 5.0;
+        const targetY = this.spatialService.getTerrainHeight(endX, endZ) + 2.0;
 
         for (let i = 1; i < this.losSampleCount; i++) {
             const t = i / this.losSampleCount;
             const sx = startX + (endX - startX) * t;
             const sz = startZ + (endZ - startZ) * t;
             const losY = ownShipY + (targetY - ownShipY) * t;
-            const terrainY = this.tacticalView.getTerrainHeight(sx, sz);
+            const terrainY = this.spatialService.getTerrainHeight(sx, sz);
 
             if (terrainY > losY) {
                 return false;
@@ -244,16 +236,30 @@ export class WorldModel {
     }
 
     triggerPing() {
-        if (this.isScanning || !this.audioSys.getContext()) return;
+        if (this.isScanning) return;
         this.isScanning = true;
         this.scanRadius = 0;
         this.currentPulseId++;
         this.pingActiveIntensity = 1.0;
-        this.tacticalView.setScanExUniforms(0, true);
-        this.audioSys.createPingTap(0.5, 1200, 900);
+        this.callbacks.onScanUpdate(0, true);
     }
 
     getSelectedTarget() {
         return this.simEngine.targets.find(t => t.id === this.selectedTargetId);
+    }
+
+    getAcousticContextForTarget(target) {
+        if (!target) return null;
+        const ownShipDepth = this.getOwnShipDepth();
+        const targetDepth = this.getTargetDepth(target);
+        const rangeMeters = Math.max(1.0, target.distance * 10);
+        const modifiers = this.environment.getAcousticModifiers(ownShipDepth, targetDepth, rangeMeters);
+
+        return {
+            ownShipDepth,
+            targetDepth,
+            rangeMeters,
+            modifiers
+        };
     }
 }
