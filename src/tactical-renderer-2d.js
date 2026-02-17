@@ -8,6 +8,7 @@ export class Tactical2DRenderer {
         this.scanRadius = 0;
         this.scanActive = false;
         this.getTerrainHeight = typeof getTerrainHeight === 'function' ? getTerrainHeight : (() => 0);
+        this.contourCache = new Map();
     }
 
     init(container) {
@@ -32,6 +33,7 @@ export class Tactical2DRenderer {
         this.container = null;
         this.canvas = null;
         this.ctx = null;
+        this.contourCache.clear();
     }
 
     setVisible(visible) {
@@ -45,6 +47,7 @@ export class Tactical2DRenderer {
         this.canvas.width = width * dpr;
         this.canvas.height = height * dpr;
         this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        this.contourCache.clear();
     }
 
     setScanState(radius, active) {
@@ -354,19 +357,31 @@ export class Tactical2DRenderer {
     }
 
     drawTerrainContours(ctx, width, height, scale, angleOffset, radialMode) {
+        const layers = this.getContourLayers(width, height, scale, angleOffset, radialMode);
+        for (const layer of layers) {
+            ctx.strokeStyle = layer.strokeStyle;
+            ctx.lineWidth = layer.lineWidth;
+            ctx.stroke(layer.path);
+        }
+    }
+
+    getContourLayers(width, height, scale, angleOffset, radialMode) {
+        const key = `${radialMode ? 'radial' : 'grid'}:${width}:${height}:${scale}:${angleOffset}`;
+        const cached = this.contourCache.get(key);
+        if (cached) return cached;
+
         const centerX = width / 2;
         const centerY = height / 2;
         const worldSpan = Math.min(width, height) / scale;
         const maxWorld = worldSpan / 2;
-        const contourLevels = [-18, -14, -10, -6, -2, 2, 6];
-        const gridStep = 8;
+        const contourLevels = [-18, -12, -6, 0, 6];
+        const gridStep = 12;
+        const layers = [];
 
         contourLevels.forEach((level, levelIndex) => {
             const major = levelIndex % 2 === 0;
-            ctx.strokeStyle = major ? 'rgba(0, 120, 130, 0.38)' : 'rgba(0, 95, 105, 0.25)';
-            ctx.lineWidth = major ? 1 : 0.6;
+            const path = new Path2D();
 
-            // Marching-squares contour extraction for smooth isolines.
             for (let wx = -maxWorld; wx < maxWorld; wx += gridStep) {
                 for (let wz = -maxWorld; wz < maxWorld; wz += gridStep) {
                     const p00 = { x: wx, y: wz, h: this.getTerrainHeight(wx, wz) };
@@ -391,14 +406,21 @@ export class Tactical2DRenderer {
                     segments.forEach(([a, b]) => {
                         const sa = this.mapWorldToScreen(a.x, a.y, centerX, centerY, scale, angleOffset, radialMode);
                         const sb = this.mapWorldToScreen(b.x, b.y, centerX, centerY, scale, angleOffset, radialMode);
-                        ctx.beginPath();
-                        ctx.moveTo(sa.x, sa.y);
-                        ctx.lineTo(sb.x, sb.y);
-                        ctx.stroke();
+                        path.moveTo(sa.x, sa.y);
+                        path.lineTo(sb.x, sb.y);
                     });
                 }
             }
+
+            layers.push({
+                path,
+                strokeStyle: major ? 'rgba(0, 120, 130, 0.34)' : 'rgba(0, 95, 105, 0.22)',
+                lineWidth: major ? 1 : 0.6
+            });
         });
+
+        this.contourCache.set(key, layers);
+        return layers;
     }
 
     interpolateEdgePoint(a, b, level) {
