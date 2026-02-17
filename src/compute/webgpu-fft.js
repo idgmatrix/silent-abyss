@@ -399,7 +399,7 @@ fn main(@builtin(local_invocation_id) lid : vec3<u32>) {
         const REFERENCE_FLOOR = 0.04;
 
         // Filter fewer low-frequency bins to preserve engine harmonics
-        const DC_SKIP = 4;
+        const DC_SKIP = 32;
         let framePeak = 0;
 
         for (let i = 0; i < spectrum.length; i++) {
@@ -424,7 +424,7 @@ fn main(@builtin(local_invocation_id) lid : vec3<u32>) {
 
         // Decaying peak reference prevents startup transients from flattening later frames.
         const decayedReference = Math.max(REFERENCE_FLOOR, this.intensityReference * REFERENCE_DECAY);
-        this.intensityReference = Math.max(framePeak, decayedReference);
+        this.intensityReference = Math.max(framePeak, decayedReference) * 0.125;
 
         for (let i = 0; i < out.length; i++) {
             out[i] = Math.min(1.0, out[i] / this.intensityReference);

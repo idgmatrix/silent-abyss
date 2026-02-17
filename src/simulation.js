@@ -126,11 +126,11 @@ export class SimulationTarget {
         // Source Levels (SL) in dB re 1uPa @ 1m
         let sl = 0;
         switch (this.type) {
-            case 'SHIP': sl = 150; break;
-            case 'SUBMARINE': sl = 125; break;
-            case 'BIOLOGICAL': sl = 135; break;
-            case 'STATIC': sl = 105; break;
-            case 'TORPEDO': sl = 165; break;
+            case 'SHIP': sl = 155; break;
+            case 'SUBMARINE': sl = 130; break;
+            case 'BIOLOGICAL': sl = 140; break;
+            case 'STATIC': sl = 110; break;
+            case 'TORPEDO': sl = 170; break;
             default: sl = 120;
         }
 

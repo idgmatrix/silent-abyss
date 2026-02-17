@@ -26,8 +26,8 @@ export class WorldModel {
         this.elapsedTime = 0; // Simulation time in seconds
 
         // Configuration
-        this.detectionThreshold = 8.0; // dB
-        this.lostTrackTimeout = 5.0; // 5 seconds
+        this.detectionThreshold = 6.0; // dB
+        this.lostTrackTimeout = 10.0; // 10 seconds
         this.losSampleCount = 10;
         this.passiveOcclusionAttenuation = 25.0; // dB loss
         this.shadowZoneAttenuation = 15.0; // dB loss (Thermocline shadow)
@@ -37,84 +37,58 @@ export class WorldModel {
 
     seedTargets() {
         this.simEngine.targets = []; // Ensure clean state
-        this.simEngine.addTarget(new SimulationTarget('target-01', {
-            // Merchant Vessel (SHIP)
-            x: -90,
-            z: 30,
-            course: 0.2,
-            speed: 0.8,
-            type: 'SHIP',
-            classId: 'cargo-vessel',
-            rpm: 120,
-            bladeCount: 3,
-            isPatrolling: false,
-            seed: this.simEngine.random()
-        }));
 
-        this.simEngine.addTarget(new SimulationTarget('target-02', {
-            // Stealthy Submarine (SUBMARINE)
-            distance: 60,
-            angle: Math.PI * 0.75,
-            speed: 0.3,
-            type: 'SUBMARINE',
-            classId: 'triumph-class',
-            rpm: 80,
-            bladeCount: 7,
-            isPatrolling: true,
-            patrolRadius: 80,
-            seed: this.simEngine.random()
-        }));
+        // 1. Initial manual targets (The "Cast")
+        const coreTargets = [
+            { id: 'target-01', x: -60, z: 20, course: 0.2, speed: 0.8, type: 'SHIP', classId: 'cargo-vessel', rpm: 120, bladeCount: 3, isPatrolling: false },
+            { id: 'target-02', distance: 45, angle: Math.PI * 0.75, speed: 0.3, type: 'SUBMARINE', classId: 'triumph-class', rpm: 80, bladeCount: 7, isPatrolling: true, patrolRadius: 60 },
+            { id: 'target-03', distance: 30, angle: -Math.PI * 0.25, type: 'BIOLOGICAL', isPatrolling: true, patrolRadius: 30 },
+            { id: 'target-04', x: 40, z: -50, type: 'STATIC', isPatrolling: false },
+            { id: 'target-05', distance: 80, angle: Math.PI * 0.4, type: 'BIOLOGICAL', isPatrolling: true, patrolRadius: 15 },
+            { id: 'target-06', x: -90, z: -30, type: 'STATIC', isPatrolling: false },
+            { id: 'target-07', distance: 90, angle: Math.PI * 1.6, type: 'SHIP', classId: 'fishery-trawler', speed: 1.2, rpm: 180, isPatrolling: true, patrolRadius: 80 }
+        ];
 
-        this.simEngine.addTarget(new SimulationTarget('target-03', {
-            // Erratic Whale (BIOLOGICAL)
-            distance: 40,
-            angle: -Math.PI * 0.25,
-            type: 'BIOLOGICAL',
-            isPatrolling: true,
-            patrolRadius: 30,
-            seed: this.simEngine.random()
-        }));
+        coreTargets.forEach(config => {
+            this.simEngine.addTarget(new SimulationTarget(config.id, {
+                ...config,
+                seed: this.simEngine.random()
+            }));
+        });
 
-        this.simEngine.addTarget(new SimulationTarget('target-04', {
-            // Volcanic Vent (STATIC)
-            x: 70,
-            z: -80,
-            type: 'STATIC',
-            isPatrolling: false,
-            seed: this.simEngine.random()
-        }));
+        // 2. Procedural targets to fill the ocean
+        const types = ['SHIP', 'SUBMARINE', 'BIOLOGICAL', 'STATIC'];
+        const shipClasses = ['cargo-vessel', 'fishery-trawler', 'oil-tanker'];
+        const subClasses = ['triumph-class', 'kilo-class'];
 
-        this.simEngine.addTarget(new SimulationTarget('target-05', {
-            // School of biologicals
-            distance: 110,
-            angle: Math.PI * 0.4,
-            type: 'BIOLOGICAL',
-            isPatrolling: true,
-            patrolRadius: 15,
-            seed: this.simEngine.random()
-        }));
+        for (let i = 8; i <= 15; i++) {
+            const type = types[Math.floor(this.simEngine.random() * types.length)];
+            const dist = 30 + this.simEngine.random() * 120;
+            const angle = this.simEngine.random() * Math.PI * 2;
+            
+            let config = {
+                id: `target-${i < 10 ? '0' + i : i}`,
+                distance: dist,
+                angle: angle,
+                type: type,
+                isPatrolling: type !== 'STATIC',
+                seed: this.simEngine.random()
+            };
 
-        this.simEngine.addTarget(new SimulationTarget('target-06', {
-            // Derelict wreck
-            x: -120,
-            z: -40,
-            type: 'STATIC',
-            isPatrolling: false,
-            seed: this.simEngine.random()
-        }));
+            if (type === 'SHIP') {
+                config.classId = shipClasses[Math.floor(this.simEngine.random() * shipClasses.length)];
+                config.speed = 0.5 + this.simEngine.random() * 1.0;
+                config.rpm = 100 + this.simEngine.random() * 150;
+                config.bladeCount = 3 + Math.floor(this.simEngine.random() * 3);
+            } else if (type === 'SUBMARINE') {
+                config.classId = subClasses[Math.floor(this.simEngine.random() * subClasses.length)];
+                config.speed = 0.2 + this.simEngine.random() * 0.4;
+                config.rpm = 60 + this.simEngine.random() * 60;
+                config.bladeCount = 7;
+            }
 
-        this.simEngine.addTarget(new SimulationTarget('target-07', {
-            // Fishing Trawler
-            distance: 120,
-            angle: Math.PI * 1.6,
-            type: 'SHIP',
-            classId: 'fishery-trawler',
-            speed: 1.2,
-            rpm: 180,
-            isPatrolling: true,
-            patrolRadius: 100,
-            seed: this.simEngine.random()
-        }));
+            this.simEngine.addTarget(new SimulationTarget(config.id, config));
+        }
     }
 
     update(dt) {

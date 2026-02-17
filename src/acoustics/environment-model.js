@@ -22,7 +22,7 @@ export class EnvironmentModel {
         };
 
         this.currentProfile = this.profiles.DEEP_OCEAN;
-        this.seaState = 3; // Douglas Sea Scale (0-9)
+        this.seaState = 2; // Moderate sea state for balanced detection
     }
 
     /**

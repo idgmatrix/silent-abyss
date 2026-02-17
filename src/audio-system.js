@@ -19,23 +19,23 @@ export class AudioSystem {
         this.startupFadeDelay = 0.12;
         this.startupFadeDuration = 0.28;
         this.focusSettings = {
-            gainFloor: 0.015,
-            distanceMax: 120,
-            distanceScale: 250,
-            baseDistanceGainMultiplier: 0.6,
-            focusedTargetBoost: 2.1,
-            backgroundDuck: 0.1,
-            ownShipDuck: 0.15,
-            gainAttack: 0.07,
-            gainRelease: 0.26,
-            mixAttack: 0.1,
-            mixRelease: 0.32,
-            focusedEngineFactor: 1.05,
-            focusedCavFactor: 1.1,
+            gainFloor: 0.005,
+            distanceMax: 150,
+            distanceScale: 300,
+            baseDistanceGainMultiplier: 0.5,
+            focusedTargetBoost: 4.0, // Significant boost
+            backgroundDuck: 0.05, // More aggressive ducking
+            ownShipDuck: 0.08,
+            gainAttack: 0.05,
+            gainRelease: 0.2,
+            mixAttack: 0.08,
+            mixRelease: 0.25,
+            focusedEngineFactor: 1.2,
+            focusedCavFactor: 1.2,
             focusedBioFactor: 1.0,
-            backgroundEngineFactor: 0.75,
-            backgroundCavFactor: 0.1,
-            backgroundBioFactor: 0.6,
+            backgroundEngineFactor: 0.4, // Muffle background
+            backgroundCavFactor: 0.05,
+            backgroundBioFactor: 0.1, // Near-mute background biologicals
         };
     }
 
@@ -63,7 +63,8 @@ export class AudioSystem {
             // Initialize Wasm Manager with existing context and connect to analyser
             await this.wasmManager.init({
                 ctx: this.ctx,
-                outputNode: this.outputGain
+                outputNode: this.outputGain,
+                maxVoices: 32 // Increase to support many targets
             });
 
             this.ownVoiceId = this.wasmManager.defaultVoiceId;

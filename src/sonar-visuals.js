@@ -204,7 +204,7 @@ export class SonarVisuals {
             const x = (i / viewLength) * cvs.width;
             const sampleValue = source[i] ?? 0;
             const normalized = sourceIsFloat ? sampleValue : sampleValue / 255;
-            const h = normalized * (cvs.height * 0.5);
+            const h = normalized * (cvs.height * 1.0);
             if(i===0) ctx.moveTo(x, cvs.height - h);
             else ctx.lineTo(x, cvs.height - h);
         }
