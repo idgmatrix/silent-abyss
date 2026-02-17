@@ -1,6 +1,6 @@
 import { TrackState, SimulationTarget } from './simulation.js';
 import { EnvironmentModel } from './acoustics/environment-model.js';
-import { getSignature } from './data/ship-signatures.js';
+import { buildScenarioTargets, getDefaultScenario } from './data/scenario-loader.js';
 
 export class WorldModel {
     constructor(simEngine, spatialService, callbacks = {}) {
@@ -37,58 +37,12 @@ export class WorldModel {
 
     seedTargets() {
         this.simEngine.targets = []; // Ensure clean state
+        const scenario = getDefaultScenario();
+        const targetConfigs = buildScenarioTargets(scenario, () => this.simEngine.random());
 
-        // 1. Initial manual targets (The "Cast")
-        const coreTargets = [
-            { id: 'target-01', x: -60, z: 20, course: 0.2, speed: 0.8, type: 'SHIP', classId: 'cargo-vessel', rpm: 120, bladeCount: 3, isPatrolling: false },
-            { id: 'target-02', distance: 45, angle: Math.PI * 0.75, speed: 0.3, type: 'SUBMARINE', classId: 'triumph-class', rpm: 80, bladeCount: 7, isPatrolling: true, patrolRadius: 60 },
-            { id: 'target-03', distance: 30, angle: -Math.PI * 0.25, type: 'BIOLOGICAL', isPatrolling: true, patrolRadius: 30 },
-            { id: 'target-04', x: 40, z: -50, type: 'STATIC', isPatrolling: false },
-            { id: 'target-05', distance: 80, angle: Math.PI * 0.4, type: 'BIOLOGICAL', isPatrolling: true, patrolRadius: 15 },
-            { id: 'target-06', x: -90, z: -30, type: 'STATIC', isPatrolling: false },
-            { id: 'target-07', distance: 90, angle: Math.PI * 1.6, type: 'SHIP', classId: 'fishery-trawler', speed: 1.2, rpm: 180, isPatrolling: true, patrolRadius: 80 }
-        ];
-
-        coreTargets.forEach(config => {
-            this.simEngine.addTarget(new SimulationTarget(config.id, {
-                ...config,
-                seed: this.simEngine.random()
-            }));
-        });
-
-        // 2. Procedural targets to fill the ocean
-        const types = ['SHIP', 'SUBMARINE', 'BIOLOGICAL', 'STATIC'];
-        const shipClasses = ['cargo-vessel', 'fishery-trawler', 'oil-tanker'];
-        const subClasses = ['triumph-class', 'kilo-class'];
-
-        for (let i = 8; i <= 15; i++) {
-            const type = types[Math.floor(this.simEngine.random() * types.length)];
-            const dist = 30 + this.simEngine.random() * 120;
-            const angle = this.simEngine.random() * Math.PI * 2;
-            
-            let config = {
-                id: `target-${i < 10 ? '0' + i : i}`,
-                distance: dist,
-                angle: angle,
-                type: type,
-                isPatrolling: type !== 'STATIC',
-                seed: this.simEngine.random()
-            };
-
-            if (type === 'SHIP') {
-                config.classId = shipClasses[Math.floor(this.simEngine.random() * shipClasses.length)];
-                config.speed = 0.5 + this.simEngine.random() * 1.0;
-                config.rpm = 100 + this.simEngine.random() * 150;
-                config.bladeCount = 3 + Math.floor(this.simEngine.random() * 3);
-            } else if (type === 'SUBMARINE') {
-                config.classId = subClasses[Math.floor(this.simEngine.random() * subClasses.length)];
-                config.speed = 0.2 + this.simEngine.random() * 0.4;
-                config.rpm = 60 + this.simEngine.random() * 60;
-                config.bladeCount = 7;
-            }
-
+        targetConfigs.forEach((config) => {
             this.simEngine.addTarget(new SimulationTarget(config.id, config));
-        }
+        });
     }
 
     update(dt) {
