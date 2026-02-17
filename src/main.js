@@ -4,6 +4,7 @@ import { TacticalView } from './tactical-view.js';
 import { SonarVisuals } from './sonar-visuals.js';
 import { WorldModel } from './world-model.js';
 import { WebGPUFFTProcessor } from './compute/webgpu-fft.js';
+import { ContactManager } from './contact-manager.js';
 
 // State
 let currentRpmValue = 60;
@@ -15,6 +16,7 @@ const audioSys = new AudioSystem();
 const tacticalView = new TacticalView();
 const sonarVisuals = new SonarVisuals();
 const simEngine = new SimulationEngine();
+const contactManager = new ContactManager({ lostTimeout: 10 });
 const worldModel = new WorldModel(simEngine, tacticalView, {
     onTargetUpdate: (targets) => {
         targets.forEach(t => audioSys.updateTargetVolume(t.id, t.distance));
@@ -41,6 +43,9 @@ const webgpuFft = new WebGPUFFTProcessor({ fftSize: 1024, smoothing: 0.82 });
 
 // UI Elements
 let rpmDisplay, statusDisplay, rangeEl, velEl, brgEl, sigEl, classEl, targetIdEl, contactAlertEl, depthEl;
+let contactListEl, contactFilterEl, contactSortEl, contactPinBtn, contactRelabelInput, contactRelabelBtn;
+let contactClearLostBtn, solutionBearingInput, solutionRangeInput, solutionCourseInput, solutionSpeedInput;
+let solutionSaveBtn, solutionConfidenceEl;
 
 function cacheDomElements() {
     rpmDisplay = document.getElementById('rpm-display');
@@ -53,10 +58,179 @@ function cacheDomElements() {
     targetIdEl = document.getElementById('target-id-text');
     contactAlertEl = document.getElementById('contact-alert');
     depthEl = document.querySelector('header div div span.text-white'); // Matches DEPTH display
+    contactListEl = document.getElementById('contact-list');
+    contactFilterEl = document.getElementById('contact-filter');
+    contactSortEl = document.getElementById('contact-sort');
+    contactPinBtn = document.getElementById('contact-pin-btn');
+    contactRelabelInput = document.getElementById('contact-relabel-input');
+    contactRelabelBtn = document.getElementById('contact-relabel-btn');
+    contactClearLostBtn = document.getElementById('contact-clear-lost');
+    solutionBearingInput = document.getElementById('solution-bearing');
+    solutionRangeInput = document.getElementById('solution-range');
+    solutionCourseInput = document.getElementById('solution-course');
+    solutionSpeedInput = document.getElementById('solution-speed');
+    solutionSaveBtn = document.getElementById('solution-save-btn');
+    solutionConfidenceEl = document.getElementById('solution-confidence');
+}
+
+function getTargetById(targetId) {
+    return simEngine.targets.find((t) => t.id === targetId) || null;
+}
+
+function setSelectedTarget(targetId) {
+    const normalized = targetId || null;
+    worldModel.selectedTargetId = normalized;
+    tacticalView.selectedTargetId = normalized;
+    contactManager.setSelectedTarget(normalized);
+    audioSys.setFocusedTarget(normalized);
+
+    if (!normalized) {
+        if (targetIdEl) targetIdEl.innerText = 'OWN-SHIP';
+        if (solutionConfidenceEl) solutionConfidenceEl.innerText = 'CONF: --';
+        return;
+    }
+
+    const target = getTargetById(normalized);
+    const selectedContact = contactManager.getSelectedContact();
+    if (target) {
+        if (targetIdEl) {
+            targetIdEl.innerText = selectedContact?.alias
+                ? `${selectedContact.alias} (${selectedContact.label})`
+                : selectedContact?.label || normalized.toUpperCase();
+        }
+        updateDashboard(target);
+        populateManualSolutionInputs(target, selectedContact);
+    }
+}
+
+function populateManualSolutionInputs(target, contact) {
+    if (!solutionBearingInput || !solutionRangeInput || !solutionCourseInput || !solutionSpeedInput) return;
+
+    const manual = contact?.manualSolution;
+    if (manual) {
+        solutionBearingInput.value = manual.bearing.toFixed(1);
+        solutionRangeInput.value = manual.range.toFixed(0);
+        solutionCourseInput.value = manual.course.toFixed(1);
+        solutionSpeedInput.value = manual.speed.toFixed(1);
+    } else if (target) {
+        solutionBearingInput.value = target.bearing.toFixed(1);
+        solutionRangeInput.value = (target.distance * 50).toFixed(0);
+        solutionCourseInput.value = (((target.course * 180) / Math.PI + 360) % 360).toFixed(1);
+        solutionSpeedInput.value = Math.abs(target.velocity * 20).toFixed(1);
+    }
+
+    if (solutionConfidenceEl) {
+        const confidence = contact?.manualConfidence;
+        solutionConfidenceEl.innerText = Number.isFinite(confidence) && confidence > 0
+            ? `CONF: ${confidence}%`
+            : 'CONF: --';
+    }
+}
+
+function renderContactRegistry() {
+    if (!contactListEl) return;
+    const contacts = contactManager.getContacts({
+        filterMode: contactFilterEl?.value,
+        sortMode: contactSortEl?.value
+    });
+
+    if (contacts.length === 0) {
+        contactListEl.innerHTML = '<div class="text-[9px] text-cyan-700">NO TRACKED CONTACTS</div>';
+        return;
+    }
+
+    contactListEl.innerHTML = contacts.map((contact) => {
+        const selectedClass = worldModel.selectedTargetId === contact.targetId ? ' selected' : '';
+        const pin = contact.pinned ? 'PIN ' : '';
+        const alias = contact.alias ? `${contact.alias} ` : '';
+        const merge = contact.mergedGroupId ? ` ${contact.mergedGroupId}` : '';
+        const confidence = contact.manualConfidence > 0 ? ` | CONF ${contact.manualConfidence}%` : '';
+        return (
+            `<button class="contact-item${selectedClass}" data-target-id="${contact.targetId}">` +
+            `<div>${pin}${alias}${contact.label} | ${contact.status}${merge}</div>` +
+            `<div class="meta">${contact.type} | BRG ${contact.bearing.toFixed(1)} | RNG ${contact.rangeMeters.toFixed(0)}m${confidence}</div>` +
+            '</button>'
+        );
+    }).join('');
+}
+
+function bindContactUiHandlers() {
+    if (contactFilterEl) {
+        contactFilterEl.onchange = () => renderContactRegistry();
+    }
+    if (contactSortEl) {
+        contactSortEl.onchange = () => renderContactRegistry();
+    }
+
+    if (contactListEl) {
+        contactListEl.onclick = (event) => {
+            if (!(event.target instanceof Element)) return;
+            const button = event.target.closest('[data-target-id]');
+            if (!button) return;
+            const targetId = button.getAttribute('data-target-id');
+            setSelectedTarget(targetId);
+            renderContactRegistry();
+        };
+    }
+
+    if (contactPinBtn) {
+        contactPinBtn.onclick = () => {
+            if (!worldModel.selectedTargetId) return;
+            contactManager.togglePin(worldModel.selectedTargetId);
+            renderContactRegistry();
+        };
+    }
+
+    if (contactRelabelBtn) {
+        contactRelabelBtn.onclick = () => {
+            if (!worldModel.selectedTargetId || !contactRelabelInput) return;
+            const result = contactManager.relabel(worldModel.selectedTargetId, contactRelabelInput.value);
+            if (result.ok) {
+                contactRelabelInput.value = '';
+                setSelectedTarget(worldModel.selectedTargetId);
+                renderContactRegistry();
+            }
+        };
+    }
+
+    if (contactClearLostBtn) {
+        contactClearLostBtn.onclick = () => {
+            const removedIds = contactManager.clearLostContacts();
+            if (removedIds.includes(worldModel.selectedTargetId)) {
+                setSelectedTarget(null);
+            }
+            renderContactRegistry();
+        };
+    }
+
+    if (solutionSaveBtn) {
+        solutionSaveBtn.onclick = () => {
+            if (!worldModel.selectedTargetId) return;
+            const target = getTargetById(worldModel.selectedTargetId);
+            if (!target) return;
+
+            const confidence = contactManager.setManualSolution(
+                worldModel.selectedTargetId,
+                {
+                    bearing: solutionBearingInput?.value,
+                    range: solutionRangeInput?.value,
+                    course: solutionCourseInput?.value,
+                    speed: solutionSpeedInput?.value
+                },
+                target
+            );
+
+            if (solutionConfidenceEl) {
+                solutionConfidenceEl.innerText = Number.isFinite(confidence) ? `CONF: ${confidence}%` : 'CONF: --';
+            }
+            renderContactRegistry();
+        };
+    }
 }
 
 async function initSystems() {
     cacheDomElements();
+    bindContactUiHandlers();
     await webgpuFft.init();
     await audioSys.init();
     audioSys.setComputeProcessor(webgpuFft);
@@ -71,6 +245,8 @@ async function initSystems() {
         await audioSys.createTargetAudio(target);
         tacticalView.addTarget(target);
     }
+    contactManager.update(simEngine.targets, worldModel.elapsedTime);
+    renderContactRegistry();
 
     if (rpmDisplay) rpmDisplay.innerText = `${currentRpmValue} RPM`;
     const rpmSlider = document.getElementById('rpm-slider');
@@ -83,6 +259,8 @@ async function initSystems() {
 
     simEngine.onTick = (targets, dt) => {
         worldModel.update(dt);
+        contactManager.update(targets, worldModel.elapsedTime);
+        renderContactRegistry();
         if (depthEl) {
             depthEl.innerText = `${worldModel.getOwnShipDepth().toFixed(0)}m`;
         }
@@ -146,6 +324,7 @@ window.cleanupSystems = () => {
     }
 
     simEngine.dispose();
+    contactManager.reset();
     audioSys.dispose();
     tacticalView.dispose();
     sonarVisuals.dispose();
@@ -155,6 +334,7 @@ window.cleanupSystems = () => {
     document.getElementById('setup-screen').classList.remove('hidden');
     document.getElementById('engine-controls').classList.add('hidden');
     if (statusDisplay) statusDisplay.innerText = "SYSTEMS OFFLINE";
+    renderContactRegistry();
 };
 
 // Also cleanup on page unload
@@ -262,22 +442,8 @@ document.querySelectorAll('input[name="view-mode"]').forEach(el => {
 
 // Target Selection
 const handleTargetSelected = (e) => {
-    worldModel.selectedTargetId = e.detail.id;
-    console.log("Target Selected:", worldModel.selectedTargetId);
-
-    // Update Audio Focus
-    audioSys.setFocusedTarget(worldModel.selectedTargetId);
-
-    if (!worldModel.selectedTargetId) {
-        if (targetIdEl) targetIdEl.innerText = "OWN-SHIP";
-        return;
-    }
-
-    const target = simEngine.targets.find(t => t.id === worldModel.selectedTargetId);
-    if (target) {
-        if (targetIdEl) targetIdEl.innerText = worldModel.selectedTargetId.toUpperCase();
-        updateDashboard(target);
-    }
+    setSelectedTarget(e.detail.id);
+    renderContactRegistry();
 };
 
 // Clock

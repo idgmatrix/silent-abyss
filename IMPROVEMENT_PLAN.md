@@ -48,11 +48,11 @@ Acceptance criteria:
 - Existing baseline scenario behavior remains reproducible.
 
 ### 6.2 Multi-Contact Management
-- [ ] Implement contact registry with stable tactical labels (`S1`, `S2`, ...), sorting, and filtering.
-- [ ] Add manual target management actions: focus, pin, relabel, and clear-lost.
-- [ ] Add manual solution entry workflow (bearing/range/course/speed estimates) with confidence scoring.
-- [ ] Add split/merge handling for ambiguous tracks and recovery flow for lost tracks.
-- [ ] Add UI/UX tests for selection persistence and label stability under updates.
+- [x] Implement contact registry with stable tactical labels (`S1`, `S2`, ...), sorting, and filtering.
+- [x] Add manual target management actions: focus, pin, relabel, and clear-lost.
+- [x] Add manual solution entry workflow (bearing/range/course/speed estimates) with confidence scoring.
+- [x] Add split/merge handling for ambiguous tracks and recovery flow for lost tracks.
+- [x] Add UI/UX tests for selection persistence and label stability under updates.
 
 Acceptance criteria:
 - Operators can manage multiple concurrent contacts without label churn.
