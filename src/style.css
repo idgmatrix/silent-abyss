@@ -2,7 +2,12 @@
 @tailwind components;
 @tailwind utilities;
 
-body { background-color: #00050a; color: #00ffcc; font-family: 'Courier New', Courier, monospace; overflow: hidden; }
+:root {
+    --font-ui: 'Share Tech Mono', 'IBM Plex Mono', 'Courier New', Courier, monospace;
+    --font-title: 'Rajdhani', 'Arial Narrow', Arial, sans-serif;
+}
+
+body { background-color: #00050a; color: #00ffcc; font-family: var(--font-ui); overflow: hidden; }
 .crt-overlay {
     position: fixed; top: 0; left: 0; width: 100%; height: 100%;
     background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.15) 50%), linear-gradient(90deg, rgba(255, 0, 0, 0.03), rgba(0, 255, 0, 0.01), rgba(0, 255, 0, 0.03));
@@ -17,9 +22,11 @@ body { background-color: #00050a; color: #00ffcc; font-family: 'Courier New', Co
 }
 
 .flex-1 {
+    flex: 1 1 0%;
     min-height: 0;
 }
 .glow-text { text-shadow: 0 0 10px rgba(0, 255, 204, 0.5); }
+h1 { font-family: var(--font-title); letter-spacing: 0.18em; }
 
 /* Global Canvas Styling */
 canvas {
@@ -58,6 +65,12 @@ canvas {
 }
 
 .label-tech { font-size: 9px; color: #008888; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 2px; }
+
+#left-column {
+    display: grid;
+    grid-template-rows: auto auto minmax(0, 1fr) minmax(0, 1fr);
+    gap: 0.75rem;
+}
 
 .contact-list {
     display: flex;

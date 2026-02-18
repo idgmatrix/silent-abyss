@@ -160,16 +160,23 @@ export class Tactical2DRenderer {
         }
 
         if (this.scanActive) {
+            const outerRadius = Math.max(0, this.scanRadius * scale);
+            const innerRadius = Math.max(0, (this.scanRadius - 5) * scale);
+
             ctx.strokeStyle = '#00ffff';
             ctx.lineWidth = 2;
-            ctx.beginPath();
-            ctx.arc(centerX, centerY, this.scanRadius * scale, 0, Math.PI * 2);
-            ctx.stroke();
+            if (outerRadius > 0) {
+                ctx.beginPath();
+                ctx.arc(centerX, centerY, outerRadius, 0, Math.PI * 2);
+                ctx.stroke();
+            }
 
-            ctx.strokeStyle = 'rgba(0, 255, 255, 0.4)';
-            ctx.beginPath();
-            ctx.arc(centerX, centerY, (this.scanRadius - 5) * scale, 0, Math.PI * 2);
-            ctx.stroke();
+            if (innerRadius > 0) {
+                ctx.strokeStyle = 'rgba(0, 255, 255, 0.4)';
+                ctx.beginPath();
+                ctx.arc(centerX, centerY, innerRadius, 0, Math.PI * 2);
+                ctx.stroke();
+            }
         }
 
         ctx.save();

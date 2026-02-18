@@ -13,6 +13,8 @@ import { CAMPAIGN_MISSIONS } from './data/missions.js';
 let currentRpmValue = 60;
 let renderRequest = null;
 let clockInterval = null;
+let leftSonarResizeObserver = null;
+let leftSonarWindowResizeHandler = null;
 
 // Subsystems
 const audioSys = new AudioSystem();
@@ -53,6 +55,61 @@ let contactClearLostBtn, solutionBearingInput, solutionRangeInput, solutionCours
 let solutionSaveBtn, solutionConfidenceEl;
 let missionSelectEl, missionResetBtn, missionTitleEl, missionStatusEl, missionBriefingEl, missionObjectivesEl;
 let demonFocusWidthSliderEl, demonFocusWidthValueEl, demonSelfNoiseToggleEl, demonStabilitySliderEl, demonStabilityValueEl, demonControlsToggleEl, demonControlsContentEl;
+
+function syncLeftSonarPanelHeights() {
+    const leftColumn = document.getElementById('left-column');
+    if (!leftColumn) return;
+
+    const panels = leftColumn.querySelectorAll(':scope > .panel');
+    if (panels.length < 4) return;
+
+    const topControlPanel = panels[0];
+    const targetIntelPanel = panels[1];
+    const lofarPanel = panels[2];
+    const demonPanel = panels[3];
+
+    const style = window.getComputedStyle(leftColumn);
+    const gap = Number.parseFloat(style.rowGap || style.gap || '0') || 0;
+    const availableHeight = leftColumn.clientHeight - topControlPanel.offsetHeight - targetIntelPanel.offsetHeight - (gap * 3);
+    const perPanelHeight = Math.max(0, Math.floor(availableHeight / 2));
+
+    lofarPanel.style.height = `${perPanelHeight}px`;
+    demonPanel.style.height = `${perPanelHeight}px`;
+
+    // Keep canvases in sync when panel sizes are adjusted outside SonarVisuals's own resize path.
+    sonarVisuals.resize();
+}
+
+function setupLeftSonarPanelHeightSync() {
+    const leftColumn = document.getElementById('left-column');
+    if (!leftColumn) return;
+
+    if (leftSonarResizeObserver) {
+        leftSonarResizeObserver.disconnect();
+        leftSonarResizeObserver = null;
+    }
+
+    if (leftSonarWindowResizeHandler) {
+        window.removeEventListener('resize', leftSonarWindowResizeHandler);
+        leftSonarWindowResizeHandler = null;
+    }
+
+    if (typeof ResizeObserver === 'function') {
+        leftSonarResizeObserver = new ResizeObserver(() => {
+            syncLeftSonarPanelHeights();
+        });
+
+        leftSonarResizeObserver.observe(leftColumn);
+        const directChildren = leftColumn.querySelectorAll(':scope > .panel');
+        if (directChildren[0]) leftSonarResizeObserver.observe(directChildren[0]);
+        if (directChildren[1]) leftSonarResizeObserver.observe(directChildren[1]);
+    } else {
+        leftSonarWindowResizeHandler = () => syncLeftSonarPanelHeights();
+        window.addEventListener('resize', leftSonarWindowResizeHandler);
+    }
+
+    syncLeftSonarPanelHeights();
+}
 
 function cacheDomElements() {
     rpmDisplay = document.getElementById('rpm-display');
@@ -339,6 +396,7 @@ function bindDemonControlUiHandlers() {
             demonControlsContentEl.classList.toggle('hidden');
             const isHidden = demonControlsContentEl.classList.contains('hidden');
             demonControlsToggleEl.innerHTML = isHidden ? '&#9654;' : '&#9660;';
+            requestAnimationFrame(() => syncLeftSonarPanelHeights());
         });
     }
 }
@@ -377,6 +435,7 @@ async function initSystems() {
     const engineControls = document.getElementById('engine-controls');
     if (setupScreen) setupScreen.classList.add('hidden');
     if (engineControls) engineControls.classList.remove('hidden');
+    setupLeftSonarPanelHeightSync();
 
     simEngine.onTick = (targets, dt) => {
         worldModel.update(dt);
@@ -418,6 +477,7 @@ async function initSystems() {
 
     // Final layout sync after DOM updates
     setTimeout(() => {
+        syncLeftSonarPanelHeights();
         sonarVisuals.resize();
         tacticalView.resize();
         depthProfileDisplay.resize();
@@ -462,6 +522,15 @@ window.cleanupSystems = () => {
     tacticalView.dispose();
     sonarVisuals.dispose();
     webgpuFft.dispose();
+
+    if (leftSonarResizeObserver) {
+        leftSonarResizeObserver.disconnect();
+        leftSonarResizeObserver = null;
+    }
+    if (leftSonarWindowResizeHandler) {
+        window.removeEventListener('resize', leftSonarWindowResizeHandler);
+        leftSonarWindowResizeHandler = null;
+    }
 
     // Reset UI state
     document.getElementById('setup-screen').classList.remove('hidden');

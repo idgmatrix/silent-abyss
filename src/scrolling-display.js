@@ -3,6 +3,7 @@ export class ScrollingDisplay {
         this.canvas = document.getElementById(canvasId);
         this.ctx = this.canvas ? this.canvas.getContext('2d', { alpha: false }) : null;
         this.decayRate = 0.01; // Default
+        this.topInsetPx = 0;
         this._resizeHandler = () => this.resize();
         this.resize();
         if (this.canvas) {
@@ -12,6 +13,15 @@ export class ScrollingDisplay {
 
     setDecayRate(rate) {
         this.decayRate = rate;
+    }
+
+    setTopInset(px) {
+        this.topInsetPx = Math.max(0, Number(px) || 0);
+    }
+
+    getTopInsetDevicePx() {
+        const dpr = window.devicePixelRatio || 1;
+        return Math.round(this.topInsetPx * dpr);
     }
 
     dispose() {
@@ -38,10 +48,27 @@ export class ScrollingDisplay {
         const w = this.canvas.width;
         const h = this.canvas.height;
         const shift = dpr;
+        const topInset = this.getTopInsetDevicePx();
+        const scrollStart = Math.min(h, Math.max(0, topInset));
+        const scrollHeight = h - scrollStart;
+        if (scrollHeight <= shift) {
+            this.ctx.clearRect(0, scrollStart, w, scrollHeight);
+            return;
+        }
 
         // Efficient self-copy scrolling
         this.ctx.imageSmoothingEnabled = false;
-        this.ctx.drawImage(this.canvas, 0, 0, w, h - shift, 0, shift, w, h - shift);
+        this.ctx.drawImage(
+            this.canvas,
+            0,
+            scrollStart,
+            w,
+            scrollHeight - shift,
+            0,
+            scrollStart + shift,
+            w,
+            scrollHeight - shift
+        );
 
         // Subtle phosphor decay for history
         if (this.decayRate > 0) {
@@ -49,12 +76,12 @@ export class ScrollingDisplay {
             this.ctx.save();
             this.ctx.globalCompositeOperation = 'source-over';
             this.ctx.fillStyle = `rgba(0, 0, 0, ${effectiveDecay})`;
-            this.ctx.fillRect(0, shift, w, h - shift);
+            this.ctx.fillRect(0, scrollStart + shift, w, scrollHeight - shift);
             this.ctx.restore();
         }
 
-        // Clear the new scan line area completely at the top
-        this.ctx.clearRect(0, 0, w, shift);
+        // Clear the new scan line area completely at the start of the scrolling region
+        this.ctx.clearRect(0, scrollStart, w, shift);
     }
 
     // Helper for drawing a single new line at the top (y=0)
@@ -67,7 +94,7 @@ export class ScrollingDisplay {
         // Draw the new line at y=0
         this.ctx.save();
         this.ctx.beginPath(); // Reset path to avoid connecting to previous lines
-        drawCallback(this.ctx, this.canvas.width, this.canvas.height);
+        drawCallback(this.ctx, this.canvas.width, this.canvas.height, this.getTopInsetDevicePx());
         this.ctx.restore();
     }
 }

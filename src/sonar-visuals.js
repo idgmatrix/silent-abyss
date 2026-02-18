@@ -136,9 +136,11 @@ export class SonarVisuals {
 
         this.btrDisplay = new ScrollingDisplay('btr-canvas');
         this.btrDisplay.setDecayRate(0.0015); // Slower decay to preserve deeper BTR history
+        this.btrDisplay.setTopInset(12);
 
         this.waterfallDisplay = new ScrollingDisplay('waterfall-canvas');
         this.waterfallDisplay.setDecayRate(0.0008); // Slower decay to preserve broadband waterfall history
+        this.waterfallDisplay.setTopInset(12);
 
         this._btrClickHandler = (e) => this.handleBTRClick(e);
 
@@ -217,8 +219,8 @@ export class SonarVisuals {
         this._updateDemonSpectrum(timeDomainData, sampleRate, selectedTarget);
         this.drawLOFAR(dataArray, currentRpm, sampleRate, fftSize, selectedTarget);
         this.drawDEMON(dataArray, currentRpm, selectedTarget, sampleRate);
-        this.drawBTR(targets, currentRpm, pingIntensity, this._pingEchoes);
-        this.drawWaterfall(dataArray, pingIntensity);
+        this.drawBTR(targets, currentRpm, pingIntensity, this._pingEchoes, selectedTarget);
+        this.drawWaterfall(dataArray, pingIntensity, sampleRate, fftSize);
     }
 
     _cloneDemonLock(lock) {
@@ -1044,21 +1046,29 @@ export class SonarVisuals {
             }
 
             ctx.beginPath();
-            ctx.strokeStyle = selectedTarget ? 'rgba(255, 60, 60, 0.7)' : 'rgba(255, 190, 40, 0.65)';
+            ctx.strokeStyle = selectedTarget ? 'rgba(255, 60, 60, 0.45)' : 'rgba(255, 190, 40, 0.4)';
             ctx.lineWidth = 1.05;
 
-            for (let hz = 1; hz <= maxFreqHz; hz++) {
+            const traceSamples = Math.max(240, Math.floor(plotWidth * 2.5));
+            for (let i = 0; i <= traceSamples; i++) {
+                const hz = 1 + (i / traceSamples) * (maxFreqHz - 1);
                 const x = toPlotX(hz);
-                const norm = Math.log1p((enhancedSpectrum[hz] / peak) * 50) / Math.log1p(50);
+                const lo = Math.max(1, Math.floor(hz));
+                const hi = Math.min(enhancedSpectrum.length - 1, lo + 1);
+                const t = Math.max(0, Math.min(1, hz - lo));
+                const v0 = enhancedSpectrum[lo] || 0;
+                const v1 = enhancedSpectrum[hi] || v0;
+                const value = v0 + (v1 - v0) * t;
+                const norm = Math.log1p((value / peak) * 50) / Math.log1p(50);
                 const y = cvs.height - norm * cvs.height * 0.75;
-                if (hz === 1) ctx.moveTo(x, y);
+                if (i === 0) ctx.moveTo(x, y);
                 else ctx.lineTo(x, y);
             }
             ctx.stroke();
 
             // Draw detected narrowband peaks.
-            ctx.strokeStyle = 'rgba(0, 255, 255, 0.38)';
-            ctx.lineWidth = 1;
+            ctx.strokeStyle = 'rgba(0, 255, 255, 0.9)';
+            ctx.lineWidth = 1.4;
             let peakDrawCount = 0;
             for (const hz of this._demonPeaksHz) {
                 if (hz > maxFreqHz) continue;
@@ -1107,6 +1117,10 @@ export class SonarVisuals {
         this._demonHarmonicScore = selectedLock ? selectedLock.confidence : 0;
         if (hasSelectedTarget && trackedBpfHz > 0 && Number.isFinite(trackedBpfHz) && harmonicGuidesVisible) {
             ctx.save();
+            const toleranceHz = Math.max(0.5, this._demonFocusWidthHz);
+            ctx.fillStyle = harmonicEvalEnabled
+                ? 'rgba(170, 255, 170, 0.14)'
+                : 'rgba(170, 255, 170, 0.08)';
             ctx.strokeStyle = harmonicEvalEnabled ? 'rgba(170, 255, 170, 0.9)' : 'rgba(170, 255, 170, 0.35)';
             ctx.lineWidth = harmonicEvalEnabled ? 1.3 : 1.0;
             ctx.setLineDash([2, 2]);
@@ -1114,6 +1128,13 @@ export class SonarVisuals {
                 const f = trackedBpfHz * k;
                 if (f > maxFreqHz) break;
                 targetHarmonicsHz.push(f);
+
+                const bandLeftHz = Math.max(0, f - toleranceHz);
+                const bandRightHz = Math.min(maxFreqHz, f + toleranceHz);
+                const bandX = toPlotX(bandLeftHz);
+                const bandW = Math.max(1, toPlotX(bandRightHz) - bandX);
+                ctx.fillRect(bandX, 0, bandW, cvs.height * 0.8);
+
                 const x = toPlotX(f);
                 ctx.beginPath();
                 ctx.moveTo(x, 0);
@@ -1239,22 +1260,22 @@ export class SonarVisuals {
         }
     }
 
-    drawBTR(targets, currentRpm, pingIntensity, pingEchoes = []) {
+    drawBTR(targets, currentRpm, pingIntensity, pingEchoes = [], selectedTarget = null) {
         if (!this.btrDisplay) return;
 
         const theme = BTR_THEMES[this.currentTheme];
 
-        this.btrDisplay.drawNextLine((ctx, width) => {
+        this.btrDisplay.drawNextLine((ctx, width, _height, scanY) => {
             // Background with faint sea-noise speckle
             ctx.fillStyle = '#000000';
-            ctx.fillRect(0, 0, width, 1);
+            ctx.fillRect(0, scanY, width, 1);
 
             // Speckle noise
             for (let i = 0; i < width; i += 4) {
                 if (Math.random() > 0.95) {
                     const noiseVal = Math.random() * 0.15;
                     ctx.fillStyle = `rgba(${theme.BACKGROUND[0]}, ${theme.BACKGROUND[1]}, ${theme.BACKGROUND[2]}, ${noiseVal})`;
-                    ctx.fillRect(i, 0, 2, 1);
+                    ctx.fillRect(i, scanY, 2, 1);
                 }
             }
 
@@ -1282,7 +1303,7 @@ export class SonarVisuals {
                 grad.addColorStop(1, 'rgba(0,0,0,0)');
 
                 ctx.fillStyle = grad;
-                ctx.fillRect(targetX - 5, 0, 10, 1);
+                ctx.fillRect(targetX - 5, scanY, 10, 1);
             });
 
             // Self Noise
@@ -1299,30 +1320,158 @@ export class SonarVisuals {
                 grad.addColorStop(1, 'rgba(0,0,0,0)');
 
                 ctx.fillStyle = grad;
-                ctx.fillRect(selfX - selfW/2, 0, selfW, 1);
+                ctx.fillRect(selfX - selfW/2, scanY, selfW, 1);
 
                 // Wide background noise from self engines
                 ctx.fillStyle = `rgba(${theme.SELF[0]}, ${theme.SELF[1]}, ${theme.SELF[2]}, ${selfNoiseIntensity * 0.05})`;
-                ctx.fillRect(0, 0, width, 1);
+                ctx.fillRect(0, scanY, width, 1);
             }
 
             // Outgoing ping — faint full-panel wash (represents own transmitted pulse)
             if (pingIntensity > 0) {
                 ctx.fillStyle = `rgba(${theme.PING[0]}, ${theme.PING[1]}, ${theme.PING[2]}, ${pingIntensity * 0.18})`;
-                ctx.fillRect(0, 0, width, 1);
+                ctx.fillRect(0, scanY, width, 1);
             }
         });
+
+        this._drawBTRBearingScale(theme);
+        this._drawBTRSelectedGate(selectedTarget, theme);
     }
 
-    drawWaterfall(dataArray, pingIntensity = 0) {
+    _drawBTRBearingScale(theme) {
+        if (!this.btrDisplay || !this.btrDisplay.ctx || !this.btrDisplay.canvas) return;
+        const ctx = this.btrDisplay.ctx;
+        const width = this.btrDisplay.canvas.width;
+        const topInset = this.btrDisplay.getTopInsetDevicePx
+            ? this.btrDisplay.getTopInsetDevicePx()
+            : 0;
+        if (topInset <= 0) return;
+
+        const dpr = window.devicePixelRatio || 1;
+        const minorTick = Math.max(2, Math.round(2 * dpr));
+        const majorTick = Math.max(4, Math.round(4 * dpr));
+
+        ctx.save();
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.9)';
+        ctx.fillRect(0, 0, width, topInset);
+
+        ctx.strokeStyle = `rgba(${theme.PING[0]}, ${theme.PING[1]}, ${theme.PING[2]}, 0.38)`;
+        ctx.lineWidth = Math.max(1, dpr);
+        ctx.beginPath();
+        ctx.moveTo(0, topInset - 0.5);
+        ctx.lineTo(width, topInset - 0.5);
+        ctx.stroke();
+
+        ctx.font = `${Math.max(7, Math.round(7 * dpr))}px "Share Tech Mono", monospace`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'top';
+
+        for (let bearing = 0; bearing <= 360; bearing += 10) {
+            const x = (bearing / 360) * width;
+            const major = bearing % 30 === 0;
+            const tickLen = major ? majorTick : minorTick;
+            ctx.strokeStyle = major
+                ? `rgba(${theme.PING[0]}, ${theme.PING[1]}, ${theme.PING[2]}, 0.72)`
+                : `rgba(${theme.PING[0]}, ${theme.PING[1]}, ${theme.PING[2]}, 0.36)`;
+            ctx.beginPath();
+            ctx.moveTo(x + 0.5, topInset - tickLen);
+            ctx.lineTo(x + 0.5, topInset);
+            ctx.stroke();
+
+            if (major && bearing % 60 === 0) {
+                ctx.fillStyle = `rgba(${theme.PING[0]}, ${theme.PING[1]}, ${theme.PING[2]}, 0.85)`;
+                ctx.fillText(`${bearing}`, x, 1);
+            }
+        }
+        ctx.restore();
+    }
+
+    _drawBTRSelectedGate(selectedTarget, theme) {
+        if (!selectedTarget || !Number.isFinite(selectedTarget.bearing)) return;
+        if (!this.btrDisplay || !this.btrDisplay.ctx || !this.btrDisplay.canvas) return;
+
+        const ctx = this.btrDisplay.ctx;
+        const width = this.btrDisplay.canvas.width;
+        const topInset = this.btrDisplay.getTopInsetDevicePx
+            ? this.btrDisplay.getTopInsetDevicePx()
+            : 0;
+        const dpr = window.devicePixelRatio || 1;
+
+        const bearing = ((selectedTarget.bearing % 360) + 360) % 360;
+        const x = (bearing / 360) * width;
+        const gateHalfWidth = (1.5 / 360) * width; // +/- 1.5 degrees tolerance band
+        const isLost = selectedTarget.state === TrackState.LOST;
+
+        ctx.save();
+
+        // Draw compact brackets at the newest scan line instead of a full-height guide.
+        // This avoids masking nearby contact streaks and tolerates slight bearing jitter.
+        const scanY = topInset;
+        const bracketH = Math.max(6, Math.round(6 * dpr));
+        const bracketGap = Math.max(2, Math.round(2 * dpr));
+        ctx.strokeStyle = isLost
+            ? 'rgba(255, 180, 90, 0.72)'
+            : 'rgba(255, 235, 140, 0.95)';
+        ctx.lineWidth = Math.max(1, dpr);
+        if (isLost) ctx.setLineDash([3, 2]);
+        ctx.beginPath();
+        ctx.moveTo(x - gateHalfWidth, scanY + bracketGap);
+        ctx.lineTo(x - gateHalfWidth, scanY + bracketH);
+        ctx.moveTo(x - gateHalfWidth, scanY + bracketGap);
+        ctx.lineTo(x - gateHalfWidth + 3 * dpr, scanY + bracketGap);
+        ctx.moveTo(x + gateHalfWidth, scanY + bracketGap);
+        ctx.lineTo(x + gateHalfWidth, scanY + bracketH);
+        ctx.moveTo(x + gateHalfWidth, scanY + bracketGap);
+        ctx.lineTo(x + gateHalfWidth - 3 * dpr, scanY + bracketGap);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // Top marker triangle.
+        const triH = Math.max(4, Math.round(4 * dpr));
+        const triW = Math.max(6, Math.round(6 * dpr));
+        ctx.fillStyle = `rgba(${theme.PING[0]}, ${theme.PING[1]}, ${theme.PING[2]}, 0.95)`;
+        ctx.beginPath();
+        ctx.moveTo(x, topInset - 1);
+        ctx.lineTo(x - triW / 2, topInset - triH - 1);
+        ctx.lineTo(x + triW / 2, topInset - triH - 1);
+        ctx.closePath();
+        ctx.fill();
+
+        // Label in top lane.
+        const labelId = selectedTarget.id ? selectedTarget.id.replace('target-', 'T') : 'SEL';
+        const label = `SEL ${labelId} ${bearing.toFixed(1)}\u00B0`;
+        ctx.font = `${Math.max(7, Math.round(7 * dpr))}px "Share Tech Mono", monospace`;
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'top';
+
+        const textWidth = ctx.measureText(label).width;
+        const pad = Math.max(2, Math.round(2 * dpr));
+        let textX = x + pad + 2;
+        if (textX + textWidth + pad * 2 > width) {
+            textX = Math.max(0, x - textWidth - pad * 2 - 2);
+        }
+
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.62)';
+        ctx.fillRect(textX - pad, 0, textWidth + pad * 2, Math.max(9, topInset - 1));
+        ctx.fillStyle = isLost
+            ? 'rgba(255, 185, 110, 0.92)'
+            : 'rgba(255, 238, 150, 0.98)';
+        ctx.fillText(label, textX, 1);
+
+        ctx.restore();
+    }
+
+    drawWaterfall(dataArray, pingIntensity = 0, sampleRate = 0, fftSize = 0) {
         if (!this.waterfallDisplay || !this.waterfallDisplay.ctx) return;
 
         const theme = BTR_THEMES[this.currentWaterfallTheme].WATERFALL;
         const source = this.lofarSpectrum || dataArray;
         const sourceIsFloat = source instanceof Float32Array;
+        const totalSamples = Math.floor(source.length * 0.8);
+        const binHz = sampleRate > 0 && fftSize > 0 ? sampleRate / fftSize : 0;
+        const maxFreqHz = totalSamples > 0 && binHz > 0 ? totalSamples * binHz : 0;
 
-        this.waterfallDisplay.drawNextLine((ctx, width) => {
-            const totalSamples = Math.floor(source.length * 0.8);
+        this.waterfallDisplay.drawNextLine((ctx, width, _height, scanY) => {
             const imageData = ctx.createImageData(width, 1);
             const data = imageData.data;
             const NOISE_FLOOR = 0.004;
@@ -1367,10 +1516,70 @@ export class SonarVisuals {
                 data[i + 3] = 255;
             }
 
-            ctx.putImageData(imageData, 0, 0);
+            ctx.putImageData(imageData, 0, scanY);
 
 
         });
+        this._drawWaterfallFrequencyScale(theme, maxFreqHz);
+    }
+
+    _drawWaterfallFrequencyScale(theme, maxFreqHz) {
+        if (!this.waterfallDisplay || !this.waterfallDisplay.ctx || !this.waterfallDisplay.canvas) return;
+        const ctx = this.waterfallDisplay.ctx;
+        const width = this.waterfallDisplay.canvas.width;
+        const topInset = this.waterfallDisplay.getTopInsetDevicePx
+            ? this.waterfallDisplay.getTopInsetDevicePx()
+            : 0;
+        if (topInset <= 0 || !Number.isFinite(maxFreqHz) || maxFreqHz <= 0) return;
+
+        const dpr = window.devicePixelRatio || 1;
+        const tickStepCandidates = [100, 200, 500, 1000, 2000, 5000, 10000];
+        let tickStep = tickStepCandidates[tickStepCandidates.length - 1];
+        for (const candidate of tickStepCandidates) {
+            if (maxFreqHz / candidate <= 8) {
+                tickStep = candidate;
+                break;
+            }
+        }
+
+        const minorTick = Math.max(2, Math.round(2 * dpr));
+        const majorTick = Math.max(4, Math.round(4 * dpr));
+
+        ctx.save();
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.9)';
+        ctx.fillRect(0, 0, width, topInset);
+
+        ctx.strokeStyle = `rgba(${theme.high[0]}, ${theme.high[1]}, ${theme.high[2]}, 0.4)`;
+        ctx.lineWidth = Math.max(1, dpr);
+        ctx.beginPath();
+        ctx.moveTo(0, topInset - 0.5);
+        ctx.lineTo(width, topInset - 0.5);
+        ctx.stroke();
+
+        ctx.font = `${Math.max(7, Math.round(7 * dpr))}px "Share Tech Mono", monospace`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'top';
+
+        const majorStep = tickStep * 2;
+        for (let hz = 0; hz <= maxFreqHz; hz += tickStep) {
+            const x = (hz / maxFreqHz) * width;
+            const isMajor = hz % majorStep === 0;
+            const tickLen = isMajor ? majorTick : minorTick;
+            const alpha = isMajor ? 0.78 : 0.38;
+            ctx.strokeStyle = `rgba(${theme.high[0]}, ${theme.high[1]}, ${theme.high[2]}, ${alpha})`;
+            ctx.beginPath();
+            ctx.moveTo(x + 0.5, topInset - tickLen);
+            ctx.lineTo(x + 0.5, topInset);
+            ctx.stroke();
+
+            const label = hz >= 1000
+                ? `${Number.isInteger(hz / 1000) ? hz / 1000 : (hz / 1000).toFixed(1)}k`
+                : `${hz}`;
+            const labelAlpha = isMajor ? 0.88 : 0.62;
+            ctx.fillStyle = `rgba(${theme.high[0]}, ${theme.high[1]}, ${theme.high[2]}, ${labelAlpha})`;
+            ctx.fillText(label, x, 1);
+        }
+        ctx.restore();
     }
 
     dispose() {

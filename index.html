@@ -4,6 +4,12 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>The Silent Abyss - Phase 5.7 Acoustic Fidelity</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <link rel="icon" href="/favicon.png" type="image/png" sizes="64x64">
+    <link rel="shortcut icon" href="/favicon.ico">
     <link rel="stylesheet" href="/src/style.css">
 </head>
 <body class="p-3 h-screen flex flex-col gap-3">
@@ -31,8 +37,8 @@
         </div>
     </header>
 
-    <main class="flex-1 grid grid-cols-12 gap-3 overflow-hidden">
-        <section class="col-span-3 flex flex-col gap-3 overflow-hidden min-h-0">
+    <main class="flex-1 grid grid-cols-12 grid-rows-1 gap-3 overflow-hidden min-h-0">
+        <section id="left-column" class="col-span-3 h-full overflow-hidden min-h-0">
             <div class="panel p-3 flex-none flex flex-col gap-2">
                 <div class="label-tech border-b border-cyan-900 pb-1">Main Drive Control</div>
 
@@ -129,14 +135,14 @@
                 </div>
             </div>
 
-            <div class="panel p-2 flex-[10] min-h-0">
+            <div class="panel p-2 min-h-0">
                 <div class="label-tech">LOFAR (Narrowband Frequency)</div>
                 <div class="flex-1 min-h-0 bg-black/50 relative">
                     <canvas id="lofar-canvas"></canvas>
                 </div>
             </div>
 
-            <div class="panel p-2 flex-[10] min-h-0">
+            <div class="panel p-2 min-h-0">
                 <div class="label-tech">DEMON (Propeller Signature)</div>
                 <div class="flex-1 min-h-0 bg-black/50 relative">
                     <canvas id="demon-canvas"></canvas>
@@ -144,7 +150,7 @@
             </div>
         </section>
 
-        <section class="col-span-6 flex flex-col gap-3 min-h-0">
+        <section class="col-span-6 h-full flex flex-col gap-3 overflow-hidden min-h-0">
             <div class="panel flex-[2] relative overflow-hidden">
                 <div class="h-full flex">
                     <div id="tactical-viewport" class="flex-1"></div>
@@ -177,7 +183,7 @@
             </div>
         </section>
 
-        <section class="col-span-3 flex flex-col gap-3 overflow-hidden min-h-0">
+        <section class="col-span-3 h-full flex flex-col gap-3 overflow-hidden min-h-0">
             <div class="panel p-2 flex-none">
                 <div class="label-tech mb-2 border-b border-cyan-900 pb-1">Contact Registry</div>
                 <div class="grid grid-cols-2 gap-1 mb-2">

@@ -310,4 +310,18 @@ class WasmEngineProcessor extends AudioWorkletProcessor {
     }
 }
 
-registerProcessor('wasm-engine-processor', WasmEngineProcessor);
+const WASM_ENGINE_PROCESSOR_NAME = 'wasm-engine-processor';
+
+if (!globalThis.__wasmEngineProcessorRegistered) {
+    try {
+        registerProcessor(WASM_ENGINE_PROCESSOR_NAME, WasmEngineProcessor);
+        globalThis.__wasmEngineProcessorRegistered = true;
+    } catch (error) {
+        // During HMR or repeated addModule calls, the processor may already be registered.
+        if (error && error.name === 'NotSupportedError') {
+            globalThis.__wasmEngineProcessorRegistered = true;
+        } else {
+            throw error;
+        }
+    }
+}
