@@ -82,6 +82,16 @@ export class SonarVisuals {
         this.lofarSpectrum = null;
         this._lofarPending = null;
         this._lofarFrameCounter = 0;
+        this._demonSpectrum = null;
+        this._demonEnhancedSpectrum = null;
+        this._demonSmoothedSpectrum = null;
+        this._demonPeaksHz = [];
+        this._demonHarmonicScore = 0;
+        this._demonDisplayHarmonicScore = 0;
+        this._demonFrameCounter = 0;
+        this._demonSampleBuffer = new Float32Array(32768);
+        this._demonSampleWriteIndex = 0;
+        this._demonSampleCount = 0;
 
         this.lineHistory = [];
         this.maxLineHistory = 15;
@@ -171,8 +181,9 @@ export class SonarVisuals {
         if (!dataArray) return;
         this.lastTargets = targets;
         this._updateLofarSpectrum(dataArray, timeDomainData, fftSize);
+        this._updateDemonSpectrum(timeDomainData, sampleRate);
         this.drawLOFAR(dataArray, currentRpm, sampleRate, fftSize, selectedTarget);
-        this.drawDEMON(dataArray, currentRpm, selectedTarget);
+        this.drawDEMON(dataArray, currentRpm, selectedTarget, sampleRate);
         this.drawBTR(targets, currentRpm, pingIntensity);
         this.drawWaterfall(dataArray);
     }
@@ -287,45 +298,346 @@ export class SonarVisuals {
             });
     }
 
-    drawDEMON(dataArray, currentRpm, selectedTarget) {
+    _updateDemonSpectrum(timeDomainData, sampleRate) {
+        if (!(timeDomainData instanceof Float32Array)) return;
+        if (!sampleRate || sampleRate <= 0) return;
+
+        this._pushDemonSamples(timeDomainData);
+
+        // Update less frequently to keep render cost stable.
+        this._demonFrameCounter++;
+        if (this._demonFrameCounter % 3 !== 0) return;
+
+        const analysisWindow = this._getDemonAnalysisWindow();
+        if (!analysisWindow) return;
+
+        const rawSpectrum = this._computeDemonSpectrum(analysisWindow, sampleRate, 120);
+        this._demonSpectrum = rawSpectrum;
+        this._demonEnhancedSpectrum = this._enhanceDemonSpectrum(rawSpectrum);
+        this._demonSmoothedSpectrum = this._smoothDemonSpectrum(this._demonEnhancedSpectrum);
+        this._demonPeaksHz = this._detectDemonPeaks(this._demonSmoothedSpectrum, 6);
+    }
+
+    _pushDemonSamples(samples) {
+        if (!(samples instanceof Float32Array)) return;
+
+        for (let i = 0; i < samples.length; i++) {
+            this._demonSampleBuffer[this._demonSampleWriteIndex] = samples[i];
+            this._demonSampleWriteIndex =
+                (this._demonSampleWriteIndex + 1) % this._demonSampleBuffer.length;
+        }
+
+        this._demonSampleCount = Math.min(
+            this._demonSampleBuffer.length,
+            this._demonSampleCount + samples.length
+        );
+    }
+
+    _getDemonAnalysisWindow() {
+        const targetLength = this._demonSampleCount >= 16384 ? 16384 : 8192;
+        if (this._demonSampleCount < targetLength) return null;
+
+        const out = new Float32Array(targetLength);
+        const startIndex =
+            (this._demonSampleWriteIndex - targetLength + this._demonSampleBuffer.length) %
+            this._demonSampleBuffer.length;
+
+        const firstChunk = Math.min(
+            targetLength,
+            this._demonSampleBuffer.length - startIndex
+        );
+        out.set(this._demonSampleBuffer.subarray(startIndex, startIndex + firstChunk), 0);
+        if (firstChunk < targetLength) {
+            out.set(
+                this._demonSampleBuffer.subarray(0, targetLength - firstChunk),
+                firstChunk
+            );
+        }
+
+        return out;
+    }
+
+    _computeDemonSpectrum(timeDomainData, sampleRate, maxFreqHz) {
+        const n = Math.min(timeDomainData.length, 4096);
+        const spectrum = new Float32Array(maxFreqHz + 1);
+        if (n < 64) return spectrum;
+
+        // Approximate DEMON chain:
+        // 1) band-limit the raw signal to machinery band
+        // 2) full-wave rectify to get envelope
+        // 3) remove slow DC drift from envelope
+        const signal = new Float32Array(n);
+        let meanRaw = 0;
+        for (let i = 0; i < n; i++) meanRaw += timeDomainData[i];
+        meanRaw /= n;
+
+        const hpCutHz = 20;
+        const lpCutHz = 1800;
+        const hpRc = 1 / (2 * Math.PI * hpCutHz);
+        const lpRc = 1 / (2 * Math.PI * lpCutHz);
+        const dt = 1 / sampleRate;
+        const hpAlpha = hpRc / (hpRc + dt);
+        const lpAlpha = dt / (lpRc + dt);
+
+        let hpY = 0;
+        let hpPrevX = 0;
+        let lpY = 0;
+
+        const envelope = new Float32Array(n);
+        for (let i = 0; i < n; i++) {
+            const x = timeDomainData[i] - meanRaw;
+            hpY = hpAlpha * (hpY + x - hpPrevX);
+            hpPrevX = x;
+            lpY += lpAlpha * (hpY - lpY);
+            envelope[i] = Math.abs(lpY);
+        }
+
+        // Remove very low-frequency drift from envelope.
+        const envHpCutHz = 1.0;
+        const envHpRc = 1 / (2 * Math.PI * envHpCutHz);
+        const envHpAlpha = envHpRc / (envHpRc + dt);
+        let envHpY = 0;
+        let envHpPrevX = envelope[0] || 0;
+        for (let i = 0; i < n; i++) {
+            const x = envelope[i];
+            envHpY = envHpAlpha * (envHpY + x - envHpPrevX);
+            envHpPrevX = x;
+            signal[i] = envHpY;
+        }
+
+        const hannDenom = Math.max(1, n - 1);
+        for (let f = 1; f <= maxFreqHz; f++) {
+            const omega = (2 * Math.PI * f) / sampleRate;
+            let re = 0;
+            let im = 0;
+
+            for (let i = 0; i < n; i++) {
+                const hann = 0.5 * (1 - Math.cos((2 * Math.PI * i) / hannDenom));
+                const v = signal[i] * hann;
+                const phase = omega * i;
+                re += v * Math.cos(phase);
+                im -= v * Math.sin(phase);
+            }
+
+            spectrum[f] = Math.hypot(re, im) / n;
+        }
+
+        return spectrum;
+    }
+
+    _enhanceDemonSpectrum(spectrum) {
+        if (!(spectrum instanceof Float32Array) || spectrum.length < 4) {
+            return new Float32Array(0);
+        }
+
+        const out = new Float32Array(spectrum.length);
+        const radius = 3;
+        let peak = 1e-6;
+
+        for (let i = 1; i < spectrum.length; i++) {
+            let sum = 0;
+            let count = 0;
+            const start = Math.max(1, i - radius);
+            const end = Math.min(spectrum.length - 1, i + radius);
+            for (let j = start; j <= end; j++) {
+                if (j === i) continue;
+                sum += spectrum[j];
+                count++;
+            }
+            const localNoise = count > 0 ? sum / count : 0;
+            const whitened = Math.max(0, spectrum[i] - localNoise * 0.92);
+            out[i] = whitened;
+            if (whitened > peak) peak = whitened;
+        }
+
+        if (peak <= 1e-6) return out;
+        for (let i = 1; i < out.length; i++) {
+            out[i] /= peak;
+        }
+
+        return out;
+    }
+
+    _smoothDemonSpectrum(spectrum) {
+        if (!(spectrum instanceof Float32Array) || spectrum.length === 0) {
+            return new Float32Array(0);
+        }
+
+        if (
+            !(this._demonSmoothedSpectrum instanceof Float32Array) ||
+            this._demonSmoothedSpectrum.length !== spectrum.length
+        ) {
+            this._demonSmoothedSpectrum = new Float32Array(spectrum.length);
+        }
+
+        for (let i = 1; i < spectrum.length; i++) {
+            const prev = this._demonSmoothedSpectrum[i];
+            const curr = spectrum[i];
+            const alpha = curr >= prev ? 0.2 : 0.08;
+            this._demonSmoothedSpectrum[i] = prev + (curr - prev) * alpha;
+        }
+
+        return this._demonSmoothedSpectrum;
+    }
+
+    _detectDemonPeaks(enhancedSpectrum, maxPeaks = 6) {
+        if (!(enhancedSpectrum instanceof Float32Array) || enhancedSpectrum.length < 4) return [];
+
+        const peaks = [];
+        for (let hz = 2; hz < enhancedSpectrum.length - 1; hz++) {
+            const v = enhancedSpectrum[hz];
+            if (v < 0.18) continue;
+            if (v > enhancedSpectrum[hz - 1] && v >= enhancedSpectrum[hz + 1]) {
+                peaks.push({ hz, value: v });
+            }
+        }
+
+        peaks.sort((a, b) => b.value - a.value);
+        return peaks.slice(0, maxPeaks).map((p) => p.hz).sort((a, b) => a - b);
+    }
+
+    drawDEMON(dataArray, currentRpm, selectedTarget, sampleRate) {
         if (!this.dCtx || !this.dCanvas) return;
         const ctx = this.dCtx;
         const cvs = this.dCanvas;
+        const maxFreqHz = 120;
 
         ctx.fillStyle = 'rgba(0, 5, 10, 0.8)';
         ctx.fillRect(0, 0, cvs.width, cvs.height);
-        ctx.strokeStyle = selectedTarget ? '#ff3333' : '#ffaa00';
-        ctx.lineWidth = 2;
-        const segments = 5;
-        const spacing = cvs.width / (segments + 1);
-        for(let j=1; j<=segments; j++) {
-            const peakX = j * spacing;
-            const val = dataArray[j * 2] + (Math.random() * 20);
-            const intensity = (val / 255) * cvs.height * 0.7;
-            ctx.beginPath();
-            ctx.moveTo(peakX, cvs.height);
-            ctx.lineTo(peakX, cvs.height - intensity);
-            ctx.stroke();
+
+        // Background frequency grid.
+        ctx.strokeStyle = 'rgba(0, 255, 255, 0.08)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        for (let hz = 10; hz <= maxFreqHz; hz += 10) {
+            const x = (hz / maxFreqHz) * cvs.width;
+            ctx.moveTo(x, 0);
+            ctx.lineTo(x, cvs.height);
         }
+        ctx.stroke();
+
+        // DEMON spectrum trace (envelope spectrum in low-frequency band).
+        const enhancedSpectrum = this._demonSmoothedSpectrum;
+        if (enhancedSpectrum && enhancedSpectrum.length > 2) {
+            let peak = 1e-6;
+            for (let i = 1; i < enhancedSpectrum.length; i++) {
+                if (enhancedSpectrum[i] > peak) peak = enhancedSpectrum[i];
+            }
+
+            ctx.beginPath();
+            ctx.strokeStyle = selectedTarget ? '#ff3333' : '#ffaa00';
+            ctx.lineWidth = 1.5;
+
+            for (let hz = 1; hz <= maxFreqHz; hz++) {
+                const x = (hz / maxFreqHz) * cvs.width;
+                const norm = Math.log1p((enhancedSpectrum[hz] / peak) * 50) / Math.log1p(50);
+                const y = cvs.height - norm * cvs.height * 0.75;
+                if (hz === 1) ctx.moveTo(x, y);
+                else ctx.lineTo(x, y);
+            }
+            ctx.stroke();
+
+            // Draw detected narrowband peaks.
+            ctx.strokeStyle = 'rgba(0, 255, 255, 0.9)';
+            ctx.lineWidth = 1;
+            for (const hz of this._demonPeaksHz) {
+                const x = (hz / maxFreqHz) * cvs.width;
+                ctx.beginPath();
+                ctx.moveTo(x, cvs.height);
+                ctx.lineTo(x, cvs.height * 0.18);
+                ctx.stroke();
+            }
+        } else {
+            // Fallback when time-domain data isn't available.
+            ctx.strokeStyle = 'rgba(255, 170, 0, 0.6)';
+            ctx.lineWidth = 2;
+            const bins = Math.min(12, dataArray.length);
+            for (let i = 1; i < bins; i++) {
+                const x = (i / bins) * cvs.width;
+                const val = dataArray[i] / 255;
+                const y = cvs.height - val * cvs.height * 0.55;
+                ctx.beginPath();
+                ctx.moveTo(x, cvs.height);
+                ctx.lineTo(x, y);
+                ctx.stroke();
+            }
+        }
+
+        // Blade-rate harmonic markers.
+        const selectedBladeCount = Number.isFinite(selectedTarget?.bladeCount)
+            ? Math.max(1, Math.floor(selectedTarget.bladeCount))
+            : null;
+        const bladeCountForMarkers = selectedBladeCount ?? 5;
+        const rpmForMarkers = selectedTarget?.rpm ?? currentRpm;
+        const bpfHz = rpmForMarkers > 0 ? (rpmForMarkers / 60) * bladeCountForMarkers : 0;
+        this._demonHarmonicScore = 0;
+        if (bpfHz > 0 && Number.isFinite(bpfHz)) {
+            ctx.save();
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.6)';
+            ctx.setLineDash([3, 3]);
+            let harmonicHits = 0;
+            let harmonicCount = 0;
+            for (let k = 1; k <= 8; k++) {
+                const f = bpfHz * k;
+                if (f > maxFreqHz) break;
+                harmonicCount++;
+                const x = (f / maxFreqHz) * cvs.width;
+                ctx.beginPath();
+                ctx.moveTo(x, 0);
+                ctx.lineTo(x, cvs.height);
+                ctx.stroke();
+
+                const nearestHz = Math.round(f);
+                if (
+                    enhancedSpectrum &&
+                    nearestHz > 1 &&
+                    nearestHz < enhancedSpectrum.length &&
+                    enhancedSpectrum[nearestHz] > 0.16
+                ) {
+                    harmonicHits++;
+                }
+            }
+            ctx.restore();
+            this._demonHarmonicScore =
+                harmonicCount > 0 ? harmonicHits / harmonicCount : 0;
+        }
+        this._demonDisplayHarmonicScore +=
+            (this._demonHarmonicScore - this._demonDisplayHarmonicScore) * 0.12;
+
         ctx.fillStyle = selectedTarget ? '#ff3333' : '#00ffff';
         ctx.font = '9px Arial';
         const label = selectedTarget ? `TARGET ANALYSIS: ${selectedTarget.type} (T${selectedTarget.id.split('-')[1]})` : `AUTO-ANALYSIS: ${currentRpm > 0 ? 'ENGINE ACTIVE' : 'IDLE'}`;
         ctx.fillText(label, 10, 15);
 
+        ctx.fillStyle = '#ffffff';
+        ctx.font = '10px monospace';
+        ctx.fillText(`BLADE COUNT: ${selectedBladeCount ?? '--'}`, 10, 30);
+        if (bpfHz > 0) {
+            ctx.fillText(`BPF: ${bpfHz.toFixed(1)} Hz`, 10, 44);
+        }
+        if (sampleRate > 0) {
+            ctx.fillText(`BAND: 1-${maxFreqHz} Hz`, 10, 58);
+        }
+        ctx.fillText(
+            `HARMONIC MATCH: ${(this._demonDisplayHarmonicScore * 100).toFixed(0)}%`,
+            10,
+            72
+        );
+
         if (selectedTarget && selectedTarget.classification) {
             const cls = selectedTarget.classification;
             ctx.fillStyle = '#ffffff';
             ctx.font = '10px monospace';
-            ctx.fillText(`STATUS: ${cls.state}`, 10, 30);
+            ctx.fillText(`STATUS: ${cls.state}`, 10, 86);
 
             // Progress bar
             ctx.fillStyle = 'rgba(255, 255, 255, 0.2)';
-            ctx.fillRect(10, 35, 100, 4);
+            ctx.fillRect(10, 91, 100, 4);
             ctx.fillStyle = cls.confirmed ? '#00ff00' : '#ffffff';
-            ctx.fillRect(10, 35, cls.progress * 100, 4);
+            ctx.fillRect(10, 91, cls.progress * 100, 4);
 
             if (cls.identifiedClass) {
-                ctx.fillText(`CLASS: ${cls.identifiedClass.toUpperCase()}`, 10, 50);
+                ctx.fillText(`CLASS: ${cls.identifiedClass.toUpperCase()}`, 10, 106);
             }
         }
     }
@@ -428,6 +740,9 @@ export class SonarVisuals {
             const totalSamples = Math.floor(source.length * 0.8);
             const imageData = ctx.createImageData(width, 1);
             const data = imageData.data;
+            const NOISE_FLOOR = 0.004;
+            const DISPLAY_GAIN = 2.0;
+            const LOG_NORMALIZER = Math.log1p(40);
 
             // Cache colors to avoid overhead in loop
             const low = theme.low;
@@ -439,32 +754,32 @@ export class SonarVisuals {
                 const val = source[sampleIdx] ?? 0;
                 const norm = sourceIsFloat ? val : val / 255;
                 const i = x * 4;
+                const lifted = Math.max(0, norm - NOISE_FLOOR);
+                const boosted =
+                    Math.log1p(Math.max(0, lifted) * DISPLAY_GAIN * 40) / LOG_NORMALIZER;
+                const dimFloor = norm > 0 ? Math.min(0.12, Math.sqrt(norm) * 0.08) : 0;
+                const level = Math.max(dimFloor, Math.min(1.0, boosted));
 
-                if (norm > 0.06) { // Equivalent to 15/255
-                    let r, g, b;
+                let r = 0;
+                let g = 0;
+                let b = 0;
 
-                    if (norm < 0.5) {
-                        const t = norm * 2;
-                        r = low[0] * (1 - t) + mid[0] * t;
-                        g = low[1] * (1 - t) + mid[1] * t;
-                        b = low[2] * (1 - t) + mid[2] * t;
-                    } else {
-                        const t = Math.min(1.0, (norm - 0.5) * 2);
-                        r = mid[0] * (1 - t) + high[0] * t;
-                        g = mid[1] * (1 - t) + high[1] * t;
-                        b = mid[2] * (1 - t) + high[2] * t;
-                    }
-
-                    data[i] = r | 0;
-                    data[i + 1] = g | 0;
-                    data[i + 2] = b | 0;
-                    data[i + 3] = 255;
+                if (level < 0.5) {
+                    const t = level * 2;
+                    r = low[0] * (1 - t) + mid[0] * t;
+                    g = low[1] * (1 - t) + mid[1] * t;
+                    b = low[2] * (1 - t) + mid[2] * t;
                 } else {
-                    data[i] = 0;
-                    data[i + 1] = 0;
-                    data[i + 2] = 0;
-                    data[i + 3] = 255;
+                    const t = Math.min(1.0, (level - 0.5) * 2);
+                    r = mid[0] * (1 - t) + high[0] * t;
+                    g = mid[1] * (1 - t) + high[1] * t;
+                    b = mid[2] * (1 - t) + high[2] * t;
                 }
+
+                data[i] = r | 0;
+                data[i + 1] = g | 0;
+                data[i + 2] = b | 0;
+                data[i + 3] = 255;
             }
 
             ctx.putImageData(imageData, 0, 0);
