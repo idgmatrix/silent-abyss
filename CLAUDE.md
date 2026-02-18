@@ -9,15 +9,17 @@ The Silent Abyss is a web-based simulation of a tactical submarine sonar and com
 - **Frontend**: Vanilla HTML5, JavaScript (ES modules), CSS3.
 - **Styling**: Tailwind CSS (CDN) + Custom CRT/retro overlays.
 - **3D Engine**: Three.js (npm dependency) for the tactical viewport.
-- **Audio**: Web Audio API with `AudioWorklet` (inline Blob) for real-time engine noise synthesis.
+- **Audio**: Web Audio API with `AudioWorklet` + WebAssembly DSP core for real-time engine noise synthesis.
 - **Tooling**: Vite (Build/Dev), ESLint (Lint), Prettier (Format), Vitest (Test).
 
 ## Development Lifecycle
 - **Install**: `npm install`
 - **Run**: `npm run dev`
 - **Build**: `npm run build`
-- **Test**: `npm test`
-- **Lint**: `npm run lint`
+- **Test**: `npm test` (single run) / `npm run test:watch` (watch mode)
+- **Single test file**: `npx vitest run tests/<file>.test.js`
+- **Lint**: `npm run lint` / `npm run lint:fix`
+- **Format**: `npm run format` / `npm run format:check`
 
 ## Architecture & Structure
 - **Entry Point**: `index.html` loads `src/main.js` as an ES module.
@@ -30,12 +32,29 @@ The Silent Abyss is a web-based simulation of a tactical submarine sonar and com
     - `tactical-renderer-2d.js`: Canvas 2D overlay renderer.
     - `sonar-visuals.js`: Acoustic displays (LOFAR, DEMON, BTR, Waterfall).
     - `scrolling-display.js`: Waterfall helpers.
-    - `audio-system.js`: Web Audio API management.
+    - `audio-system.js`: Web Audio API management (legacy entry point).
+    - `audio/wasm-audio-manager.js`: WebAssembly DSP audio manager.
+    - `audio/worklets/`: AudioWorklet processors (engine, wasm-engine, polyfill).
+    - `audio/dsp-core/pkg/`: Compiled Wasm DSP binaries.
+    - `acoustics/environment-model.js`: Acoustic propagation and environmental modelling.
+    - `contact-manager.js`: Contact tracking and lifecycle management.
+    - `campaign-manager.js`: Campaign/mission progression logic.
+    - `depth-profile-display.js`: Depth profile visualization.
+    - `effects/cavitation-particles.js`: Visual cavitation particle effects.
     - `data/ship-signatures.js`: Acoustic signature database.
+    - `data/missions.js`: Mission definitions.
+    - `data/scenarios/`: Scenario data files.
+    - `data/scenario-loader.js`: Scenario loading and parsing.
     - `compute/webgpu-fft.js`: WebGPU compute orchestration.
 - **Tests** (`tests/`):
     - `simulation.test.js`: Core physics and math tests.
     - `classification.test.js`: Classification state machine tests.
+    - `contact-manager.test.js`: Contact lifecycle tests.
+    - `environment.test.js`: Acoustic environment model tests.
+    - `scenario-loader.test.js` / `scenario-snapshot.test.js`: Scenario data integrity.
+    - `campaign.test.js` / `campaign-smoke.test.js`: Campaign progression tests.
+    - `demon-tracker.test.js` / `demon-self-noise-mask.test.js`: DEMON algorithm tests.
+    - `sonar-integration.test.js`: End-to-end sonar pipeline integration.
 
 ## Key Implementation Details
 - **Passive Detection**: `world-model.js` calculates Signal-to-Noise Ratio (SNR) and manages classification states (`UNDETECTED` to `CONFIRMED`).
