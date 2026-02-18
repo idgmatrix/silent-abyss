@@ -52,7 +52,7 @@ let contactListEl, contactFilterEl, contactSortEl, contactPinBtn, contactRelabel
 let contactClearLostBtn, solutionBearingInput, solutionRangeInput, solutionCourseInput, solutionSpeedInput;
 let solutionSaveBtn, solutionConfidenceEl;
 let missionSelectEl, missionResetBtn, missionTitleEl, missionStatusEl, missionBriefingEl, missionObjectivesEl;
-let demonFocusWidthSliderEl, demonFocusWidthValueEl, demonSelfNoiseToggleEl, demonStabilitySliderEl, demonStabilityValueEl;
+let demonFocusWidthSliderEl, demonFocusWidthValueEl, demonSelfNoiseToggleEl, demonStabilitySliderEl, demonStabilityValueEl, demonControlsToggleEl, demonControlsContentEl;
 
 function cacheDomElements() {
     rpmDisplay = document.getElementById('rpm-display');
@@ -89,6 +89,8 @@ function cacheDomElements() {
     demonSelfNoiseToggleEl = document.getElementById('demon-self-noise-toggle');
     demonStabilitySliderEl = document.getElementById('demon-stability-slider');
     demonStabilityValueEl = document.getElementById('demon-stability-value');
+    demonControlsToggleEl = document.getElementById('demon-controls-toggle');
+    demonControlsContentEl = document.getElementById('demon-controls-content');
 }
 
 function getTargetById(targetId) {
@@ -330,6 +332,14 @@ function bindDemonControlUiHandlers() {
         };
         demonStabilitySliderEl.oninput = applyStability;
         applyStability();
+    }
+
+    if (demonControlsToggleEl && demonControlsContentEl) {
+        demonControlsToggleEl.addEventListener('click', () => {
+            demonControlsContentEl.classList.toggle('hidden');
+            const isHidden = demonControlsContentEl.classList.contains('hidden');
+            demonControlsToggleEl.innerHTML = isHidden ? '&#9654;' : '&#9660;';
+        });
     }
 }
 

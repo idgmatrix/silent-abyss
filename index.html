@@ -54,7 +54,11 @@
                         Active Pulse (Ping)
                     </button>
                     <div class="border border-cyan-900/60 p-2 space-y-2 bg-cyan-950/10">
-                        <div class="text-[9px] text-cyan-500 uppercase tracking-wider">DEMON Controls</div>
+                        <div class="flex justify-between items-center text-[9px] text-cyan-500 uppercase tracking-wider">
+                            <span>DEMON Controls</span>
+                            <button id="demon-controls-toggle" class="text-cyan-400 hover:text-cyan-200 text-lg leading-none" title="Toggle DEMON Controls">&#9654;</button>
+                        </div>
+                        <div id="demon-controls-content" class="hidden space-y-2">
                         <div>
                             <div class="flex justify-between text-[9px] mb-1">
                                 <span>Focus Width</span>
@@ -125,16 +129,16 @@
                 </div>
             </div>
 
-            <div class="panel p-2 flex-1">
+            <div class="panel p-2 flex-[10] min-h-0">
                 <div class="label-tech">LOFAR (Narrowband Frequency)</div>
-                <div class="flex-1 bg-black/50 relative">
+                <div class="flex-1 min-h-0 bg-black/50 relative">
                     <canvas id="lofar-canvas"></canvas>
                 </div>
             </div>
 
-            <div class="panel p-2 flex-1">
+            <div class="panel p-2 flex-[10] min-h-0">
                 <div class="label-tech">DEMON (Propeller Signature)</div>
-                <div class="flex-1 bg-black/50 relative">
+                <div class="flex-1 min-h-0 bg-black/50 relative">
                     <canvas id="demon-canvas"></canvas>
                 </div>
             </div>

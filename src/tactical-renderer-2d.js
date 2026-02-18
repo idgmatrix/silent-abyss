@@ -416,7 +416,7 @@ export class Tactical2DRenderer {
 
             layers.push({
                 path,
-                strokeStyle: major ? 'rgba(0, 120, 130, 0.34)' : 'rgba(0, 95, 105, 0.22)',
+                strokeStyle: major ? 'rgba(0, 180, 190, 0.7)' : 'rgba(0, 150, 160, 0.5)',
                 lineWidth: major ? 1 : 0.6
             });
         });
