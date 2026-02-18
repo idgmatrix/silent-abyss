@@ -5,7 +5,22 @@ const TARGET_TYPE_DEFAULTS = {
     SHIP: { type: 'SHIP', isPatrolling: true },
     SUBMARINE: { type: 'SUBMARINE', isPatrolling: true },
     BIOLOGICAL: { type: 'BIOLOGICAL', isPatrolling: true },
-    STATIC: { type: 'STATIC', isPatrolling: false }
+    STATIC: { type: 'STATIC', isPatrolling: false },
+    TORPEDO: { type: 'TORPEDO', isPatrolling: true }
+};
+
+const ACOUSTIC_DEFAULTS_BY_TYPE = {
+    SHIP: { rpm: 120, bladeCount: 3 },
+    SUBMARINE: { rpm: 90, bladeCount: 7 },
+    BIOLOGICAL: { rpm: undefined, bladeCount: undefined },
+    STATIC: { rpm: undefined, bladeCount: undefined },
+    TORPEDO: { rpm: 600, bladeCount: 4 }
+};
+
+const ACOUSTIC_LIMITS = {
+    rpm: { min: 0, max: 2000 },
+    bladeCount: { min: 0, max: 12 },
+    shaftRate: { min: 0, max: 120 }
 };
 
 function isObject(value) {
@@ -31,12 +46,57 @@ function normalizeTargetConfig(target) {
     const inferredType = target.type ?? classProfile?.type ?? 'SHIP';
     const typeDefaults = TARGET_TYPE_DEFAULTS[inferredType] ?? TARGET_TYPE_DEFAULTS.SHIP;
 
-    return {
+    const merged = {
         ...typeDefaults,
         ...(classProfile?.defaults ?? {}),
         ...target,
         type: inferredType
     };
+
+    return normalizeAcousticTargetConfig(merged);
+}
+
+function normalizeAcousticTargetConfig(target) {
+    const type = target.type ?? 'SHIP';
+    const defaults = ACOUSTIC_DEFAULTS_BY_TYPE[type] ?? ACOUSTIC_DEFAULTS_BY_TYPE.SHIP;
+    const isPropulsionTarget = type === 'SHIP' || type === 'SUBMARINE' || type === 'TORPEDO';
+    const rpmRaw = Number.isFinite(target.rpm) ? target.rpm : defaults.rpm;
+    const bladeRaw = Number.isFinite(target.bladeCount) ? target.bladeCount : defaults.bladeCount;
+
+    const normalized = { ...target };
+    if (isPropulsionTarget) {
+        const rpm = Math.max(ACOUSTIC_LIMITS.rpm.min, Math.min(ACOUSTIC_LIMITS.rpm.max, rpmRaw));
+        const bladeCount = Math.max(
+            ACOUSTIC_LIMITS.bladeCount.min,
+            Math.min(ACOUSTIC_LIMITS.bladeCount.max, Math.round(bladeRaw))
+        );
+        const shaftRateInput = Number.isFinite(target.shaftRate) ? target.shaftRate : rpm / 60;
+        const shaftRate = Math.max(
+            ACOUSTIC_LIMITS.shaftRate.min,
+            Math.min(ACOUSTIC_LIMITS.shaftRate.max, shaftRateInput)
+        );
+        normalized.rpm = rpm;
+        normalized.bladeCount = bladeCount;
+        normalized.shaftRate = shaftRate;
+    } else {
+        if (Number.isFinite(target.rpm)) {
+            normalized.rpm = Math.max(ACOUSTIC_LIMITS.rpm.min, Math.min(ACOUSTIC_LIMITS.rpm.max, target.rpm));
+        }
+        if (Number.isFinite(target.bladeCount)) {
+            normalized.bladeCount = Math.max(
+                ACOUSTIC_LIMITS.bladeCount.min,
+                Math.min(ACOUSTIC_LIMITS.bladeCount.max, Math.round(target.bladeCount))
+            );
+        }
+        if (Number.isFinite(target.shaftRate)) {
+            normalized.shaftRate = Math.max(
+                ACOUSTIC_LIMITS.shaftRate.min,
+                Math.min(ACOUSTIC_LIMITS.shaftRate.max, target.shaftRate)
+            );
+        }
+    }
+
+    return normalized;
 }
 
 function validateTarget(target, index, context) {
@@ -49,6 +109,19 @@ function validateTarget(target, index, context) {
 
     if (target.type !== undefined) {
         assert(Object.hasOwn(TARGET_TYPE_DEFAULTS, target.type), `${context}[${index}].type must be one of ${Object.keys(TARGET_TYPE_DEFAULTS).join(', ')}`);
+    }
+
+    if (target.rpm !== undefined) {
+        assert(Number.isFinite(target.rpm), `${context}[${index}].rpm must be numeric`);
+        assert(target.rpm >= ACOUSTIC_LIMITS.rpm.min && target.rpm <= ACOUSTIC_LIMITS.rpm.max, `${context}[${index}].rpm must be in ${ACOUSTIC_LIMITS.rpm.min}-${ACOUSTIC_LIMITS.rpm.max}`);
+    }
+    if (target.bladeCount !== undefined) {
+        assert(Number.isFinite(target.bladeCount), `${context}[${index}].bladeCount must be numeric`);
+        assert(target.bladeCount >= ACOUSTIC_LIMITS.bladeCount.min && target.bladeCount <= ACOUSTIC_LIMITS.bladeCount.max, `${context}[${index}].bladeCount must be in ${ACOUSTIC_LIMITS.bladeCount.min}-${ACOUSTIC_LIMITS.bladeCount.max}`);
+    }
+    if (target.shaftRate !== undefined) {
+        assert(Number.isFinite(target.shaftRate), `${context}[${index}].shaftRate must be numeric`);
+        assert(target.shaftRate >= ACOUSTIC_LIMITS.shaftRate.min && target.shaftRate <= ACOUSTIC_LIMITS.shaftRate.max, `${context}[${index}].shaftRate must be in ${ACOUSTIC_LIMITS.shaftRate.min}-${ACOUSTIC_LIMITS.shaftRate.max}`);
     }
 }
 
@@ -78,10 +151,20 @@ function validateProceduralConfig(procedural) {
     assert(isObject(procedural.shipSpeedRange), 'procedural.shipSpeedRange is required');
     assert(isObject(procedural.shipRpmRange), 'procedural.shipRpmRange is required');
     assert(isObject(procedural.shipBladeCount), 'procedural.shipBladeCount is required');
+    assert(Number.isFinite(procedural.shipRpmRange.min) && Number.isFinite(procedural.shipRpmRange.max), 'procedural.shipRpmRange min/max must be numeric');
+    assert(procedural.shipRpmRange.max >= procedural.shipRpmRange.min, 'procedural.shipRpmRange.max must be >= min');
+    assert(procedural.shipRpmRange.min >= ACOUSTIC_LIMITS.rpm.min && procedural.shipRpmRange.max <= ACOUSTIC_LIMITS.rpm.max, `procedural.shipRpmRange must be in ${ACOUSTIC_LIMITS.rpm.min}-${ACOUSTIC_LIMITS.rpm.max}`);
+    assert(Number.isInteger(procedural.shipBladeCount.min) && Number.isInteger(procedural.shipBladeCount.max), 'procedural.shipBladeCount min/max must be integers');
+    assert(procedural.shipBladeCount.max >= procedural.shipBladeCount.min, 'procedural.shipBladeCount.max must be >= min');
+    assert(procedural.shipBladeCount.min >= ACOUSTIC_LIMITS.bladeCount.min && procedural.shipBladeCount.max <= ACOUSTIC_LIMITS.bladeCount.max, `procedural.shipBladeCount must be in ${ACOUSTIC_LIMITS.bladeCount.min}-${ACOUSTIC_LIMITS.bladeCount.max}`);
 
     assert(isObject(procedural.subSpeedRange), 'procedural.subSpeedRange is required');
     assert(isObject(procedural.subRpmRange), 'procedural.subRpmRange is required');
     assert(Number.isInteger(procedural.subBladeCount), 'procedural.subBladeCount must be an integer');
+    assert(Number.isFinite(procedural.subRpmRange.min) && Number.isFinite(procedural.subRpmRange.max), 'procedural.subRpmRange min/max must be numeric');
+    assert(procedural.subRpmRange.max >= procedural.subRpmRange.min, 'procedural.subRpmRange.max must be >= min');
+    assert(procedural.subRpmRange.min >= ACOUSTIC_LIMITS.rpm.min && procedural.subRpmRange.max <= ACOUSTIC_LIMITS.rpm.max, `procedural.subRpmRange must be in ${ACOUSTIC_LIMITS.rpm.min}-${ACOUSTIC_LIMITS.rpm.max}`);
+    assert(procedural.subBladeCount >= ACOUSTIC_LIMITS.bladeCount.min && procedural.subBladeCount <= ACOUSTIC_LIMITS.bladeCount.max, `procedural.subBladeCount must be in ${ACOUSTIC_LIMITS.bladeCount.min}-${ACOUSTIC_LIMITS.bladeCount.max}`);
 }
 
 export function validateScenarioDefinition(scenario) {
@@ -122,11 +205,13 @@ function generateProceduralTargets(procedural, random) {
             target.speed = randomInRange(random, procedural.shipSpeedRange.min, procedural.shipSpeedRange.max);
             target.rpm = randomInRange(random, procedural.shipRpmRange.min, procedural.shipRpmRange.max);
             target.bladeCount = randomIntInRangeInclusive(random, procedural.shipBladeCount.min, procedural.shipBladeCount.max);
+            target.shaftRate = target.rpm / 60;
         } else if (type === 'SUBMARINE') {
             target.classId = procedural.subClasses[Math.floor(random() * procedural.subClasses.length)];
             target.speed = randomInRange(random, procedural.subSpeedRange.min, procedural.subSpeedRange.max);
             target.rpm = randomInRange(random, procedural.subRpmRange.min, procedural.subRpmRange.max);
             target.bladeCount = procedural.subBladeCount;
+            target.shaftRate = target.rpm / 60;
         }
 
         targets.push(target);

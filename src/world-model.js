@@ -24,6 +24,7 @@ export class WorldModel {
         this.currentPulseId = 0;
         this.ownShipCourse = 0;
         this.elapsedTime = 0; // Simulation time in seconds
+        this.lastPingTime = -Infinity;
 
         // Configuration
         this.detectionThreshold = 6.0; // dB
@@ -240,8 +241,20 @@ export class WorldModel {
         this.isScanning = true;
         this.scanRadius = 0;
         this.currentPulseId++;
+        this.lastPingTime = this.elapsedTime;
         this.pingActiveIntensity = 1.0;
         this.callbacks.onScanUpdate(0, true);
+    }
+
+    getPingTransientState(recentWindowSec = 2.5) {
+        const active = this.isScanning || this.pingActiveIntensity > 0.06;
+        const sinceLastPing = this.elapsedTime - this.lastPingTime;
+        const recent = Number.isFinite(sinceLastPing) && sinceLastPing >= 0 && sinceLastPing <= recentWindowSec;
+        return {
+            active,
+            recent,
+            sinceLastPing
+        };
     }
 
     getSelectedTarget() {

@@ -4,7 +4,12 @@ export class AudioSystem {
     constructor() {
         this.ctx = null;
         this.wasmManager = new WasmAudioManager();
+        this.analysisWasmManager = new WasmAudioManager();
+        this.analysisOwnShipWasmManager = new WasmAudioManager();
         this.ownVoiceId = 0;
+        this.analysisOwnShipVoiceId = -1;
+        this.ownShipBladeCount = 5;
+        this.ownShipRpm = 0;
         this.ownBaseGain = 0.8;
         this.ownCurrentGain = this.ownBaseGain;
         this.lastOwnGainUpdateTime = 0;
@@ -16,6 +21,19 @@ export class AudioSystem {
         this.timeDomainArray = null;
         this.computeProcessor = null;
         this.outputGain = null;
+
+        // Internal analysis buses for DEMON/LOFAR.
+        this.analysisOwnShipGain = null;
+        this.analysisContactsGain = null;
+        this.analysisSelectedGain = null;
+        this.analysisMixGain = null;
+        this.analysisCompositeAnalyser = null;
+        this.analysisSelectedAnalyser = null;
+        this.analysisCompositeDataArray = null;
+        this.analysisSelectedDataArray = null;
+        this.analysisCompositeTimeDomainArray = null;
+        this.analysisSelectedTimeDomainArray = null;
+
         this.startupFadeDelay = 0.12;
         this.startupFadeDuration = 0.28;
         this.focusSettings = {
@@ -37,6 +55,68 @@ export class AudioSystem {
             backgroundCavFactor: 0.05,
             backgroundBioFactor: 0.1, // Near-mute background biologicals
         };
+
+        this.analysisFocusSettings = {
+            focusedTargetBoost: 6.0,
+            backgroundDuck: 0.12,
+            gainAttack: 0.04,
+            gainRelease: 0.25,
+            focusedEngineFactor: 1.1,
+            focusedCavFactor: 1.1,
+            focusedBioFactor: 1.0,
+            backgroundEngineFactor: 0.35,
+            backgroundCavFactor: 0.1,
+            backgroundBioFactor: 0.2
+        };
+
+        this.analysisOwnShipSettings = {
+            baseGain: 1.0,
+            focusedDuck: 0.32,
+            attack: 0.05,
+            release: 0.22
+        };
+        this.currentAnalysisOwnShipGain = this.analysisOwnShipSettings.baseGain;
+    }
+
+    _configureAnalyser(analyser) {
+        analyser.fftSize = 2048;
+        analyser.smoothingTimeConstant = 0.85;
+        analyser.minDecibels = -120;
+        analyser.maxDecibels = -30;
+    }
+
+    _initAnalysisBuses() {
+        if (!this.ctx) return;
+
+        this.analysisOwnShipGain = this.ctx.createGain();
+        this.analysisContactsGain = this.ctx.createGain();
+        this.analysisSelectedGain = this.ctx.createGain();
+        this.analysisMixGain = this.ctx.createGain();
+
+        this.analysisOwnShipGain.gain.value = 1.0;
+        this.analysisContactsGain.gain.value = 1.0;
+        this.analysisSelectedGain.gain.value = 1.0;
+        this.analysisMixGain.gain.value = 1.0;
+
+        this.analysisCompositeAnalyser = this.ctx.createAnalyser();
+        this.analysisSelectedAnalyser = this.ctx.createAnalyser();
+        this._configureAnalyser(this.analysisCompositeAnalyser);
+        this._configureAnalyser(this.analysisSelectedAnalyser);
+
+        this.analysisCompositeDataArray = new Uint8Array(this.analysisCompositeAnalyser.frequencyBinCount);
+        this.analysisSelectedDataArray = new Uint8Array(this.analysisSelectedAnalyser.frequencyBinCount);
+        this.analysisCompositeTimeDomainArray = new Float32Array(this.analysisCompositeAnalyser.fftSize);
+        this.analysisSelectedTimeDomainArray = new Float32Array(this.analysisSelectedAnalyser.fftSize);
+
+        this.analysisContactsGain.connect(this.analysisMixGain);
+        this.analysisOwnShipGain.connect(this.analysisMixGain);
+
+        this.analysisMixGain.connect(this.analysisCompositeAnalyser);
+
+        // Selected mode is currently mirrored from analysis mix.
+        // Item 2 will route selected-target analysis independently.
+        this.analysisMixGain.connect(this.analysisSelectedGain);
+        this.analysisSelectedGain.connect(this.analysisSelectedAnalyser);
     }
 
     async init() {
@@ -46,12 +126,10 @@ export class AudioSystem {
             this.ctx = new (window.AudioContext || window.webkitAudioContext)();
 
             this.analyser = this.ctx.createAnalyser();
-            this.analyser.fftSize = 2048;
-            this.analyser.smoothingTimeConstant = 0.85;
-            this.analyser.minDecibels = -120;
-            this.analyser.maxDecibels = -30;
+            this._configureAnalyser(this.analyser);
             this.dataArray = new Uint8Array(this.analyser.frequencyBinCount);
             this.timeDomainArray = new Float32Array(this.analyser.fftSize);
+
             this.outputGain = this.ctx.createGain();
             const now = this.ctx.currentTime;
             this.outputGain.gain.setValueAtTime(0, now);
@@ -67,17 +145,41 @@ export class AudioSystem {
                 maxVoices: 32 // Increase to support many targets
             });
 
+            this._initAnalysisBuses();
+
+            await this.analysisWasmManager.init({
+                ctx: this.ctx,
+                outputNode: this.analysisContactsGain,
+                maxVoices: 32,
+                autoAddVoice: false
+            });
+
+            await this.analysisOwnShipWasmManager.init({
+                ctx: this.ctx,
+                outputNode: this.analysisOwnShipGain,
+                maxVoices: 2,
+                autoAddVoice: true
+            });
+
             this.ownVoiceId = this.wasmManager.defaultVoiceId;
+            this.analysisOwnShipVoiceId = this.analysisOwnShipWasmManager.defaultVoiceId;
             this.ownCurrentGain = this.ownBaseGain;
+            this.currentAnalysisOwnShipGain = this.analysisOwnShipSettings.baseGain;
             this.lastOwnGainUpdateTime = this.ctx.currentTime;
             this.wasmManager.setGain(this.ownBaseGain, this.ownVoiceId);
             this.wasmManager.setEngineMix(1.0, this.ownVoiceId);
             this.wasmManager.setCavMix(0.3, this.ownVoiceId);
             this.wasmManager.setBioMix(0.0, this.ownVoiceId); // Own ship shouldn't chirp like a dolphin
-            this.wasmManager.setBlades(5.0, this.ownVoiceId);
+            this.wasmManager.setBlades(this.ownShipBladeCount, this.ownVoiceId);
+            this.analysisOwnShipWasmManager.setGain(this.currentAnalysisOwnShipGain, this.analysisOwnShipVoiceId);
+            this.analysisOwnShipWasmManager.setEngineMix(1.0, this.analysisOwnShipVoiceId);
+            this.analysisOwnShipWasmManager.setCavMix(0.3, this.analysisOwnShipVoiceId);
+            this.analysisOwnShipWasmManager.setBioMix(0.0, this.analysisOwnShipVoiceId);
+            this.analysisOwnShipWasmManager.setBlades(this.ownShipBladeCount, this.analysisOwnShipVoiceId);
+            this.analysisOwnShipWasmManager.setRpm(this.ownShipRpm, this.analysisOwnShipVoiceId);
 
         } catch (e) {
-            console.error("Audio initialization failed:", e);
+            console.error('Audio initialization failed:', e);
         }
     }
 
@@ -85,6 +187,20 @@ export class AudioSystem {
         if (this.wasmManager && this.wasmManager.ready) {
             this.wasmManager.setRpm(value, this.ownVoiceId);
         }
+        this.ownShipRpm = Number.isFinite(value) ? Math.max(0, value) : 0;
+        if (this.analysisOwnShipWasmManager && this.analysisOwnShipWasmManager.ready && this.analysisOwnShipVoiceId >= 0) {
+            this.analysisOwnShipWasmManager.setRpm(this.ownShipRpm, this.analysisOwnShipVoiceId);
+        }
+    }
+
+    getOwnShipSignature() {
+        const rpm = Number.isFinite(this.ownShipRpm) ? this.ownShipRpm : 0;
+        const bladeCount = Number.isFinite(this.ownShipBladeCount) ? this.ownShipBladeCount : 0;
+        return {
+            rpm,
+            bladeCount,
+            bpfHz: rpm > 0 && bladeCount > 0 ? (rpm / 60) * bladeCount : 0
+        };
     }
 
     setComputeProcessor(processor) {
@@ -97,18 +213,27 @@ export class AudioSystem {
         const type = target.type || 'SHIP';
         const now = this.ctx.currentTime;
 
-        // Request a new voice from Wasm
-        const voiceId = await this.wasmManager.addVoice();
-        if (voiceId === -1) {
-            console.warn("Max audio voices reached");
+        // Request a new voice from speaker path Wasm.
+        const speakerVoiceId = await this.wasmManager.addVoice();
+        if (speakerVoiceId === -1) {
+            console.warn('Max audio voices reached');
             return;
+        }
+
+        // Mirror target voice into the analysis path.
+        let analysisVoiceId = -1;
+        if (this.analysisWasmManager?.ready) {
+            analysisVoiceId = await this.analysisWasmManager.addVoice();
+            if (analysisVoiceId === -1) {
+                console.warn('Max analysis voices reached');
+            }
         }
 
         // Configure voice based on target
         const initialGain = 0.01;
-        this.wasmManager.setGain(initialGain, voiceId);
-        this.wasmManager.setBlades(target.bladeCount || 5, voiceId);
-        this.wasmManager.setRpm(target.rpm || 0, voiceId);
+        this.wasmManager.setGain(initialGain, speakerVoiceId);
+        this.wasmManager.setBlades(target.bladeCount || 5, speakerVoiceId);
+        this.wasmManager.setRpm(target.rpm || 0, speakerVoiceId);
         let baseEngineMix = 1.0;
         let baseCavMix = 0.6;
         let baseBioMix = 0.0;
@@ -128,20 +253,34 @@ export class AudioSystem {
             baseBioMix = 0.0;
         }
 
-        this.wasmManager.setEngineMix(baseEngineMix, voiceId);
-        this.wasmManager.setCavMix(baseCavMix, voiceId);
-        this.wasmManager.setBioMix(baseBioMix, voiceId);
+        this.wasmManager.setEngineMix(baseEngineMix, speakerVoiceId);
+        this.wasmManager.setCavMix(baseCavMix, speakerVoiceId);
+        this.wasmManager.setBioMix(baseBioMix, speakerVoiceId);
+
+        if (analysisVoiceId >= 0) {
+            this.analysisWasmManager.setGain(initialGain, analysisVoiceId);
+            this.analysisWasmManager.setBlades(target.bladeCount || 5, analysisVoiceId);
+            this.analysisWasmManager.setRpm(target.rpm || 0, analysisVoiceId);
+            this.analysisWasmManager.setEngineMix(baseEngineMix, analysisVoiceId);
+            this.analysisWasmManager.setCavMix(baseCavMix, analysisVoiceId);
+            this.analysisWasmManager.setBioMix(baseBioMix, analysisVoiceId);
+        }
 
         this.targetNodes.set(targetId, {
-            voiceId,
+            voiceId: speakerVoiceId,
+            analysisVoiceId,
             type,
             baseEngineMix,
             baseCavMix,
             baseBioMix,
             currentGain: initialGain,
+            currentAnalysisGain: initialGain,
             currentEngineMix: baseEngineMix,
             currentCavMix: baseCavMix,
             currentBioMix: baseBioMix,
+            currentAnalysisEngineMix: baseEngineMix,
+            currentAnalysisCavMix: baseCavMix,
+            currentAnalysisBioMix: baseBioMix,
             lastUpdateTime: now,
         });
     }
@@ -165,7 +304,8 @@ export class AudioSystem {
 
             // Distance attenuation baseline
             const cfg = this.focusSettings;
-            let targetGain = Math.max(cfg.gainFloor, (cfg.distanceMax - distance) / cfg.distanceScale) * cfg.baseDistanceGainMultiplier;
+            const baseGain = Math.max(cfg.gainFloor, (cfg.distanceMax - distance) / cfg.distanceScale) * cfg.baseDistanceGainMultiplier;
+            let targetGain = baseGain;
 
             const hasFocus = this.focusedTargetId !== null;
             const isFocused = this.focusedTargetId === targetId;
@@ -215,6 +355,51 @@ export class AudioSystem {
             this.wasmManager.setEngineMix(node.currentEngineMix, node.voiceId);
             this.wasmManager.setCavMix(node.currentCavMix, node.voiceId);
             this.wasmManager.setBioMix(node.currentBioMix, node.voiceId);
+
+            if (node.analysisVoiceId >= 0 && this.analysisWasmManager?.ready) {
+                const acfg = this.analysisFocusSettings;
+                const analysisTargetGain = hasFocus
+                    ? (isFocused ? baseGain * acfg.focusedTargetBoost : baseGain * acfg.backgroundDuck)
+                    : baseGain;
+                const analysisRising = analysisTargetGain > node.currentAnalysisGain;
+                const analysisTau = analysisRising ? acfg.gainAttack : acfg.gainRelease;
+                const analysisAlpha = 1 - Math.exp(-dt / Math.max(0.001, analysisTau));
+                node.currentAnalysisGain += (analysisTargetGain - node.currentAnalysisGain) * analysisAlpha;
+                this.analysisWasmManager.setGain(node.currentAnalysisGain, node.analysisVoiceId);
+
+                const analysisEngineFactor = isFocused
+                    ? acfg.focusedEngineFactor
+                    : hasFocus
+                        ? acfg.backgroundEngineFactor
+                        : 1.0;
+                const analysisCavFactor = isFocused
+                    ? acfg.focusedCavFactor
+                    : hasFocus
+                        ? acfg.backgroundCavFactor
+                        : 1.0;
+                const analysisBioFactor = isFocused
+                    ? acfg.focusedBioFactor
+                    : hasFocus
+                        ? acfg.backgroundBioFactor
+                        : 1.0;
+
+                const analysisTargetEngineMix = Math.min(1, Math.max(0, node.baseEngineMix * analysisEngineFactor));
+                const analysisTargetCavMix = Math.min(1, Math.max(0, node.baseCavMix * analysisCavFactor));
+                const analysisTargetBioMix = Math.min(1, Math.max(0, node.baseBioMix * analysisBioFactor));
+                const analysisMixRising = analysisTargetEngineMix > node.currentAnalysisEngineMix ||
+                    analysisTargetCavMix > node.currentAnalysisCavMix ||
+                    analysisTargetBioMix > node.currentAnalysisBioMix;
+                const analysisMixTau = analysisMixRising ? acfg.gainAttack : acfg.gainRelease;
+                const analysisMixAlpha = 1 - Math.exp(-dt / Math.max(0.001, analysisMixTau));
+
+                node.currentAnalysisEngineMix += (analysisTargetEngineMix - node.currentAnalysisEngineMix) * analysisMixAlpha;
+                node.currentAnalysisCavMix += (analysisTargetCavMix - node.currentAnalysisCavMix) * analysisMixAlpha;
+                node.currentAnalysisBioMix += (analysisTargetBioMix - node.currentAnalysisBioMix) * analysisMixAlpha;
+
+                this.analysisWasmManager.setEngineMix(node.currentAnalysisEngineMix, node.analysisVoiceId);
+                this.analysisWasmManager.setCavMix(node.currentAnalysisCavMix, node.analysisVoiceId);
+                this.analysisWasmManager.setBioMix(node.currentAnalysisBioMix, node.analysisVoiceId);
+            }
         }
     }
 
@@ -234,6 +419,17 @@ export class AudioSystem {
         this.ownCurrentGain += (targetOwnGain - this.ownCurrentGain) * ownAlpha;
 
         this.wasmManager.setGain(this.ownCurrentGain, this.ownVoiceId);
+
+        if (this.analysisOwnShipWasmManager && this.analysisOwnShipWasmManager.ready && this.analysisOwnShipVoiceId >= 0) {
+            const analysisTargetGain = focusActive
+                ? this.analysisOwnShipSettings.baseGain * this.analysisOwnShipSettings.focusedDuck
+                : this.analysisOwnShipSettings.baseGain;
+            const analysisRising = analysisTargetGain > this.currentAnalysisOwnShipGain;
+            const analysisTau = analysisRising ? this.analysisOwnShipSettings.attack : this.analysisOwnShipSettings.release;
+            const analysisAlpha = 1 - Math.exp(-dt / Math.max(0.001, analysisTau));
+            this.currentAnalysisOwnShipGain += (analysisTargetGain - this.currentAnalysisOwnShipGain) * analysisAlpha;
+            this.analysisOwnShipWasmManager.setGain(this.currentAnalysisOwnShipGain, this.analysisOwnShipVoiceId);
+        }
     }
 
     createPingTap(vol = 0.5, startFreq = 1200, endFreq = 900) {
@@ -278,12 +474,30 @@ export class AudioSystem {
         osc.stop(time + 0.7);
     }
 
-    getFrequencyData() {
-        if (this.analyser && this.dataArray) {
-            this.analyser.getByteFrequencyData(this.dataArray);
-            return this.dataArray;
+    getAnalysisFrequencyData(mode = 'composite') {
+        const useSelected = mode === 'selected';
+        const analyser = useSelected ? this.analysisSelectedAnalyser : this.analysisCompositeAnalyser;
+        const buffer = useSelected ? this.analysisSelectedDataArray : this.analysisCompositeDataArray;
+        if (analyser && buffer) {
+            analyser.getByteFrequencyData(buffer);
+            return buffer;
         }
         return new Uint8Array(0);
+    }
+
+    getAnalysisTimeDomainData(mode = 'composite') {
+        const useSelected = mode === 'selected';
+        const analyser = useSelected ? this.analysisSelectedAnalyser : this.analysisCompositeAnalyser;
+        const buffer = useSelected ? this.analysisSelectedTimeDomainArray : this.analysisCompositeTimeDomainArray;
+        if (analyser && buffer) {
+            analyser.getFloatTimeDomainData(buffer);
+            return buffer;
+        }
+        return null;
+    }
+
+    getFrequencyData() {
+        return this.getAnalysisFrequencyData('composite');
     }
 
     getContext() {
@@ -291,22 +505,54 @@ export class AudioSystem {
     }
 
     getTimeDomainData() {
-        if (this.analyser && this.timeDomainArray) {
-            this.analyser.getFloatTimeDomainData(this.timeDomainArray);
-            return this.timeDomainArray;
-        }
-        return null;
+        return this.getAnalysisTimeDomainData('composite');
     }
 
     dispose() {
         if (this.wasmManager) {
             this.wasmManager.dispose();
         }
+        if (this.analysisWasmManager) {
+            this.analysisWasmManager.dispose();
+        }
+        if (this.analysisOwnShipWasmManager) {
+            this.analysisOwnShipWasmManager.dispose();
+        }
         if (this.ctx) {
             this.bioTimeouts.forEach(id => clearTimeout(id));
             this.bioTimeouts.clear();
 
             this.targetNodes.clear();
+
+            if (this.analysisOwnShipGain) {
+                this.analysisOwnShipGain.disconnect();
+                this.analysisOwnShipGain = null;
+            }
+            if (this.analysisContactsGain) {
+                this.analysisContactsGain.disconnect();
+                this.analysisContactsGain = null;
+            }
+            if (this.analysisSelectedGain) {
+                this.analysisSelectedGain.disconnect();
+                this.analysisSelectedGain = null;
+            }
+            if (this.analysisMixGain) {
+                this.analysisMixGain.disconnect();
+                this.analysisMixGain = null;
+            }
+            if (this.analysisCompositeAnalyser) {
+                this.analysisCompositeAnalyser.disconnect();
+                this.analysisCompositeAnalyser = null;
+            }
+            if (this.analysisSelectedAnalyser) {
+                this.analysisSelectedAnalyser.disconnect();
+                this.analysisSelectedAnalyser = null;
+            }
+
+            this.analysisCompositeDataArray = null;
+            this.analysisSelectedDataArray = null;
+            this.analysisCompositeTimeDomainArray = null;
+            this.analysisSelectedTimeDomainArray = null;
 
             if (this.analyser) {
                 this.analyser.disconnect();
@@ -317,8 +563,10 @@ export class AudioSystem {
                 this.outputGain = null;
             }
 
+            this.dataArray = null;
             this.timeDomainArray = null;
             this.computeProcessor = null;
+            this.analysisOwnShipVoiceId = -1;
             this.ctx.close();
             this.ctx = null;
         }

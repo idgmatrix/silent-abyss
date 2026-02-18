@@ -52,6 +52,7 @@ let contactListEl, contactFilterEl, contactSortEl, contactPinBtn, contactRelabel
 let contactClearLostBtn, solutionBearingInput, solutionRangeInput, solutionCourseInput, solutionSpeedInput;
 let solutionSaveBtn, solutionConfidenceEl;
 let missionSelectEl, missionResetBtn, missionTitleEl, missionStatusEl, missionBriefingEl, missionObjectivesEl;
+let demonFocusWidthSliderEl, demonFocusWidthValueEl, demonSelfNoiseToggleEl, demonStabilitySliderEl, demonStabilityValueEl;
 
 function cacheDomElements() {
     rpmDisplay = document.getElementById('rpm-display');
@@ -83,6 +84,11 @@ function cacheDomElements() {
     missionStatusEl = document.getElementById('mission-status');
     missionBriefingEl = document.getElementById('mission-briefing');
     missionObjectivesEl = document.getElementById('mission-objectives');
+    demonFocusWidthSliderEl = document.getElementById('demon-focus-width-slider');
+    demonFocusWidthValueEl = document.getElementById('demon-focus-width-value');
+    demonSelfNoiseToggleEl = document.getElementById('demon-self-noise-toggle');
+    demonStabilitySliderEl = document.getElementById('demon-stability-slider');
+    demonStabilityValueEl = document.getElementById('demon-stability-value');
 }
 
 function getTargetById(targetId) {
@@ -292,6 +298,41 @@ function bindCampaignUiHandlers() {
     }
 }
 
+function bindDemonControlUiHandlers() {
+    if (demonFocusWidthSliderEl) {
+        const applyFocusWidth = () => {
+            const value = Number.parseFloat(demonFocusWidthSliderEl.value);
+            sonarVisuals.setDemonFocusWidth(value);
+            if (demonFocusWidthValueEl) {
+                demonFocusWidthValueEl.innerText = `${value.toFixed(1)}Hz`;
+            }
+        };
+        demonFocusWidthSliderEl.oninput = applyFocusWidth;
+        applyFocusWidth();
+    }
+
+    if (demonSelfNoiseToggleEl) {
+        const applySelfNoise = () => {
+            sonarVisuals.setSelfNoiseSuppressionEnabled(!!demonSelfNoiseToggleEl.checked);
+        };
+        demonSelfNoiseToggleEl.onchange = applySelfNoise;
+        applySelfNoise();
+    }
+
+    if (demonStabilitySliderEl) {
+        const applyStability = () => {
+            const sliderValue = Number.parseInt(demonStabilitySliderEl.value, 10);
+            const normalized = Number.isFinite(sliderValue) ? sliderValue / 100 : 0.55;
+            sonarVisuals.setDemonResponsiveness(normalized);
+            if (demonStabilityValueEl) {
+                demonStabilityValueEl.innerText = `${sliderValue}`;
+            }
+        };
+        demonStabilitySliderEl.oninput = applyStability;
+        applyStability();
+    }
+}
+
 async function initSystems() {
     cacheDomElements();
     bindContactUiHandlers();
@@ -308,6 +349,7 @@ async function initSystems() {
     worldModel.seedTargets();
     await tacticalView.init('tactical-viewport');
     sonarVisuals.init();
+    bindDemonControlUiHandlers();
 
     // Initialize Targets in subsystems
     for (const target of simEngine.targets) {
@@ -478,12 +520,14 @@ function renderLoop(now) {
     tacticalView.render(simEngine.targets, worldModel.ownShipCourse);
 
     // Render Visuals
-    const data = audioSys.getFrequencyData();
-    const timeDomainData = audioSys.getTimeDomainData();
     const ctx = audioSys.getContext();
 
     const selectedTarget = worldModel.getSelectedTarget();
+    const analysisMode = selectedTarget ? 'selected' : 'composite';
+    const data = audioSys.getAnalysisFrequencyData(analysisMode);
+    const timeDomainData = audioSys.getAnalysisTimeDomainData(analysisMode);
     const acousticContext = worldModel.getAcousticContextForTarget(selectedTarget);
+    const pingTransient = worldModel.getPingTransientState(2.5);
     if (selectedTarget) {
         updateDashboard(selectedTarget);
     }
@@ -505,7 +549,12 @@ function renderLoop(now) {
             ctx.sampleRate,
             audioSys.analyser.fftSize,
             selectedTarget,
-            timeDomainData
+            timeDomainData,
+            {
+                ownShipSignature: audioSys.getOwnShipSignature(),
+                sourceMode: analysisMode === 'selected' ? 'SELECTED' : 'COMPOSITE',
+                pingTransient
+            }
         );
     }
 }

@@ -14,6 +14,7 @@ export const SHIP_SIGNATURES = {
             speed: 0.3,
             rpm: 80,
             bladeCount: 7,
+            shaftRate: 80 / 60,
             isPatrolling: true,
             patrolRadius: 60
         },
@@ -34,6 +35,7 @@ export const SHIP_SIGNATURES = {
             speed: 0.25,
             rpm: 70,
             bladeCount: 7,
+            shaftRate: 70 / 60,
             isPatrolling: true,
             patrolRadius: 70
         },
@@ -54,6 +56,7 @@ export const SHIP_SIGNATURES = {
             speed: 0.8,
             rpm: 120,
             bladeCount: 4,
+            shaftRate: 120 / 60,
             isPatrolling: true,
             patrolRadius: 90
         },
@@ -73,6 +76,7 @@ export const SHIP_SIGNATURES = {
             speed: 1.2,
             rpm: 180,
             bladeCount: 3,
+            shaftRate: 180 / 60,
             isPatrolling: true,
             patrolRadius: 80
         },
@@ -91,6 +95,7 @@ export const SHIP_SIGNATURES = {
             speed: 0.55,
             rpm: 95,
             bladeCount: 5,
+            shaftRate: 95 / 60,
             isPatrolling: true,
             patrolRadius: 110
         },

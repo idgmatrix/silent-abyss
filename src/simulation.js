@@ -21,6 +21,25 @@ export const BehaviorState = {
     INTERCEPT: 'INTERCEPT'
 };
 
+function clamp(value, min, max) {
+    return Math.max(min, Math.min(max, value));
+}
+
+function getAcousticDefaultsForType(type) {
+    switch (type) {
+        case TargetType.SUBMARINE:
+            return { rpm: 90, bladeCount: 7 };
+        case TargetType.TORPEDO:
+            return { rpm: 600, bladeCount: 4 };
+        case TargetType.BIOLOGICAL:
+        case TargetType.STATIC:
+            return { rpm: 0, bladeCount: 0 };
+        case TargetType.SHIP:
+        default:
+            return { rpm: 120, bladeCount: 3 };
+    }
+}
+
 export class SimulationTarget {
     constructor(id, config = {}) {
         this.id = id;
@@ -66,14 +85,13 @@ export class SimulationTarget {
         }
 
         // Audio/Visual properties
-        this.rpm = config.rpm ?? 120;
-        if (this.type === TargetType.SUBMARINE) this.rpm = config.rpm ?? 90;
-        if (this.type === TargetType.TORPEDO) this.rpm = 600; // High speed turbine
-        if (this.type === TargetType.BIOLOGICAL || this.type === TargetType.STATIC) this.rpm = 0;
-
-        this.bladeCount = config.bladeCount ?? 3;
-        if (this.type === TargetType.SUBMARINE) this.bladeCount = config.bladeCount ?? 7;
-        if (this.type === TargetType.TORPEDO) this.bladeCount = 4;
+        const acousticDefaults = getAcousticDefaultsForType(this.type);
+        const rpmInput = Number.isFinite(config.rpm) ? config.rpm : acousticDefaults.rpm;
+        const bladeInput = Number.isFinite(config.bladeCount) ? config.bladeCount : acousticDefaults.bladeCount;
+        this.rpm = clamp(rpmInput, 0, 2000);
+        this.bladeCount = clamp(Math.round(bladeInput), 0, 12);
+        const shaftRateInput = Number.isFinite(config.shaftRate) ? config.shaftRate : this.rpm / 60;
+        this.shaftRate = clamp(shaftRateInput, 0, 120);
 
         // AI / Patrol Logic
         this.patrolRadius = config.patrolRadius ?? 90;

@@ -68,6 +68,7 @@ App URL: `http://localhost:5173`
 - `documents/The_Silent_Abyss_GDD.md`: game design document (Korean)
 - `documents/SCENARIO_MISSION_AUTHORING.md`: developer guide for scenario/mission data
 - `documents/PLAYER_CONTACT_WORKFLOW.md`: player/operator workflow guide
+- `documents/SONAR_ANALYSIS_PIPELINE.md`: developer guide for LOFAR/DEMON analysis buses, lock states, suppression, and controls
 
 ## License
 
