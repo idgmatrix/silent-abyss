@@ -33,6 +33,8 @@ export class Tactical3DRenderer {
 
         this.container = container;
         this.scene = new THREE.Scene();
+        // Align 3D map orientation with radial view (rotate world 90 deg CCW).
+        this.scene.rotation.y = Math.PI / 2;
         const initWidth = Math.max(1, Math.floor(container.clientWidth || 0));
         const initHeight = Math.max(1, Math.floor(container.clientHeight || 0));
         this.camera = new THREE.PerspectiveCamera(60, initWidth / initHeight, 0.1, 1000);
@@ -220,7 +222,7 @@ export class Tactical3DRenderer {
         }
     }
 
-    render(ownShipCourse, selectedTargetId, pulse, targets = [], dt = 0.016) {
+    render(_ownShipCourse, selectedTargetId, pulse, targets = [], dt = 0.016) {
         if (!this.renderer || !this.scene || !this.camera) return;
 
         if (this.selectionRing) {
@@ -233,10 +235,6 @@ export class Tactical3DRenderer {
             } else {
                 this.selectionRing.visible = false;
             }
-        }
-
-        if (this.ownShip) {
-            this.ownShip.rotation.y = -ownShipCourse;
         }
 
         if (this.marineSnow) {
@@ -306,10 +304,12 @@ export class Tactical3DRenderer {
         if (!this.camera) return null;
 
         let hitId = null;
+        const worldPos = new THREE.Vector3();
         this.targetMeshes.forEach((mesh, id) => {
             if (mesh.material.opacity <= 0.2) return;
 
-            const vec = new THREE.Vector3(mesh.position.x, mesh.position.y, mesh.position.z);
+            mesh.getWorldPosition(worldPos);
+            const vec = worldPos.clone();
             vec.project(this.camera);
 
             const screenX = (vec.x * 0.5 + 0.5) * rect.width;
@@ -454,6 +454,9 @@ export class Tactical3DRenderer {
         geometry.rotateX(Math.PI / 2);
         const material = new THREE.MeshBasicMaterial({ color: 0x00ff00, wireframe: true });
         const ownShip = new THREE.Mesh(geometry, material);
+        // Cone local forward after rotateX is +Z; yaw +90 deg so bow points to world +X.
+        // This matches radial (+X is up on screen there) and grid (+X is right).
+        ownShip.rotation.y = Math.PI / 2;
         const y = this.getTerrainHeight(0, 0) + 5.0;
         ownShip.position.set(0, y, 0);
         this.scene.add(ownShip);

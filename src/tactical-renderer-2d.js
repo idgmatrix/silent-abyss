@@ -266,12 +266,17 @@ export class Tactical2DRenderer {
             ctx.stroke();
         }
 
+        // Grid stays north-up; own ship glyph stays fixed to shared heading reference.
+        ctx.save();
+        ctx.translate(centerX, centerY);
         ctx.fillStyle = '#00ff00';
         ctx.beginPath();
-        ctx.moveTo(centerX, centerY - 8);
-        ctx.lineTo(centerX + 6, centerY + 6);
-        ctx.lineTo(centerX - 6, centerY + 6);
+        ctx.moveTo(8, 0); // tip points +X at heading 0
+        ctx.lineTo(-6, -6);
+        ctx.lineTo(-6, 6);
+        ctx.closePath();
         ctx.fill();
+        ctx.restore();
     }
 
     drawTrackUncertainty(ctx, x, y, snr, color) {
