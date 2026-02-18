@@ -89,7 +89,7 @@ export class SonarVisuals {
         this._demonHarmonicScore = 0;
         this._demonDisplayHarmonicScore = 0;
         this._demonFrameCounter = 0;
-        this._demonSampleBuffer = new Float32Array(32768);
+        this._demonSampleBuffer = new Float32Array(131072); // ~3 s at 44100 Hz
         this._demonSampleWriteIndex = 0;
         this._demonSampleCount = 0;
         this.selfNoiseSuppressionEnabled = true;
@@ -571,7 +571,8 @@ export class SonarVisuals {
     }
 
     _getDemonAnalysisWindow() {
-        const targetLength = this._demonSampleCount >= 16384 ? 16384 : 8192;
+        const targetLength = this._demonSampleCount >= 65536 ? 65536 :
+            this._demonSampleCount >= 16384 ? 16384 : 8192;
         if (this._demonSampleCount < targetLength) return null;
 
         const out = new Float32Array(targetLength);
@@ -595,68 +596,72 @@ export class SonarVisuals {
     }
 
     _computeDemonSpectrum(timeDomainData, sampleRate, maxFreqHz) {
-        const n = Math.min(timeDomainData.length, 4096);
+        const nRaw = timeDomainData.length;
         const spectrum = new Float32Array(maxFreqHz + 1);
-        if (n < 64) return spectrum;
+        if (nRaw < 64) return spectrum;
 
-        // Approximate DEMON chain:
-        // 1) band-limit the raw signal to machinery band
-        // 2) full-wave rectify to get envelope
-        // 3) remove slow DC drift from envelope
-        const signal = new Float32Array(n);
+        // DEMON chain:
+        // 1) Band-limit raw signal to machinery band (20–1800 Hz HP+LP).
+        // 2) Full-wave rectify to get amplitude envelope.
+        // 3) Average-decimate envelope to ~500 Hz — we only need 1–120 Hz,
+        //    so decimation improves low-frequency resolution while cutting cost.
+        // 4) Remove slow DC drift (1 Hz HP) from decimated envelope.
+        // 5) DFT of decimated envelope at 1–maxFreqHz Hz.
         let meanRaw = 0;
-        for (let i = 0; i < n; i++) meanRaw += timeDomainData[i];
-        meanRaw /= n;
+        for (let i = 0; i < nRaw; i++) meanRaw += timeDomainData[i];
+        meanRaw /= nRaw;
 
-        const hpCutHz = 20;
-        const lpCutHz = 1800;
-        const hpRc = 1 / (2 * Math.PI * hpCutHz);
-        const lpRc = 1 / (2 * Math.PI * lpCutHz);
+        const hpRc = 1 / (2 * Math.PI * 20);
+        const lpRc = 1 / (2 * Math.PI * 1800);
         const dt = 1 / sampleRate;
         const hpAlpha = hpRc / (hpRc + dt);
         const lpAlpha = dt / (lpRc + dt);
 
-        let hpY = 0;
-        let hpPrevX = 0;
-        let lpY = 0;
+        // Decimate envelope to ~500 Hz sample rate.
+        const D = Math.max(1, Math.floor(sampleRate / 500));
+        const decimSR = sampleRate / D;
+        const nDecim = Math.floor(nRaw / D);
+        if (nDecim < 8) return spectrum;
 
-        const envelope = new Float32Array(n);
-        for (let i = 0; i < n; i++) {
+        const decimEnv = new Float32Array(nDecim);
+        let hpY = 0, hpPrevX = 0, lpY = 0, accum = 0;
+        for (let i = 0; i < nRaw; i++) {
             const x = timeDomainData[i] - meanRaw;
             hpY = hpAlpha * (hpY + x - hpPrevX);
             hpPrevX = x;
             lpY += lpAlpha * (hpY - lpY);
-            envelope[i] = Math.abs(lpY);
+            accum += Math.abs(lpY);
+            if ((i + 1) % D === 0) {
+                decimEnv[(i + 1) / D - 1] = accum / D;
+                accum = 0;
+            }
         }
 
-        // Remove very low-frequency drift from envelope.
-        const envHpCutHz = 1.0;
-        const envHpRc = 1 / (2 * Math.PI * envHpCutHz);
-        const envHpAlpha = envHpRc / (envHpRc + dt);
-        let envHpY = 0;
-        let envHpPrevX = envelope[0] || 0;
-        for (let i = 0; i < n; i++) {
-            const x = envelope[i];
+        // Remove slow DC drift from decimated envelope (1 Hz HP).
+        const envHpRc = 1 / (2 * Math.PI * 1.0);
+        const decimDt = 1 / decimSR;
+        const envHpAlpha = envHpRc / (envHpRc + decimDt);
+        let envHpY = 0, envHpPrevX = decimEnv[0] || 0;
+        const signal = new Float32Array(nDecim);
+        for (let i = 0; i < nDecim; i++) {
+            const x = decimEnv[i];
             envHpY = envHpAlpha * (envHpY + x - envHpPrevX);
             envHpPrevX = x;
             signal[i] = envHpY;
         }
 
-        const hannDenom = Math.max(1, n - 1);
+        // DFT of decimated envelope at each target frequency.
+        const hannDenom = Math.max(1, nDecim - 1);
         for (let f = 1; f <= maxFreqHz; f++) {
-            const omega = (2 * Math.PI * f) / sampleRate;
-            let re = 0;
-            let im = 0;
-
-            for (let i = 0; i < n; i++) {
+            const omega = (2 * Math.PI * f) / decimSR;
+            let re = 0, im = 0;
+            for (let i = 0; i < nDecim; i++) {
                 const hann = 0.5 * (1 - Math.cos((2 * Math.PI * i) / hannDenom));
                 const v = signal[i] * hann;
-                const phase = omega * i;
-                re += v * Math.cos(phase);
-                im -= v * Math.sin(phase);
+                re += v * Math.cos(omega * i);
+                im -= v * Math.sin(omega * i);
             }
-
-            spectrum[f] = Math.hypot(re, im) / n;
+            spectrum[f] = Math.hypot(re, im) / nDecim;
         }
 
         return spectrum;
