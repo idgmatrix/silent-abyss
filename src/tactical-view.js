@@ -183,8 +183,8 @@ export class TacticalView {
     resize() {
         if (!this.container) return;
 
-        const width = this.container.clientWidth;
-        const height = this.container.clientHeight;
+        const width = Math.max(1, Math.floor(this.container.clientWidth || 0));
+        const height = Math.max(1, Math.floor(this.container.clientHeight || 0));
 
         this.renderer3D.resize(width, height);
         this.renderer2D.resize(width, height);

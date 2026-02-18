@@ -43,6 +43,7 @@ export class WebGPUFFTProcessor {
         this._spectrumCache = null;
         this._hannWindow = null;
         this._lastMode = 'frequency';
+        this._maxGpuFftSize = 2048;
     }
 
     async init() {
@@ -61,6 +62,9 @@ export class WebGPUFFTProcessor {
             }
 
             this.device = await this.adapter.requestDevice();
+            this._maxGpuFftSize = this._deriveMaxGpuFftSize(
+                this.device?.limits?.maxComputeWorkgroupStorageSize
+            );
             this.backend = 'webgpu';
             this.ready = true;
             return true;
@@ -159,6 +163,12 @@ export class WebGPUFFTProcessor {
         const fftSize = options.fftSize;
         const bins = fftSize >> 1;
 
+        if (fftSize > this._maxGpuFftSize) {
+            throw new Error(
+                `FFT size ${fftSize} exceeds GPU shared-memory limit (${this._maxGpuFftSize})`
+            );
+        }
+
         this._ensureGpuResources(fftSize);
 
         this.device.queue.writeBuffer(this.inputBuffer, 0, input);
@@ -213,8 +223,8 @@ struct Params {
 @group(0) @binding(1) var<storage, read_write> outputData : array<f32>;
 @group(0) @binding(2) var<uniform> params : Params;
 
-var<workgroup> sharedReal : array<f32, 4096>;
-var<workgroup> sharedImag : array<f32, 4096>;
+var<workgroup> sharedReal : array<f32, ${fftSize}>;
+var<workgroup> sharedImag : array<f32, ${fftSize}>;
 
 fn bit_reverse(v: u32, bits: u32) -> u32 {
     return reverseBits(v) >> (32u - bits);
@@ -318,6 +328,21 @@ fn main(@builtin(local_invocation_id) lid : vec3<u32>) {
                 { binding: 2, resource: { buffer: this.paramsBuffer } }
             ]
         });
+    }
+
+    _deriveMaxGpuFftSize(maxComputeWorkgroupStorageSize) {
+        const BYTES_PER_COMPLEX_SAMPLE = 8; // sharedReal + sharedImag as f32
+        const fallbackLimit = 16384;
+        const limit = Math.max(
+            1024,
+            Number.isFinite(maxComputeWorkgroupStorageSize)
+                ? maxComputeWorkgroupStorageSize
+                : fallbackLimit
+        );
+
+        const rawMax = Math.floor(limit / BYTES_PER_COMPLEX_SAMPLE);
+        const pow2Max = 1 << Math.floor(Math.log2(Math.max(2, rawMax)));
+        return Math.max(256, Math.min(4096, pow2Max));
     }
 
     _computeCpuFFT(realInput) {

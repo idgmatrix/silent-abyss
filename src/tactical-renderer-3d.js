@@ -33,13 +33,15 @@ export class Tactical3DRenderer {
 
         this.container = container;
         this.scene = new THREE.Scene();
-        this.camera = new THREE.PerspectiveCamera(60, container.clientWidth / container.clientHeight, 0.1, 1000);
+        const initWidth = Math.max(1, Math.floor(container.clientWidth || 0));
+        const initHeight = Math.max(1, Math.floor(container.clientHeight || 0));
+        this.camera = new THREE.PerspectiveCamera(60, initWidth / initHeight, 0.1, 1000);
         this.camera.position.set(0, 50, 80);
         this.camera.lookAt(0, 0, 0);
 
         this.renderer = await this._createRenderer(container);
         this.renderer.setPixelRatio(window.devicePixelRatio || 1);
-        this.renderer.setSize(container.clientWidth, container.clientHeight);
+        this.renderer.setSize(initWidth, initHeight);
         this.renderer.domElement.style.position = 'absolute';
         this.renderer.domElement.style.top = '0';
         this.renderer.domElement.style.left = '0';
@@ -127,8 +129,10 @@ export class Tactical3DRenderer {
 
     resize(width, height) {
         if (!this.renderer || !this.camera) return;
-        this.renderer.setSize(width, height);
-        this.camera.aspect = width / height;
+        const safeWidth = Math.max(1, Math.floor(width || 0));
+        const safeHeight = Math.max(1, Math.floor(height || 0));
+        this.renderer.setSize(safeWidth, safeHeight);
+        this.camera.aspect = safeWidth / safeHeight;
         this.camera.updateProjectionMatrix();
     }
 

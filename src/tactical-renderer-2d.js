@@ -43,9 +43,11 @@ export class Tactical2DRenderer {
 
     resize(width, height) {
         if (!this.canvas || !this.ctx) return;
+        const safeWidth = Math.max(1, Math.floor(width || 0));
+        const safeHeight = Math.max(1, Math.floor(height || 0));
         const dpr = window.devicePixelRatio || 1;
-        this.canvas.width = width * dpr;
-        this.canvas.height = height * dpr;
+        this.canvas.width = safeWidth * dpr;
+        this.canvas.height = safeHeight * dpr;
         this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
         this.contourCache.clear();
     }
