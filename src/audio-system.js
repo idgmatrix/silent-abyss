@@ -108,14 +108,15 @@ export class AudioSystem {
         this.analysisCompositeTimeDomainArray = new Float32Array(this.analysisCompositeAnalyser.fftSize);
         this.analysisSelectedTimeDomainArray = new Float32Array(this.analysisSelectedAnalyser.fftSize);
 
+        // Composite bus: own-ship + all contacts (used when no target is selected).
         this.analysisContactsGain.connect(this.analysisMixGain);
         this.analysisOwnShipGain.connect(this.analysisMixGain);
-
         this.analysisMixGain.connect(this.analysisCompositeAnalyser);
 
-        // Selected mode is currently mirrored from analysis mix.
-        // Item 2 will route selected-target analysis independently.
-        this.analysisMixGain.connect(this.analysisSelectedGain);
+        // Selected bus: contacts only, own-ship excluded.
+        // The focus system boosts the selected target and ducks all others,
+        // so this bus is dominated by the focused contact when one is active.
+        this.analysisContactsGain.connect(this.analysisSelectedGain);
         this.analysisSelectedGain.connect(this.analysisSelectedAnalyser);
     }
 

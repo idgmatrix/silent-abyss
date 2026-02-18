@@ -528,12 +528,16 @@ export class SonarVisuals {
         if (!(spectrum instanceof Float32Array) || spectrum.length < 4) return spectrum;
         if (!this.selfNoiseSuppressionEnabled) return spectrum;
 
+        // When a target is selected the analysis bus carries contacts only
+        // (own-ship is structurally excluded), so there is nothing to mask.
+        if (selectedTarget) return spectrum;
+
         const ownBpfHz = Number.isFinite(this._ownShipSignature?.bpfHz) ? this._ownShipSignature.bpfHz : 0;
         if (ownBpfHz <= 0) return spectrum;
 
         const out = new Float32Array(spectrum);
-        const selectedMultiplier = selectedTarget ? 0.18 : 0.38;
-        const baseRadiusHz = selectedTarget ? 1.25 : 0.9;
+        const multiplier = 0.38;
+        const baseRadiusHz = 0.9;
         for (let k = 1; k <= 10; k++) {
             const f = ownBpfHz * k;
             const centerBin = Math.round(f);
@@ -544,7 +548,7 @@ export class SonarVisuals {
                 if (b <= 1 || b >= out.length) continue;
                 const dist = Math.abs(b - centerBin) / Math.max(1, radius);
                 const falloff = Math.exp(-3.2 * dist * dist);
-                const attenuation = 1 - (1 - selectedMultiplier) * falloff;
+                const attenuation = 1 - (1 - multiplier) * falloff;
                 out[b] *= attenuation;
             }
         }
