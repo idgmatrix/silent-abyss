@@ -528,6 +528,7 @@ function renderLoop(now) {
     const timeDomainData = audioSys.getAnalysisTimeDomainData(analysisMode);
     const acousticContext = worldModel.getAcousticContextForTarget(selectedTarget);
     const pingTransient = worldModel.getPingTransientState(2.5);
+    const pingEchoes = worldModel.getAndFlushArrivedEchoes();
     if (selectedTarget) {
         updateDashboard(selectedTarget);
     }
@@ -553,7 +554,8 @@ function renderLoop(now) {
             {
                 ownShipSignature: audioSys.getOwnShipSignature(),
                 sourceMode: analysisMode === 'selected' ? 'SELECTED' : 'COMPOSITE',
-                pingTransient
+                pingTransient,
+                pingEchoes
             }
         );
     }

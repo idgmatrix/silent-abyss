@@ -25,6 +25,7 @@ export class WorldModel {
         this.ownShipCourse = 0;
         this.elapsedTime = 0; // Simulation time in seconds
         this.lastPingTime = -Infinity;
+        this.pendingEchoes = []; // { bearing, intensity, arrivalTime }
 
         // Configuration
         this.detectionThreshold = 6.0; // dB
@@ -197,6 +198,15 @@ export class WorldModel {
                 const echoVol = (0.6 * (1.0 - target.distance / 200)) * modifiers.echoGain;
                 this.callbacks.onPingEcho(echoVol, target.distance);
                 this.callbacks.onSonarContact(target, false);
+
+                // Schedule visual echo return — two-way travel time at ~1500 m/s
+                const twoWayDelaySec = (rangeMeters * 2) / 1500;
+                const echoIntensity = Math.max(0.25, 1.0 - target.distance / 200) * modifiers.echoGain;
+                this.pendingEchoes.push({
+                    bearing: target.bearing,
+                    intensity: echoIntensity,
+                    arrivalTime: this.elapsedTime + twoWayDelaySec
+                });
             }
         });
 
@@ -255,6 +265,12 @@ export class WorldModel {
             recent,
             sinceLastPing
         };
+    }
+
+    getAndFlushArrivedEchoes() {
+        const arrived = this.pendingEchoes.filter(e => this.elapsedTime >= e.arrivalTime);
+        this.pendingEchoes = this.pendingEchoes.filter(e => this.elapsedTime < e.arrivalTime);
+        return arrived;
     }
 
     getSelectedTarget() {

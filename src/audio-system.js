@@ -440,14 +440,20 @@ export class AudioSystem {
         const osc = this.ctx.createOscillator();
         const g = this.ctx.createGain();
 
-        osc.connect(g).connect(this.outputGain);
-
         osc.frequency.setValueAtTime(startFreq, time);
         osc.frequency.exponentialRampToValueAtTime(endFreq, time + 0.1);
 
         g.gain.setValueAtTime(0, time);
         g.gain.linearRampToValueAtTime(vol, time + 0.02);
         g.gain.linearRampToValueAtTime(0, time + 1.2);
+
+        osc.connect(g);
+        g.connect(this.outputGain);
+
+        // Feed into analysis bus so the ping appears on the waterfall
+        if (this.analysisMixGain) {
+            g.connect(this.analysisMixGain);
+        }
 
         osc.start(time);
         osc.stop(time + 1.3);
@@ -460,16 +466,21 @@ export class AudioSystem {
         const osc = this.ctx.createOscillator();
         const g = this.ctx.createGain();
 
-        // Route through the same startup-gated bus used by Wasm voices.
-        osc.connect(g).connect(this.outputGain);
-
         // Sharper sweep for echo: 1100Hz -> 850Hz
         osc.frequency.setValueAtTime(1100, time);
         osc.frequency.exponentialRampToValueAtTime(850, time + 0.08);
 
         g.gain.setValueAtTime(0, time);
         g.gain.linearRampToValueAtTime(vol, time + 0.01);
-        g.gain.linearRampToValueAtTime(0, time + 0.6); // Shorter decay (0.6s)
+        g.gain.linearRampToValueAtTime(0, time + 0.6);
+
+        osc.connect(g);
+        g.connect(this.outputGain);
+
+        // Feed into analysis bus so the echo appears on the waterfall
+        if (this.analysisMixGain) {
+            g.connect(this.analysisMixGain);
+        }
 
         osc.start(time);
         osc.stop(time + 0.7);

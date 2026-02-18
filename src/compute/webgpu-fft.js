@@ -449,7 +449,7 @@ fn main(@builtin(local_invocation_id) lid : vec3<u32>) {
 
         // Decaying peak reference prevents startup transients from flattening later frames.
         const decayedReference = Math.max(REFERENCE_FLOOR, this.intensityReference * REFERENCE_DECAY);
-        this.intensityReference = Math.max(framePeak, decayedReference) * 0.125;
+        this.intensityReference = Math.max(framePeak, decayedReference) * 0.25;
 
         for (let i = 0; i < out.length; i++) {
             out[i] = Math.min(1.0, out[i] / this.intensityReference);

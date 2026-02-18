@@ -103,6 +103,7 @@ export class SonarVisuals {
         this._demonSelectedTargetId = null;
         this._demonTargetCache = new Map();
         this._demonPingTransient = { active: false, recent: false, sinceLastPing: Infinity };
+        this._pingEchoes = [];
         this._demonFocusWidthHz = 1.3;
         this._demonResponsiveness = 0.55;
         this._demonLocks = new Map();
@@ -210,13 +211,14 @@ export class SonarVisuals {
         this._ownShipSignature = options.ownShipSignature || this._ownShipSignature;
         this._demonSourceMode = options.sourceMode === 'SELECTED' ? 'SELECTED' : 'COMPOSITE';
         this._demonPingTransient = options.pingTransient || this._demonPingTransient;
+        this._pingEchoes = options.pingEchoes || [];
         this._syncDemonTargetCache(selectedTarget);
         this._updateLofarSpectrum(dataArray, timeDomainData, fftSize);
         this._updateDemonSpectrum(timeDomainData, sampleRate, selectedTarget);
         this.drawLOFAR(dataArray, currentRpm, sampleRate, fftSize, selectedTarget);
         this.drawDEMON(dataArray, currentRpm, selectedTarget, sampleRate);
-        this.drawBTR(targets, currentRpm, pingIntensity);
-        this.drawWaterfall(dataArray);
+        this.drawBTR(targets, currentRpm, pingIntensity, this._pingEchoes);
+        this.drawWaterfall(dataArray, pingIntensity);
     }
 
     _cloneDemonLock(lock) {
@@ -1237,7 +1239,7 @@ export class SonarVisuals {
         }
     }
 
-    drawBTR(targets, currentRpm, pingIntensity) {
+    drawBTR(targets, currentRpm, pingIntensity, pingEchoes = []) {
         if (!this.btrDisplay) return;
 
         const theme = BTR_THEMES[this.currentTheme];
@@ -1304,15 +1306,15 @@ export class SonarVisuals {
                 ctx.fillRect(0, 0, width, 1);
             }
 
-            // Ping Mask
+            // Outgoing ping — faint full-panel wash (represents own transmitted pulse)
             if (pingIntensity > 0) {
-                ctx.fillStyle = `rgba(${theme.PING[0]}, ${theme.PING[1]}, ${theme.PING[2]}, ${pingIntensity * 0.6})`;
+                ctx.fillStyle = `rgba(${theme.PING[0]}, ${theme.PING[1]}, ${theme.PING[2]}, ${pingIntensity * 0.18})`;
                 ctx.fillRect(0, 0, width, 1);
             }
         });
     }
 
-    drawWaterfall(dataArray) {
+    drawWaterfall(dataArray, pingIntensity = 0) {
         if (!this.waterfallDisplay || !this.waterfallDisplay.ctx) return;
 
         const theme = BTR_THEMES[this.currentWaterfallTheme].WATERFALL;
@@ -1366,6 +1368,8 @@ export class SonarVisuals {
             }
 
             ctx.putImageData(imageData, 0, 0);
+
+
         });
     }
 
