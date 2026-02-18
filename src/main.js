@@ -55,6 +55,8 @@ let contactClearLostBtn, solutionBearingInput, solutionRangeInput, solutionCours
 let solutionSaveBtn, solutionConfidenceEl;
 let missionSelectEl, missionResetBtn, missionTitleEl, missionStatusEl, missionBriefingEl, missionObjectivesEl;
 let demonFocusWidthSliderEl, demonFocusWidthValueEl, demonSelfNoiseToggleEl, demonStabilitySliderEl, demonStabilityValueEl, demonControlsToggleEl, demonControlsContentEl;
+let rudderSliderEl, rudderAngleDisplayEl, rudderPortBtnEl, rudderStarboardBtnEl, rudderCenterBtnEl, headingDisplayEl;
+let throttleSliderEl, throttleDisplayEl, throttleAsternBtnEl, throttleAheadBtnEl, throttleStopBtnEl;
 
 function syncLeftSonarPanelHeights() {
     const leftColumn = document.getElementById('left-column');
@@ -121,7 +123,7 @@ function cacheDomElements() {
     classEl = document.getElementById('target-class-text');
     targetIdEl = document.getElementById('target-id-text');
     contactAlertEl = document.getElementById('contact-alert');
-    depthEl = document.querySelector('header div div span.text-white'); // Matches DEPTH display
+    depthEl = document.getElementById('depth-text');
     contactListEl = document.getElementById('contact-list');
     contactFilterEl = document.getElementById('contact-filter');
     contactSortEl = document.getElementById('contact-sort');
@@ -148,6 +150,17 @@ function cacheDomElements() {
     demonStabilityValueEl = document.getElementById('demon-stability-value');
     demonControlsToggleEl = document.getElementById('demon-controls-toggle');
     demonControlsContentEl = document.getElementById('demon-controls-content');
+    rudderSliderEl = document.getElementById('rudder-slider');
+    rudderAngleDisplayEl = document.getElementById('rudder-angle-display');
+    rudderPortBtnEl = document.getElementById('rudder-port-btn');
+    rudderStarboardBtnEl = document.getElementById('rudder-starboard-btn');
+    rudderCenterBtnEl = document.getElementById('rudder-center-btn');
+    headingDisplayEl = document.getElementById('heading-display');
+    throttleSliderEl = document.getElementById('throttle-slider');
+    throttleDisplayEl = document.getElementById('throttle-display');
+    throttleAsternBtnEl = document.getElementById('throttle-astern-btn');
+    throttleAheadBtnEl = document.getElementById('throttle-ahead-btn');
+    throttleStopBtnEl = document.getElementById('throttle-stop-btn');
 }
 
 function getTargetById(targetId) {
@@ -401,6 +414,71 @@ function bindDemonControlUiHandlers() {
     }
 }
 
+function bindManeuverUiHandlers() {
+    const applyRudder = (value) => {
+        const angle = Number.parseInt(value, 10);
+        const safe = Number.isFinite(angle) ? Math.max(-30, Math.min(30, angle)) : 0;
+        worldModel.setOwnShipRudderAngleDeg(safe);
+        if (rudderAngleDisplayEl) {
+            rudderAngleDisplayEl.innerText = `${safe > 0 ? '+' : ''}${safe}\u00B0`;
+        }
+        if (rudderSliderEl && Number.parseInt(rudderSliderEl.value, 10) !== safe) {
+            rudderSliderEl.value = `${safe}`;
+        }
+    };
+
+    if (rudderSliderEl) {
+        rudderSliderEl.oninput = () => applyRudder(rudderSliderEl.value);
+        applyRudder(rudderSliderEl.value);
+    }
+
+    if (rudderPortBtnEl) {
+        rudderPortBtnEl.onclick = () => applyRudder(-20);
+    }
+
+    if (rudderStarboardBtnEl) {
+        rudderStarboardBtnEl.onclick = () => applyRudder(20);
+    }
+
+    if (rudderCenterBtnEl) {
+        rudderCenterBtnEl.onclick = () => {
+            worldModel.centerOwnShipRudder();
+            applyRudder(0);
+        };
+    }
+
+    const applyThrottle = (value) => {
+        const percent = Number.parseInt(value, 10);
+        const safe = Number.isFinite(percent) ? Math.max(-100, Math.min(100, percent)) : 0;
+        worldModel.setOwnShipThrottleNormalized(safe / 100);
+        if (throttleSliderEl && Number.parseInt(throttleSliderEl.value, 10) !== safe) {
+            throttleSliderEl.value = `${safe}`;
+        }
+        if (throttleDisplayEl) {
+            if (safe === 0) throttleDisplayEl.innerText = 'STOP';
+            else if (safe > 0) throttleDisplayEl.innerText = `AHD ${safe}%`;
+            else throttleDisplayEl.innerText = `AST ${Math.abs(safe)}%`;
+        }
+    };
+
+    if (throttleSliderEl) {
+        throttleSliderEl.oninput = () => applyThrottle(throttleSliderEl.value);
+        applyThrottle(throttleSliderEl.value);
+    }
+    if (throttleAsternBtnEl) {
+        throttleAsternBtnEl.onclick = () => applyThrottle(-60);
+    }
+    if (throttleAheadBtnEl) {
+        throttleAheadBtnEl.onclick = () => applyThrottle(60);
+    }
+    if (throttleStopBtnEl) {
+        throttleStopBtnEl.onclick = () => {
+            worldModel.stopOwnShipThrottle();
+            applyThrottle(0);
+        };
+    }
+}
+
 async function initSystems() {
     cacheDomElements();
     bindContactUiHandlers();
@@ -418,6 +496,7 @@ async function initSystems() {
     await tacticalView.init('tactical-viewport');
     sonarVisuals.init();
     bindDemonControlUiHandlers();
+    bindManeuverUiHandlers();
 
     // Initialize Targets in subsystems
     for (const target of simEngine.targets) {
@@ -454,6 +533,10 @@ async function initSystems() {
         renderCampaignPanel();
         if (depthEl) {
             depthEl.innerText = `${worldModel.getOwnShipDepth().toFixed(0)}m`;
+        }
+        if (headingDisplayEl) {
+            const heading = worldModel.getOwnShipHeadingDeg();
+            headingDisplayEl.innerText = `${Math.round(heading).toString().padStart(3, '0')}\u00B0`;
         }
     };
 
@@ -596,7 +679,7 @@ function renderLoop(now) {
     simEngine.update(now);
 
     // Render Tactical View
-    tacticalView.render(simEngine.targets, worldModel.ownShipCourse);
+    tacticalView.render(simEngine.targets, worldModel.ownShipCourse, worldModel.getOwnShipForwardSpeed());
 
     // Render Visuals
     const ctx = audioSys.getContext();

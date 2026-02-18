@@ -23,6 +23,10 @@ export class WorldModel {
         this.pingActiveIntensity = 0;
         this.currentPulseId = 0;
         this.ownShipCourse = 0;
+        this.ownShipRudderDeg = 0;
+        this.ownShipTurnRate = 0;
+        this.ownShipThrottleCmd = 0; // -1 astern .. +1 ahead
+        this.ownShipForwardSpeed = 0; // signed local-forward speed (visual units/s)
         this.elapsedTime = 0; // Simulation time in seconds
         this.lastPingTime = -Infinity;
         this.pendingEchoes = []; // { bearing, intensity, arrivalTime }
@@ -35,6 +39,9 @@ export class WorldModel {
         this.shadowZoneAttenuation = 15.0; // dB loss (Thermocline shadow)
         this.multiPathStrength = 3.0; // dB variation
         this.multiPathFrequency = 0.5;
+        this.maxOwnShipTurnRate = 0.35; // rad/s at full rudder
+        this.maxAheadSpeed = 0.28;
+        this.maxAsternSpeed = 0.16;
     }
 
     seedTargets() {
@@ -49,7 +56,7 @@ export class WorldModel {
 
     update(dt) {
         this.elapsedTime += dt;
-        this.ownShipCourse = (this.elapsedTime / 10) * Math.PI * 2;
+        this.updateOwnShipManeuver(dt);
 
         // Decay visuals
         if (this.pingActiveIntensity > 0) {
@@ -64,6 +71,57 @@ export class WorldModel {
 
         // Notify that targets have been updated (for audio volume, etc.)
         this.callbacks.onTargetUpdate(this.simEngine.targets);
+    }
+
+    updateOwnShipManeuver(dt) {
+        const maxRudderDeg = 30;
+        const rudderNorm = Math.max(-1, Math.min(1, this.ownShipRudderDeg / maxRudderDeg));
+        const targetTurnRate = rudderNorm * this.maxOwnShipTurnRate;
+        const response = Math.min(1, Math.max(0, dt * 2.6));
+        this.ownShipTurnRate += (targetTurnRate - this.ownShipTurnRate) * response;
+
+        const throttle = Math.max(-1, Math.min(1, this.ownShipThrottleCmd));
+        const targetSpeed = throttle >= 0
+            ? throttle * this.maxAheadSpeed
+            : throttle * this.maxAsternSpeed;
+        const speedResponse = Math.min(1, Math.max(0, dt * 1.9));
+        this.ownShipForwardSpeed += (targetSpeed - this.ownShipForwardSpeed) * speedResponse;
+
+        this.ownShipCourse += this.ownShipTurnRate * dt;
+        this.ownShipCourse = (this.ownShipCourse + Math.PI * 2) % (Math.PI * 2);
+    }
+
+    setOwnShipRudderAngleDeg(angleDeg) {
+        const angle = Number(angleDeg);
+        if (!Number.isFinite(angle)) return;
+        this.ownShipRudderDeg = Math.max(-30, Math.min(30, angle));
+    }
+
+    centerOwnShipRudder() {
+        this.ownShipRudderDeg = 0;
+    }
+
+    setOwnShipThrottleNormalized(value) {
+        const v = Number(value);
+        if (!Number.isFinite(v)) return;
+        this.ownShipThrottleCmd = Math.max(-1, Math.min(1, v));
+    }
+
+    stopOwnShipThrottle() {
+        this.ownShipThrottleCmd = 0;
+    }
+
+    getOwnShipHeadingDeg() {
+        const heading = (this.ownShipCourse * 180 / Math.PI) + 90;
+        return (heading + 360) % 360;
+    }
+
+    getOwnShipThrottleNormalized() {
+        return this.ownShipThrottleCmd;
+    }
+
+    getOwnShipForwardSpeed() {
+        return this.ownShipForwardSpeed;
     }
 
     processPassiveDetection() {

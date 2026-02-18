@@ -33,8 +33,7 @@ export class Tactical3DRenderer {
 
         this.container = container;
         this.scene = new THREE.Scene();
-        // Align 3D map orientation with radial view (rotate world 90 deg CCW).
-        this.scene.rotation.y = Math.PI / 2;
+        this.scene.rotation.y = 0;
         const initWidth = Math.max(1, Math.floor(container.clientWidth || 0));
         const initHeight = Math.max(1, Math.floor(container.clientHeight || 0));
         this.camera = new THREE.PerspectiveCamera(60, initWidth / initHeight, 0.1, 1000);
@@ -222,8 +221,13 @@ export class Tactical3DRenderer {
         }
     }
 
-    render(_ownShipCourse, selectedTargetId, pulse, targets = [], dt = 0.016) {
+    render(ownShipPose, selectedTargetId, pulse, targets = [], dt = 0.016) {
         if (!this.renderer || !this.scene || !this.camera) return;
+        const ownX = Number.isFinite(ownShipPose?.x) ? ownShipPose.x : 0;
+        const ownZ = Number.isFinite(ownShipPose?.z) ? ownShipPose.z : 0;
+        const ownCourse = Number.isFinite(ownShipPose?.course) ? ownShipPose.course : 0;
+
+        this.updateOwnShipFrame(ownX, ownZ, ownCourse, dt);
 
         if (this.selectionRing) {
             if (selectedTargetId && this.targetMeshes.has(selectedTargetId)) {
@@ -273,6 +277,39 @@ export class Tactical3DRenderer {
         }
 
         this.renderer.render(this.scene, this.camera);
+    }
+
+    updateOwnShipFrame(ownX, ownZ, ownCourse) {
+        if (!this.camera) return;
+
+        const ownY = this.getTerrainHeight(ownX, ownZ) + 5.0;
+        if (this.ownShip) {
+            this.ownShip.position.set(ownX, ownY, ownZ);
+        }
+
+        const localCam = { x: 0, y: 50, z: 80 };
+        const c = Math.cos(ownCourse);
+        const s = Math.sin(ownCourse);
+        const camWorldX = ownX + localCam.x * c - localCam.z * s;
+        const camWorldZ = ownZ + localCam.x * s + localCam.z * c;
+        const camWorldY = ownY + localCam.y;
+
+        // Scene is globally rotated +90deg for radial alignment; apply same mapping to camera frame.
+        const toSceneXZ = (x, z) => ({ x: -z, z: x });
+        const camScene = toSceneXZ(camWorldX, camWorldZ);
+        const ownScene = toSceneXZ(ownX, ownZ);
+        this.camera.position.set(camScene.x, camWorldY, camScene.z);
+        this.camera.lookAt(ownScene.x, ownY, ownScene.z);
+        // Keep own-ship heading visually fixed in local view as camera/world yaw changes.
+        if (this.ownShip) {
+            const camForward = new THREE.Vector3();
+            this.camera.getWorldDirection(camForward);
+            camForward.y = 0;
+            if (camForward.lengthSq() > 1e-6) {
+                camForward.normalize();
+                this.ownShip.rotation.y = Math.atan2(camForward.x, camForward.z);
+            }
+        }
     }
 
     _buildCavitationEmitters(targets) {

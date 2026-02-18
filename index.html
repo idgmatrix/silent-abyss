@@ -18,8 +18,42 @@
     <header class="panel p-2 flex justify-between items-center border-b-2 border-cyan-800">
         <h1 class="text-lg font-bold tracking-[0.2em] glow-text uppercase text-cyan-400">Tactical Command System v5.7</h1>
         <div class="flex gap-6 text-[11px]">
-            <div>DEPTH: <span class="text-white">125m</span></div>
+            <div>DEPTH: <span id="depth-text" class="text-white">125m</span></div>
             <div class="flex items-center gap-4">
+                <div class="flex items-center gap-2 border border-cyan-900 px-2 py-1 bg-cyan-950/10">
+                    <span class="text-cyan-500 text-[9px] uppercase tracking-wider">MANEUVER</span>
+                    <button id="rudder-port-btn" class="border border-cyan-900 text-cyan-400 text-[9px] px-1 hover:bg-cyan-950/40">PORT</button>
+                    <input
+                        type="range"
+                        id="rudder-slider"
+                        min="-30"
+                        max="30"
+                        step="1"
+                        value="0"
+                        class="w-24"
+                    >
+                    <button id="rudder-starboard-btn" class="border border-cyan-900 text-cyan-400 text-[9px] px-1 hover:bg-cyan-950/40">STBD</button>
+                    <button id="rudder-center-btn" class="border border-cyan-900 text-cyan-300 text-[9px] px-1 hover:bg-cyan-950/40">MID</button>
+                    <span id="rudder-angle-display" class="text-cyan-300 text-[10px] font-bold w-10 text-right">0°</span>
+                    <span class="text-cyan-600">HDG</span>
+                    <span id="heading-display" class="text-cyan-300 font-bold tracking-wider">090°</span>
+                </div>
+                <div class="flex items-center gap-2 border border-cyan-900 px-2 py-1 bg-cyan-950/10">
+                    <span class="text-cyan-500 text-[9px] uppercase tracking-wider">PROP</span>
+                    <button id="throttle-astern-btn" class="border border-cyan-900 text-cyan-400 text-[9px] px-1 hover:bg-cyan-950/40">ASTERN</button>
+                    <input
+                        type="range"
+                        id="throttle-slider"
+                        min="-100"
+                        max="100"
+                        step="5"
+                        value="0"
+                        class="w-24"
+                    >
+                    <button id="throttle-ahead-btn" class="border border-cyan-900 text-cyan-400 text-[9px] px-1 hover:bg-cyan-950/40">AHEAD</button>
+                    <button id="throttle-stop-btn" class="border border-cyan-900 text-cyan-300 text-[9px] px-1 hover:bg-cyan-950/40">STOP</button>
+                    <span id="throttle-display" class="text-cyan-300 text-[10px] font-bold w-14 text-right">STOP</span>
+                </div>
                 <div class="flex gap-2 text-[10px] border border-cyan-900 px-2 py-1">
                     <label class="cursor-pointer flex items-center gap-1">
                         <input type="radio" name="view-mode" value="3d" checked> <span class="text-cyan-400">3D</span>

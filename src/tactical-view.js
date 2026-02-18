@@ -15,6 +15,8 @@ export class TacticalView {
         this.renderer2D = new Tactical2DRenderer((x, z) => this.getTerrainHeight(x, z));
 
         this._lastTargets = [];
+        this._ownShipPose = { x: 0, z: 0, course: 0, speed: 0 };
+        this._ownShipDisplayCourse = 0;
         this._resizeHandler = null;
         this._clickHandler = null;
         this._targetSelectedHandler = null;
@@ -133,7 +135,7 @@ export class TacticalView {
         this.renderer2D.setScanState(radius, active);
     }
 
-    render(targets, ownShipCourse) {
+    render(targets, ownShipCourse, ownShipForwardSpeed = 0) {
         if (!this.container) return;
 
         const now = performance.now();
@@ -141,11 +143,12 @@ export class TacticalView {
         this._lastRenderTime = now;
         this.pulse = (Date.now() % 2000) / 2000;
         this._lastTargets = Array.isArray(targets) ? targets : [];
+        this.updateOwnShipPose(ownShipCourse, ownShipForwardSpeed, dt);
 
         if (this.viewMode === '3d') {
             this.renderer3D.setVisible(true);
             this.renderer2D.setVisible(false);
-            this.renderer3D.render(ownShipCourse, this.selectedTargetId, this.pulse, this._lastTargets, dt);
+            this.renderer3D.render(this._ownShipPose, this.selectedTargetId, this.pulse, this._lastTargets, dt);
             return;
         }
 
@@ -153,8 +156,28 @@ export class TacticalView {
         this.renderer2D.setVisible(true);
         this.renderer2D.render(this.viewMode, targets, {
             selectedTargetId: this.selectedTargetId,
-            pulse: this.pulse
+            pulse: this.pulse,
+            ownShipPose: this._ownShipPose
         });
+    }
+
+    updateOwnShipPose(ownShipCourse, ownShipForwardSpeed, dt) {
+        const rawCourse = Number.isFinite(ownShipCourse) ? ownShipCourse : this._ownShipDisplayCourse;
+        const speed = Number.isFinite(ownShipForwardSpeed) ? ownShipForwardSpeed : 0;
+
+        // Shared visual heading smoothing for all views (3D/radial/grid).
+        let diff = rawCourse - this._ownShipDisplayCourse;
+        while (diff > Math.PI) diff -= Math.PI * 2;
+        while (diff < -Math.PI) diff += Math.PI * 2;
+        const maxTurnRate = 0.25; // rad/s
+        const maxStep = Math.max(0.001, maxTurnRate * Math.max(0.001, dt));
+        const turnStep = Math.max(-maxStep, Math.min(maxStep, diff));
+        this._ownShipDisplayCourse += turnStep;
+
+        this._ownShipPose.course = this._ownShipDisplayCourse;
+        this._ownShipPose.speed = speed;
+        this._ownShipPose.x += Math.cos(rawCourse) * speed * dt;
+        this._ownShipPose.z += Math.sin(rawCourse) * speed * dt;
     }
 
     setViewMode(mode) {
@@ -173,7 +196,14 @@ export class TacticalView {
         if (this.viewMode === '3d') {
             hitId = this.renderer3D.pickTargetAtPoint(x, y, rect);
         } else if (this.viewMode === 'radial' || this.viewMode === 'grid') {
-            hitId = this.renderer2D.pickTargetAtPoint(this.viewMode, x, y, rect, this._lastTargets);
+            hitId = this.renderer2D.pickTargetAtPoint(
+                this.viewMode,
+                x,
+                y,
+                rect,
+                this._lastTargets,
+                { ownShipPose: this._ownShipPose }
+            );
         }
 
         this.selectedTargetId = hitId;

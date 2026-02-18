@@ -66,12 +66,13 @@ export class Tactical2DRenderer {
         }
     }
 
-    pickTargetAtPoint(mode, x, y, rect, targets) {
+    pickTargetAtPoint(mode, x, y, rect, targets, options = {}) {
         if (!Array.isArray(targets)) return null;
         const centerX = rect.width / 2;
         const centerY = rect.height / 2;
         const scale = 1.5;
         const angleOffset = -Math.PI / 2;
+        const ownShipPose = options.ownShipPose || { x: 0, z: 0, course: 0 };
 
         let hitId = null;
         targets.forEach((t) => {
@@ -81,13 +82,15 @@ export class Tactical2DRenderer {
             let dy;
 
             if (mode === 'radial') {
-                const rotX = t.x * Math.cos(angleOffset) - t.z * Math.sin(angleOffset);
-                const rotZ = t.x * Math.sin(angleOffset) + t.z * Math.cos(angleOffset);
+                const local = this.toLocalFrame(t.x, t.z, ownShipPose, true);
+                const rotX = local.x * Math.cos(angleOffset) - local.z * Math.sin(angleOffset);
+                const rotZ = local.x * Math.sin(angleOffset) + local.z * Math.cos(angleOffset);
                 dx = centerX + rotX * scale;
                 dy = centerY + rotZ * scale;
             } else {
-                dx = centerX + t.x * scale;
-                dy = centerY + t.z * scale;
+                const local = this.toLocalFrame(t.x, t.z, ownShipPose, false);
+                dx = centerX + local.x * scale;
+                dy = centerY + local.z * scale;
             }
 
             const dist = Math.sqrt((x - dx) ** 2 + (y - dy) ** 2);
@@ -106,6 +109,7 @@ export class Tactical2DRenderer {
         const scale = 1.5;
         const pulse = options.pulse || 0;
         const selectedTargetId = options.selectedTargetId || null;
+        const ownShipPose = options.ownShipPose || { x: 0, z: 0, course: 0 };
         const angleOffset = -Math.PI / 2;
 
         ctx.fillStyle = '#000000';
@@ -130,15 +134,16 @@ export class Tactical2DRenderer {
             ctx.stroke();
         });
 
-        this.drawTerrainContours(ctx, w, h, scale, angleOffset, true);
+        this.drawTerrainContours(ctx, w, h, scale, angleOffset, true, ownShipPose, true);
 
         ctx.font = '10px monospace';
         if (Array.isArray(targets)) {
             targets.forEach((t) => {
                 if (t.state !== TrackState.TRACKED) return;
 
-                const rotX = t.x * Math.cos(angleOffset) - t.z * Math.sin(angleOffset);
-                const rotZ = t.x * Math.sin(angleOffset) + t.z * Math.cos(angleOffset);
+                const local = this.toLocalFrame(t.x, t.z, ownShipPose, true);
+                const rotX = local.x * Math.cos(angleOffset) - local.z * Math.sin(angleOffset);
+                const rotZ = local.x * Math.sin(angleOffset) + local.z * Math.cos(angleOffset);
                 const dx = centerX + rotX * scale;
                 const dy = centerY + rotZ * scale;
                 const isSelected = selectedTargetId === t.id;
@@ -200,6 +205,7 @@ export class Tactical2DRenderer {
         const scale = 1.5;
         const pulse = options.pulse || 0;
         const selectedTargetId = options.selectedTargetId || null;
+        const ownShipPose = options.ownShipPose || { x: 0, z: 0, course: 0 };
 
         ctx.fillStyle = '#000000';
         ctx.fillRect(0, 0, w, h);
@@ -231,14 +237,15 @@ export class Tactical2DRenderer {
         ctx.lineTo(centerX, h);
         ctx.stroke();
 
-        this.drawTerrainContours(ctx, w, h, scale, 0, false);
+        this.drawTerrainContours(ctx, w, h, scale, 0, false, ownShipPose, false);
 
         if (Array.isArray(targets)) {
             targets.forEach((t) => {
                 if (t.state !== TrackState.TRACKED) return;
 
-                const dx = centerX + t.x * scale;
-                const dy = centerY + t.z * scale;
+                const local = this.toLocalFrame(t.x, t.z, ownShipPose, false);
+                const dx = centerX + local.x * scale;
+                const dy = centerY + local.z * scale;
                 const isSelected = selectedTargetId === t.id;
 
                 ctx.globalAlpha = isSelected ? 1.0 : 0.7;
@@ -266,9 +273,10 @@ export class Tactical2DRenderer {
             ctx.stroke();
         }
 
-        // Grid stays north-up; own ship glyph stays fixed to shared heading reference.
+        // Grid stays north-up; only own-ship glyph rotates with heading.
         ctx.save();
         ctx.translate(centerX, centerY);
+        ctx.rotate(ownShipPose.course || 0);
         ctx.fillStyle = '#00ff00';
         ctx.beginPath();
         ctx.moveTo(8, 0); // tip points +X at heading 0
@@ -370,8 +378,8 @@ export class Tactical2DRenderer {
         ctx.restore();
     }
 
-    drawTerrainContours(ctx, width, height, scale, angleOffset, radialMode) {
-        const layers = this.getContourLayers(width, height, scale, angleOffset, radialMode);
+    drawTerrainContours(ctx, width, height, scale, angleOffset, radialMode, ownShipPose, headUp) {
+        const layers = this.getContourLayers(width, height, scale, angleOffset, radialMode, ownShipPose, headUp);
         for (const layer of layers) {
             ctx.strokeStyle = layer.strokeStyle;
             ctx.lineWidth = layer.lineWidth;
@@ -379,8 +387,11 @@ export class Tactical2DRenderer {
         }
     }
 
-    getContourLayers(width, height, scale, angleOffset, radialMode) {
-        const key = `${radialMode ? 'radial' : 'grid'}:${width}:${height}:${scale}:${angleOffset}`;
+    getContourLayers(width, height, scale, angleOffset, radialMode, ownShipPose = { x: 0, z: 0, course: 0 }, headUp = false) {
+        const px = Math.round((ownShipPose.x || 0) * 2) / 2;
+        const pz = Math.round((ownShipPose.z || 0) * 2) / 2;
+        const pc = Math.round((ownShipPose.course || 0) * 20) / 20;
+        const key = `${radialMode ? 'radial' : 'grid'}:${width}:${height}:${scale}:${angleOffset}:${px}:${pz}:${pc}:${headUp ? 1 : 0}`;
         const cached = this.contourCache.get(key);
         if (cached) return cached;
 
@@ -398,10 +409,15 @@ export class Tactical2DRenderer {
 
             for (let wx = -maxWorld; wx < maxWorld; wx += gridStep) {
                 for (let wz = -maxWorld; wz < maxWorld; wz += gridStep) {
-                    const p00 = { x: wx, y: wz, h: this.getTerrainHeight(wx, wz) };
-                    const p10 = { x: wx + gridStep, y: wz, h: this.getTerrainHeight(wx + gridStep, wz) };
-                    const p11 = { x: wx + gridStep, y: wz + gridStep, h: this.getTerrainHeight(wx + gridStep, wz + gridStep) };
-                    const p01 = { x: wx, y: wz + gridStep, h: this.getTerrainHeight(wx, wz + gridStep) };
+                    const s00 = this.localToWorld(wx, wz, ownShipPose, headUp);
+                    const s10 = this.localToWorld(wx + gridStep, wz, ownShipPose, headUp);
+                    const s11 = this.localToWorld(wx + gridStep, wz + gridStep, ownShipPose, headUp);
+                    const s01 = this.localToWorld(wx, wz + gridStep, ownShipPose, headUp);
+
+                    const p00 = { x: wx, y: wz, h: this.getTerrainHeight(s00.x, s00.z) };
+                    const p10 = { x: wx + gridStep, y: wz, h: this.getTerrainHeight(s10.x, s10.z) };
+                    const p11 = { x: wx + gridStep, y: wz + gridStep, h: this.getTerrainHeight(s11.x, s11.z) };
+                    const p01 = { x: wx, y: wz + gridStep, h: this.getTerrainHeight(s01.x, s01.z) };
 
                     const caseCode =
                         (p00.h >= level ? 1 : 0) |
@@ -491,6 +507,35 @@ export class Tactical2DRenderer {
         return {
             x: centerX + wx * scale,
             y: centerY + wz * scale
+        };
+    }
+
+    toLocalFrame(worldX, worldZ, ownShipPose = { x: 0, z: 0, course: 0 }, headUp = false) {
+        const dx = worldX - (ownShipPose.x || 0);
+        const dz = worldZ - (ownShipPose.z || 0);
+        if (!headUp) {
+            return { x: dx, z: dz };
+        }
+        const c = Math.cos(ownShipPose.course || 0);
+        const s = Math.sin(ownShipPose.course || 0);
+        return {
+            x: dx * c + dz * s,
+            z: -dx * s + dz * c
+        };
+    }
+
+    localToWorld(localX, localZ, ownShipPose = { x: 0, z: 0, course: 0 }, headUp = false) {
+        if (!headUp) {
+            return {
+                x: localX + (ownShipPose.x || 0),
+                z: localZ + (ownShipPose.z || 0)
+            };
+        }
+        const c = Math.cos(ownShipPose.course || 0);
+        const s = Math.sin(ownShipPose.course || 0);
+        return {
+            x: (ownShipPose.x || 0) + localX * c - localZ * s,
+            z: (ownShipPose.z || 0) + localX * s + localZ * c
         };
     }
 
