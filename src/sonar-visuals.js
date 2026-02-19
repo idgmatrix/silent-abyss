@@ -1260,7 +1260,7 @@ export class SonarVisuals {
         }
     }
 
-    drawBTR(targets, currentRpm, pingIntensity, pingEchoes = [], selectedTarget = null) {
+    drawBTR(targets, currentRpm, pingIntensity, _pingEchoes = [], selectedTarget = null) {
         if (!this.btrDisplay) return;
 
         const theme = BTR_THEMES[this.currentTheme];
@@ -1461,7 +1461,7 @@ export class SonarVisuals {
         ctx.restore();
     }
 
-    drawWaterfall(dataArray, pingIntensity = 0, sampleRate = 0, fftSize = 0) {
+    drawWaterfall(dataArray, _pingIntensity = 0, sampleRate = 0, fftSize = 0) {
         if (!this.waterfallDisplay || !this.waterfallDisplay.ctx) return;
 
         const theme = BTR_THEMES[this.currentWaterfallTheme].WATERFALL;
