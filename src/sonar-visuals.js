@@ -1,5 +1,6 @@
 import { ScrollingDisplay } from './scrolling-display.js';
 import { TrackState } from './simulation.js';
+import { float32Pool } from './utils/buffer-pool.js';
 
 export const BTR_THEMES = {
     'CYAN': {
@@ -236,15 +237,36 @@ export class SonarVisuals {
         };
     }
 
+    _releaseCachedDemonEntry(entry) {
+        if (!entry) return;
+        if (entry.smoothedSpectrum) {
+            float32Pool.release(entry.smoothedSpectrum);
+            entry.smoothedSpectrum = null;
+        }
+        if (entry.enhancedSpectrum) {
+            float32Pool.release(entry.enhancedSpectrum);
+            entry.enhancedSpectrum = null;
+        }
+    }
+
     _snapshotCurrentDemonState() {
         const lock = this._demonLocks.get(this._demonSelectedTargetId);
+
+        let smoothedCopy = null;
+        if (this._demonSmoothedSpectrum instanceof Float32Array) {
+            smoothedCopy = float32Pool.acquire(this._demonSmoothedSpectrum.length);
+            smoothedCopy.set(this._demonSmoothedSpectrum);
+        }
+
+        let enhancedCopy = null;
+        if (this._demonEnhancedSpectrum instanceof Float32Array) {
+            enhancedCopy = float32Pool.acquire(this._demonEnhancedSpectrum.length);
+            enhancedCopy.set(this._demonEnhancedSpectrum);
+        }
+
         return {
-            smoothedSpectrum: this._demonSmoothedSpectrum instanceof Float32Array
-                ? new Float32Array(this._demonSmoothedSpectrum)
-                : null,
-            enhancedSpectrum: this._demonEnhancedSpectrum instanceof Float32Array
-                ? new Float32Array(this._demonEnhancedSpectrum)
-                : null,
+            smoothedSpectrum: smoothedCopy,
+            enhancedSpectrum: enhancedCopy,
             peaksHz: Array.isArray(this._demonPeaksHz) ? [...this._demonPeaksHz] : [],
             peakTracks: Array.isArray(this._demonPeakTracks)
                 ? this._demonPeakTracks.map((track) => ({ ...track }))
@@ -260,6 +282,16 @@ export class SonarVisuals {
     }
 
     _restoreDemonStateFromCache(targetId) {
+        if (this._demonSmoothedSpectrum instanceof Float32Array) {
+            float32Pool.release(this._demonSmoothedSpectrum);
+        }
+        this._demonSmoothedSpectrum = null;
+
+        if (this._demonEnhancedSpectrum instanceof Float32Array) {
+            float32Pool.release(this._demonEnhancedSpectrum);
+        }
+        this._demonEnhancedSpectrum = null;
+
         const cached = this._demonTargetCache.get(targetId);
         if (!cached) {
             this._demonPeakTracks = [];
@@ -269,16 +301,22 @@ export class SonarVisuals {
             this._demonSignalQuality = 0;
             this._demonTrackState = 'SEARCHING';
             this._demonLockConfidence = 0;
-            this._demonSmoothedSpectrum = null;
-            this._demonEnhancedSpectrum = null;
             this._demonSampleCount = 0;
             this._demonSampleWriteIndex = 0;
             this._demonSampleBuffer.fill(0);
             return;
         }
 
-        this._demonSmoothedSpectrum = cached.smoothedSpectrum ? new Float32Array(cached.smoothedSpectrum) : null;
-        this._demonEnhancedSpectrum = cached.enhancedSpectrum ? new Float32Array(cached.enhancedSpectrum) : null;
+        if (cached.smoothedSpectrum instanceof Float32Array) {
+            this._demonSmoothedSpectrum = float32Pool.acquire(cached.smoothedSpectrum.length);
+            this._demonSmoothedSpectrum.set(cached.smoothedSpectrum);
+        }
+
+        if (cached.enhancedSpectrum instanceof Float32Array) {
+            this._demonEnhancedSpectrum = float32Pool.acquire(cached.enhancedSpectrum.length);
+            this._demonEnhancedSpectrum.set(cached.enhancedSpectrum);
+        }
+
         this._demonPeaksHz = Array.isArray(cached.peaksHz) ? [...cached.peaksHz] : [];
         this._demonPeakTracks = Array.isArray(cached.peakTracks)
             ? cached.peakTracks.map((track) => ({ ...track }))
@@ -300,6 +338,7 @@ export class SonarVisuals {
         for (const [targetId, cached] of this._demonTargetCache.entries()) {
             const age = nowSec - (cached.lastSeenAt || 0);
             if (age > expirySec) {
+                this._releaseCachedDemonEntry(cached);
                 this._demonTargetCache.delete(targetId);
                 this._demonLocks.delete(targetId);
             }
@@ -314,6 +353,8 @@ export class SonarVisuals {
         if (this._demonSelectedTargetId === nextTargetId) return;
 
         if (this._demonSelectedTargetId) {
+            const oldSnapshot = this._demonTargetCache.get(this._demonSelectedTargetId);
+            this._releaseCachedDemonEntry(oldSnapshot);
             this._demonTargetCache.set(
                 this._demonSelectedTargetId,
                 this._snapshotCurrentDemonState()
@@ -331,7 +372,13 @@ export class SonarVisuals {
             this._demonSignalQuality = 0;
             this._demonTrackState = 'SEARCHING';
             this._demonLockConfidence = 0;
+            if (this._demonSmoothedSpectrum instanceof Float32Array) {
+                float32Pool.release(this._demonSmoothedSpectrum);
+            }
             this._demonSmoothedSpectrum = null;
+            if (this._demonEnhancedSpectrum instanceof Float32Array) {
+                float32Pool.release(this._demonEnhancedSpectrum);
+            }
             this._demonEnhancedSpectrum = null;
         }
     }
@@ -423,7 +470,8 @@ export class SonarVisuals {
         if (this.lineHistory.length > this.maxLineHistory) this.lineHistory.shift();
 
         // Calculate persistence (how many times a bin was a peak in history)
-        const persistence = new Float32Array(viewLength);
+        const persistence = float32Pool.acquire(viewLength);
+        persistence.fill(0);
         this.lineHistory.forEach(frame => {
             frame.forEach(idx => {
                 if (idx < viewLength) persistence[idx] += 1.0 / this.maxLineHistory;
@@ -445,6 +493,8 @@ export class SonarVisuals {
             }
         }
         ctx.restore();
+
+        float32Pool.release(persistence);
     }
 
     _updateLofarSpectrum(dataArray, timeDomainData, fftSize) {
@@ -461,7 +511,11 @@ export class SonarVisuals {
         })
             .then((spectrum) => {
                 if (spectrum && spectrum.length > 0) {
-                    this.lofarSpectrum = new Float32Array(spectrum);
+                    if (this.lofarSpectrum instanceof Float32Array) {
+                        float32Pool.release(this.lofarSpectrum);
+                    }
+                    this.lofarSpectrum = float32Pool.acquire(spectrum.length);
+                    this.lofarSpectrum.set(spectrum);
                 }
             })
             .catch((error) => {
@@ -502,14 +556,24 @@ export class SonarVisuals {
         const analysisWindow = this._getDemonAnalysisWindow();
         if (!analysisWindow) return;
 
-        let rawSpectrum = this._computeDemonSpectrum(analysisWindow, sampleRate, 120);
-        rawSpectrum = this._applyOwnShipMask(rawSpectrum, selectedTarget);
-        this._demonSpectrum = rawSpectrum;
+        const rawSpectrum = this._computeDemonSpectrum(analysisWindow, sampleRate, 120);
+        float32Pool.release(analysisWindow);
+
+        const maskedSpectrum = this._applyOwnShipMask(rawSpectrum, selectedTarget);
+        if (maskedSpectrum !== rawSpectrum) {
+            float32Pool.release(rawSpectrum);
+        }
+
+        if (this._demonSpectrum instanceof Float32Array) {
+            float32Pool.release(this._demonSpectrum);
+        }
+        this._demonSpectrum = maskedSpectrum;
+
         let maxRaw = 0;
         let sumRaw = 0;
         let binsRaw = 0;
-        for (let hz = 1; hz < rawSpectrum.length; hz++) {
-            const v = rawSpectrum[hz] || 0;
+        for (let hz = 1; hz < this._demonSpectrum.length; hz++) {
+            const v = this._demonSpectrum[hz] || 0;
             if (v > maxRaw) maxRaw = v;
             sumRaw += v;
             binsRaw++;
@@ -522,7 +586,13 @@ export class SonarVisuals {
         );
         const quality = absoluteScore * 0.6 + contrastScore * 0.4;
         this._demonSignalQuality += (quality - this._demonSignalQuality) * 0.18;
-        this._demonEnhancedSpectrum = this._enhanceDemonSpectrum(rawSpectrum);
+
+        const enhanced = this._enhanceDemonSpectrum(this._demonSpectrum);
+        if (this._demonEnhancedSpectrum instanceof Float32Array) {
+            float32Pool.release(this._demonEnhancedSpectrum);
+        }
+        this._demonEnhancedSpectrum = enhanced;
+
         this._demonSmoothedSpectrum = this._smoothDemonSpectrum(this._demonEnhancedSpectrum);
         this._demonPeaksHz = this._detectDemonPeaks(this._demonSmoothedSpectrum, 6);
     }
@@ -539,7 +609,8 @@ export class SonarVisuals {
         const ownBpfHz = Number.isFinite(this._ownShipSignature?.bpfHz) ? this._ownShipSignature.bpfHz : 0;
         if (ownBpfHz <= 0) return spectrum;
 
-        const out = new Float32Array(spectrum);
+        const out = float32Pool.acquire(spectrum.length);
+        out.set(spectrum);
         const multiplier = 0.38;
         const baseRadiusHz = 0.9;
         for (let k = 1; k <= 10; k++) {
@@ -579,7 +650,7 @@ export class SonarVisuals {
             this._demonSampleCount >= 16384 ? 16384 : 8192;
         if (this._demonSampleCount < targetLength) return null;
 
-        const out = new Float32Array(targetLength);
+        const out = float32Pool.acquire(targetLength);
         const startIndex =
             (this._demonSampleWriteIndex - targetLength + this._demonSampleBuffer.length) %
             this._demonSampleBuffer.length;
@@ -601,7 +672,9 @@ export class SonarVisuals {
 
     _computeDemonSpectrum(timeDomainData, sampleRate, maxFreqHz) {
         const nRaw = timeDomainData.length;
-        const spectrum = new Float32Array(maxFreqHz + 1);
+        const spectrum = float32Pool.acquire(maxFreqHz + 1);
+        spectrum.fill(0);
+
         if (nRaw < 64) return spectrum;
 
         // DEMON chain:
@@ -627,7 +700,7 @@ export class SonarVisuals {
         const nDecim = Math.floor(nRaw / D);
         if (nDecim < 8) return spectrum;
 
-        const decimEnv = new Float32Array(nDecim);
+        const decimEnv = float32Pool.acquire(nDecim);
         let hpY = 0, hpPrevX = 0, lpY = 0, accum = 0;
         for (let i = 0; i < nRaw; i++) {
             const x = timeDomainData[i] - meanRaw;
@@ -646,7 +719,7 @@ export class SonarVisuals {
         const decimDt = 1 / decimSR;
         const envHpAlpha = envHpRc / (envHpRc + decimDt);
         let envHpY = 0, envHpPrevX = decimEnv[0] || 0;
-        const signal = new Float32Array(nDecim);
+        const signal = float32Pool.acquire(nDecim);
         for (let i = 0; i < nDecim; i++) {
             const x = decimEnv[i];
             envHpY = envHpAlpha * (envHpY + x - envHpPrevX);
@@ -668,6 +741,9 @@ export class SonarVisuals {
             spectrum[f] = Math.hypot(re, im) / nDecim;
         }
 
+        float32Pool.release(decimEnv);
+        float32Pool.release(signal);
+
         return spectrum;
     }
 
@@ -676,7 +752,8 @@ export class SonarVisuals {
             return new Float32Array(0);
         }
 
-        const out = new Float32Array(spectrum.length);
+        const out = float32Pool.acquire(spectrum.length);
+        out.fill(0);
         const radius = 3;
         let peak = 1e-6;
 
@@ -713,7 +790,11 @@ export class SonarVisuals {
             !(this._demonSmoothedSpectrum instanceof Float32Array) ||
             this._demonSmoothedSpectrum.length !== spectrum.length
         ) {
-            this._demonSmoothedSpectrum = new Float32Array(spectrum.length);
+            if (this._demonSmoothedSpectrum instanceof Float32Array) {
+                float32Pool.release(this._demonSmoothedSpectrum);
+            }
+            this._demonSmoothedSpectrum = float32Pool.acquire(spectrum.length);
+            this._demonSmoothedSpectrum.fill(0);
         }
 
         for (let i = 1; i < spectrum.length; i++) {
@@ -1595,6 +1676,25 @@ export class SonarVisuals {
         if (this.waterfallDisplay) {
             this.waterfallDisplay.dispose();
         }
+
+        if (this.lofarSpectrum instanceof Float32Array) {
+            float32Pool.release(this.lofarSpectrum);
+        }
+        if (this._demonSpectrum instanceof Float32Array) {
+            float32Pool.release(this._demonSpectrum);
+        }
+        if (this._demonEnhancedSpectrum instanceof Float32Array) {
+            float32Pool.release(this._demonEnhancedSpectrum);
+        }
+        if (this._demonSmoothedSpectrum instanceof Float32Array) {
+            float32Pool.release(this._demonSmoothedSpectrum);
+        }
+
+        for (const entry of this._demonTargetCache.values()) {
+            this._releaseCachedDemonEntry(entry);
+        }
+        this._demonTargetCache.clear();
+
         this.btrDisplay = null;
         this.waterfallDisplay = null;
         this.lCtx = null;
