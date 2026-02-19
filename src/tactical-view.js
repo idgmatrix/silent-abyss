@@ -135,7 +135,7 @@ export class TacticalView {
         this.renderer2D.setScanState(radius, active);
     }
 
-    render(targets, ownShipCourse, ownShipForwardSpeed = 0) {
+    render(targets, ownShipCourse, ownShipForwardSpeed = 0, ownShipPosition = null) {
         if (!this.container) return;
 
         const now = performance.now();
@@ -143,7 +143,7 @@ export class TacticalView {
         this._lastRenderTime = now;
         this.pulse = (Date.now() % 2000) / 2000;
         this._lastTargets = Array.isArray(targets) ? targets : [];
-        this.updateOwnShipPose(ownShipCourse, ownShipForwardSpeed, dt);
+        this.updateOwnShipPose(ownShipCourse, ownShipForwardSpeed, dt, ownShipPosition);
 
         if (this.viewMode === '3d') {
             this.renderer3D.setVisible(true);
@@ -161,7 +161,7 @@ export class TacticalView {
         });
     }
 
-    updateOwnShipPose(ownShipCourse, ownShipForwardSpeed, dt) {
+    updateOwnShipPose(ownShipCourse, ownShipForwardSpeed, dt, ownShipPosition = null) {
         const rawCourse = Number.isFinite(ownShipCourse) ? ownShipCourse : this._ownShipDisplayCourse;
         const speed = Number.isFinite(ownShipForwardSpeed) ? ownShipForwardSpeed : 0;
 
@@ -176,8 +176,16 @@ export class TacticalView {
 
         this._ownShipPose.course = this._ownShipDisplayCourse;
         this._ownShipPose.speed = speed;
-        this._ownShipPose.x += Math.cos(rawCourse) * speed * dt;
-        this._ownShipPose.z += Math.sin(rawCourse) * speed * dt;
+
+        if (ownShipPosition && Number.isFinite(ownShipPosition.x) && Number.isFinite(ownShipPosition.z)) {
+            // Use external position if provided
+            this._ownShipPose.x = ownShipPosition.x;
+            this._ownShipPose.z = ownShipPosition.z;
+        } else {
+            // Fallback to internal integration (legacy or if position missing)
+            this._ownShipPose.x += Math.cos(rawCourse) * speed * dt;
+            this._ownShipPose.z += Math.sin(rawCourse) * speed * dt;
+        }
     }
 
     setViewMode(mode) {

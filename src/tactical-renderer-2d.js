@@ -66,12 +66,16 @@ export class Tactical2DRenderer {
         }
     }
 
+    // Coordinate System Note (Global):
+    // +Z is North (Course 0)
+    // +X is East (Course 90)
+    // Course increases clockwise.
+
     pickTargetAtPoint(mode, x, y, rect, targets, options = {}) {
         if (!Array.isArray(targets)) return null;
         const centerX = rect.width / 2;
         const centerY = rect.height / 2;
         const scale = 1.5;
-        const angleOffset = -Math.PI / 2;
         const ownShipPose = options.ownShipPose || { x: 0, z: 0, course: 0 };
 
         let hitId = null;
@@ -82,15 +86,44 @@ export class Tactical2DRenderer {
             let dy;
 
             if (mode === 'radial') {
-                const local = this.toLocalFrame(t.x, t.z, ownShipPose, true);
-                const rotX = local.x * Math.cos(angleOffset) - local.z * Math.sin(angleOffset);
-                const rotZ = local.x * Math.sin(angleOffset) + local.z * Math.cos(angleOffset);
-                dx = centerX + rotX * scale;
-                dy = centerY + rotZ * scale;
+                // Radial View: Ship Up (+Y on screen is Forward)
+                // World Coords: +Z is Forward (North).
+                // We need to rotate the world so that Ship's Heading points Up (-Y screen? No, Usually Up is -Y in Grid, but +Y in math?)
+                // Let's assume Screen Up is -Y pixel coords.
+                // We want Ship Forward (+Z relative or Heading Vector) to point to Screen Up.
+
+                // World Relative Pos:
+                const relX = t.x - ownShipPose.x;
+                const relZ = t.z - ownShipPose.z;
+
+                // Rotate by -Heading to align Forward with +Z (North axis in local frame)
+                // If ship heading is 90 (East), we rotate by -90. East becomes North (+Z).
+                // x' = x cos(-c) - z sin(-c)
+                // z' = x sin(-c) + z cos(-c)
+                const c = Math.cos(-ownShipPose.course);
+                const s = Math.sin(-ownShipPose.course);
+                const localX = relX * c - relZ * s;
+                const localZ = relX * s + relZ * c;
+
+                // Now localZ is "Forward", localX is "Right".
+                // Map to Screen:
+                // Screen X = centerX + localX * scale
+                // Screen Y = centerY - localZ * scale (Invert Z because screen Y is down)
+                dx = centerX + localX * scale;
+                dy = centerY - localZ * scale;
+
             } else {
-                const local = this.toLocalFrame(t.x, t.z, ownShipPose, false);
-                dx = centerX + local.x * scale;
-                dy = centerY + local.z * scale;
+                // Grid View: North Up (+Z is Up on screen? or -Z?)
+                // Maritime charts: North is Up.
+                // Our World: +Z is North.
+                // So Screen Up (-Y) should correspond to World +Z.
+                // Screen Right (+X) should correspond to World +X (East).
+
+                const relX = t.x - ownShipPose.x;
+                const relZ = t.z - ownShipPose.z;
+
+                dx = centerX + relX * scale;
+                dy = centerY - relZ * scale;
             }
 
             const dist = Math.sqrt((x - dx) ** 2 + (y - dy) ** 2);
@@ -110,7 +143,6 @@ export class Tactical2DRenderer {
         const pulse = options.pulse || 0;
         const selectedTargetId = options.selectedTargetId || null;
         const ownShipPose = options.ownShipPose || { x: 0, z: 0, course: 0 };
-        const angleOffset = -Math.PI / 2;
 
         ctx.fillStyle = '#000000';
         ctx.fillRect(0, 0, w, h);
@@ -125,7 +157,9 @@ export class Tactical2DRenderer {
             ctx.fillText(`${r}m`, centerX + 5, centerY - r * scale - 5);
         }
 
+        // Bearing Lines (Relative to Ship Heading)
         ctx.strokeStyle = '#002222';
+        const angleOffset = -Math.PI / 2; // Up on screen
         [0, 90, 180, 270].forEach((deg) => {
             const rad = (deg * Math.PI / 180) + angleOffset;
             ctx.beginPath();
@@ -134,18 +168,25 @@ export class Tactical2DRenderer {
             ctx.stroke();
         });
 
-        this.drawTerrainContours(ctx, w, h, scale, angleOffset, true, ownShipPose, true);
+        // Contours in Head-Up Mode
+        this.drawTerrainContours(ctx, w, h, scale, ownShipPose, true);
 
         ctx.font = '10px monospace';
         if (Array.isArray(targets)) {
             targets.forEach((t) => {
                 if (t.state !== TrackState.TRACKED) return;
 
-                const local = this.toLocalFrame(t.x, t.z, ownShipPose, true);
-                const rotX = local.x * Math.cos(angleOffset) - local.z * Math.sin(angleOffset);
-                const rotZ = local.x * Math.sin(angleOffset) + local.z * Math.cos(angleOffset);
-                const dx = centerX + rotX * scale;
-                const dy = centerY + rotZ * scale;
+                // Calculate screen position matching picking logic
+                const relX = t.x - ownShipPose.x;
+                const relZ = t.z - ownShipPose.z;
+                const c = Math.cos(-ownShipPose.course);
+                const s = Math.sin(-ownShipPose.course);
+                const localX = relX * c - relZ * s;
+                const localZ = relX * s + relZ * c;
+
+                const dx = centerX + localX * scale;
+                const dy = centerY - localZ * scale;
+
                 const isSelected = selectedTargetId === t.id;
 
                 ctx.globalAlpha = isSelected ? 1.0 : 0.7;
@@ -184,6 +225,7 @@ export class Tactical2DRenderer {
             }
         }
 
+        // Own Ship Glyph (Center, Pointing Up)
         ctx.save();
         ctx.translate(centerX, centerY);
         ctx.beginPath();
@@ -237,15 +279,20 @@ export class Tactical2DRenderer {
         ctx.lineTo(centerX, h);
         ctx.stroke();
 
-        this.drawTerrainContours(ctx, w, h, scale, 0, false, ownShipPose, false);
+        this.drawTerrainContours(ctx, w, h, scale, ownShipPose, false);
 
         if (Array.isArray(targets)) {
             targets.forEach((t) => {
                 if (t.state !== TrackState.TRACKED) return;
 
-                const local = this.toLocalFrame(t.x, t.z, ownShipPose, false);
-                const dx = centerX + local.x * scale;
-                const dy = centerY + local.z * scale;
+                // North Up Mode: +Z is Up on screen (Screen -Y)
+                // +X is Right on screen (Screen +X)
+                const relX = t.x - ownShipPose.x;
+                const relZ = t.z - ownShipPose.z;
+
+                const dx = centerX + relX * scale;
+                const dy = centerY - relZ * scale;
+
                 const isSelected = selectedTargetId === t.id;
 
                 ctx.globalAlpha = isSelected ? 1.0 : 0.7;
@@ -273,13 +320,20 @@ export class Tactical2DRenderer {
             ctx.stroke();
         }
 
-        // Grid stays north-up; only own-ship glyph rotates with heading.
+        // Own Ship Glyph (Center, Rotating)
         ctx.save();
         ctx.translate(centerX, centerY);
-        ctx.rotate(ownShipPose.course || 0);
+        // Heading 0 (North) should point Up (Screen -Y).
+        // Standard canvas rotation 0 is Right (+X).
+        // So we need rotation = Course - 90deg (in radians)
+        // Course 0 -> -PI/2 (Up).
+        // Course 90 -> 0 (Right).
+        const rotation = ownShipPose.course - Math.PI / 2;
+        ctx.rotate(rotation);
+
         ctx.fillStyle = '#00ff00';
         ctx.beginPath();
-        ctx.moveTo(8, 0); // tip points +X at heading 0
+        ctx.moveTo(8, 0); // Tip points local +X (which is rot 0)
         ctx.lineTo(-6, -6);
         ctx.lineTo(-6, 6);
         ctx.closePath();
@@ -514,28 +568,128 @@ export class Tactical2DRenderer {
         const dx = worldX - (ownShipPose.x || 0);
         const dz = worldZ - (ownShipPose.z || 0);
         if (!headUp) {
-            return { x: dx, z: dz };
+            // North Up Mode: +Z is World North. +X is World East.
+            // On screen mapping (renderGrid):
+            // dx = centerX + local.x * scale
+            // dy = centerY + local.z * scale
+            // If we want North to be UP (Screen -Y), then local.z should be -dz.
+            // (When dz is positive, local.z is negative, so dy is centerY - val => Up).
+            // If we want East to be RIGHT (Screen +X), then local.x should be dx.
+            return { x: dx, z: -dz };
         }
-        const c = Math.cos(ownShipPose.course || 0);
-        const s = Math.sin(ownShipPose.course || 0);
+
+        // Head Up Mode (Radial):
+        // Ship Forward should be Screen Up (-Y).
+        // Standard rotation matrix for clockwise active rotation:
+        // x' = x cos(c) + z sin(c)
+        // z' = -x sin(c) + z cos(c)
+        // Wait, Ship Heading is 'course'.
+        // If course=0 (North, +Z), we want +Z to be "Up".
+        // If course=90 (East, +X), we want +X to be "Up".
+        // This is a coordinate transform into the Ship's Frame.
+        // Ship Frame: Forward is +Z_local, Right is +X_local.
+        // World Vector: V = (dx, dz).
+        // Rotate V by -course.
+        // x_local = right-cross-track distance.
+        // z_local = forward-along-track distance.
+
+        // R(-theta):
+        // x' = x cos(-c) - z sin(-c) = x cos + z sin
+        // z' = x sin(-c) + z cos(-c) = -x sin + z cos
+
+        const c = Math.cos(ownShipPose.course);
+        const s = Math.sin(ownShipPose.course);
+
+        const x_local = dx * c + dz * s; // Right component?
+        const z_local = -dx * s + dz * c; // Forward component?
+
+        // Let's test. Course=0 (N). c=1, s=0.
+        // x_local = dx. z_local = dz.
+        // If target is North of ship (+dz), z_local is positive.
+        // We want Screen Up.
+        // renderRadial uses: dy = centerY - local.z * scale.
+        // So positive z_local becomes Screen Up. Correct.
+
+        // Test Course=90 (E). c=0, s=1.
+        // Target is East of ship (+dx).
+        // x_local = dx*0 + dz*1 = dz? (If dz=0, x_local=0).
+        // z_local = -dx*1 + dz*0 = -dx.
+        // If target is East (Forward of ship), dz=0, dx>0.
+        // z_local = -positive. Negative.
+        // dy = centerY - (-pos) = centerY + pos (Screen Down).
+        // INCORRECT. Target ahead should be Screen Up.
+
+        // Let's try standard maritime headings:
+        // C=0 -> North (+Z). C=90 -> East (+X).
+        // Vector (sin(c), cos(c)) is Forward.
+        // Vector (cos(c), -sin(c)) is Right.
+
+        // Project (dx, dz) onto Forward:
+        // forward_dist = dx * sin(c) + dz * cos(c)
+        // Project (dx, dz) onto Right:
+        // right_dist = dx * cos(c) + dz * (-sin(c))
+
+        // forward_dist should map to Screen Up (-Y).
+        // right_dist should map to Screen Right (+X).
+
+        // If renderRadial uses: dx = center + local.x, dy = center - local.z.
+        // Then local.x should be right_dist.
+        // local.z should be forward_dist.
+
+        const right_dist = dx * c - dz * s;
+        const forward_dist = dx * s + dz * c;
+
         return {
-            x: dx * c + dz * s,
-            z: -dx * s + dz * c
+            x: right_dist,
+            z: forward_dist
         };
     }
 
-    localToWorld(localX, localZ, ownShipPose = { x: 0, z: 0, course: 0 }, headUp = false) {
+    localToWorld(screenOffsetX, screenOffsetY, ownShipPose = { x: 0, z: 0, course: 0 }, headUp = false) {
+        // screenOffsetX = local.x (right_dist)
+        // screenOffsetY = mapped from local.z?
+        // Note: pickTarget passes (x - centerX, y - centerY) usually?
+        // Wait, render passes x, z from toLocalFrame.
+        // renderGrid: dx = center + local.x, dy = center + local.z (if !headUp, but I changed it to -dz above)
+        // renderRadial: dx = center + local.x, dy = center - local.z.
+
+        // Let's standardize localToWorld input to match toLocalFrame output format.
+        // localX = right_dist (or Easting if !headUp)
+        // localZ = forward_dist (or Northing if !headUp, but sign flipped?)
+
+        // If !headUp:
+        // local.x = dx.
+        // local.z = -dz.
+        // So dx = localX. dz = -localZ.
+
         if (!headUp) {
             return {
-                x: localX + (ownShipPose.x || 0),
-                z: localZ + (ownShipPose.z || 0)
+                x: (ownShipPose.x || 0) + screenOffsetX,
+                z: (ownShipPose.z || 0) - screenOffsetY // because we returned -dz
             };
         }
-        const c = Math.cos(ownShipPose.course || 0);
-        const s = Math.sin(ownShipPose.course || 0);
+
+        // If headUp:
+        // localX = right_dist
+        // localZ = forward_dist
+        // dx = right * RightVec.x + forward * ForwardVec.x
+        // dz = right * RightVec.z + forward * ForwardVec.z
+
+        // ForwardVec = (sin, cos)
+        // RightVec = (cos, -sin)
+
+        const c = Math.cos(ownShipPose.course);
+        const s = Math.sin(ownShipPose.course);
+
+        const r = screenOffsetX;
+        const f = screenOffsetY; // Assuming caller passes forward_dist here
+
+        const dx = r * c + f * s;
+        const dz = r * (-s) + f * c;
+
         return {
-            x: (ownShipPose.x || 0) + localX * c - localZ * s,
-            z: (ownShipPose.z || 0) + localX * s + localZ * c
+            x: (ownShipPose.x || 0) + dx,
+            z: (ownShipPose.z || 0) + dz
         };
     }
 

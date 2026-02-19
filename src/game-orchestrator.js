@@ -201,7 +201,12 @@ export class GameOrchestrator {
         this.simEngine.update(now);
 
         // Render Tactical View
-        this.tacticalView.render(this.simEngine.targets, this.worldModel.ownShipCourse, this.worldModel.getOwnShipForwardSpeed());
+        this.tacticalView.render(
+            this.simEngine.targets,
+            this.worldModel.ownShipCourse,
+            this.worldModel.getOwnShipForwardSpeed(),
+            this.worldModel.ownShipPosition
+        );
 
         // Render Visuals
         const ctx = this.audioSys.getContext();

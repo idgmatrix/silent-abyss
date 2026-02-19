@@ -112,32 +112,27 @@ export class SimulationTarget {
             identifiedClass: null,
             confirmed: false
         };
-    }
 
-    // Compatibility Getters
-    get distance() {
-        return Math.hypot(this.x, this.z);
-    }
-
-    get angle() {
-        return Math.atan2(this.z, this.x);
-    }
-
-    get bearing() {
-        // bearing in degrees, 0-360. 0=North, 90=East.
-        // this.angle is 0 at East, PI/2 at South.
-        // So Bearing = Angle + 90.
-        let b = (this.angle * 180 / Math.PI) + 90;
-        return (b + 360) % 360;
-    }
-
-    set bearing(val) {
-        // Deprecated setter, doing nothing to avoid breaking physics
+        // Relative state (updated by WorldModel)
+        this.distance = 0;
+        this.bearing = 0;
     }
 
     // Radial velocity component (speed * cos(course - angle))
     get velocity() {
-        return this.speed * Math.cos(this.course - this.angle);
+        // angle here assumes origin-based.
+        // WorldModel should calculate relative velocity, but for now we fallback to origin behavior
+        let angle;
+        if (this.x !== 0 || this.z !== 0) {
+             angle = Math.atan2(this.z, this.x);
+        } else {
+             angle = 0;
+        }
+        return this.speed * Math.cos(this.course - angle);
+    }
+
+    get angle() {
+        return Math.atan2(this.z, this.x);
     }
 
     getAcousticSignature() {

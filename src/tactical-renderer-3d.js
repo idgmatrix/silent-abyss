@@ -26,6 +26,7 @@ export class Tactical3DRenderer {
         this.cavitationParticles = new CavitationParticles();
         this._cavitationPending = false;
         this._renderPending = false;
+        this._lastTerrainUpdatePos = { x: -999, z: -999 };
     }
 
     async init(container) {
@@ -227,6 +228,7 @@ export class Tactical3DRenderer {
         const ownZ = Number.isFinite(ownShipPose?.z) ? ownShipPose.z : 0;
         const ownCourse = Number.isFinite(ownShipPose?.course) ? ownShipPose.course : 0;
 
+        this.updateTerrainAroundShip(ownX, ownZ);
         this.updateOwnShipFrame(ownX, ownZ, ownCourse, dt);
 
         if (this.selectionRing) {
@@ -279,37 +281,58 @@ export class Tactical3DRenderer {
         this.renderer.render(this.scene, this.camera);
     }
 
-    updateOwnShipFrame(ownX, ownZ, ownCourse) {
+    updateOwnShipFrame(ownX, ownZ, ownCourse, dt) {
         if (!this.camera) return;
 
         const ownY = this.getTerrainHeight(ownX, ownZ) + 5.0;
         if (this.ownShip) {
             this.ownShip.position.set(ownX, ownY, ownZ);
+            // Own Ship Heading:
+            // Course 0 (North, +Z) -> Mesh points +Z.
+            // Three.js object rotation around Y axis (CCW).
+            // Mesh is defined pointing +Z (after setup geometry rotation).
+            // We want Course increasing (CW, 0->90) to map to Rotation (0->-90) due to coordinate system difference?
+            // World: +Z (North) -> +X (East). (Clockwise from Top)
+            // Three: +Z (Front) -> +X (Right). (Counter-Clockwise from Top)
+            // Check Rotation Axis Y:
+            // CCW: X = Z * sin(theta) + X * cos(theta).
+            // 90 deg: X = Z (1). +Z -> +X.
+            // So +Rotation Y moves +Z to +X.
+            // +Course moves North(+Z) to East(+X).
+            // So +Rotation Y matches +Course direction?
+            // Yes.
+            // So why did I think -ownCourse?
+            // Maybe because Compass is CW (N->E->S->W), Math is usually CCW (X->Y).
+            // But here both Z->X seems to be consistent direction in this specific mapping?
+
+            // Let's set it to +ownCourse. If the User says "Flipped", flipping the sign is the fix.
+            this.ownShip.rotation.y = ownCourse;
         }
 
-        const localCam = { x: 0, y: 50, z: 80 };
+        // Camera Positioning Logic:
+        // We want Camera BEHIND the ship.
+        // Ship heading +Z_local (Forward).
+        // Behind is -Z_local.
+        // So localCam.z should be negative.
+
+        const localCam = { x: 0, y: 50, z: -80 };
+
         const c = Math.cos(ownCourse);
         const s = Math.sin(ownCourse);
-        const camWorldX = ownX + localCam.x * c - localCam.z * s;
-        const camWorldZ = ownZ + localCam.x * s + localCam.z * c;
+
+        // Forward unit vector in World: (s, c)
+        // Right unit vector in World: (c, -s)
+
+        // Cam Pos = Ship + Fwd*localZ + Right*localX
+        // Reverting the negative Right vector logic as it was likely not the culprit (localCam.x is 0).
+        // The culprit was almost certainly the visual mesh rotation.
+
+        const camWorldX = ownX + (s * localCam.z) + (c * localCam.x);
+        const camWorldZ = ownZ + (c * localCam.z) + (-s * localCam.x);
         const camWorldY = ownY + localCam.y;
 
-        // Scene is globally rotated +90deg for radial alignment; apply same mapping to camera frame.
-        const toSceneXZ = (x, z) => ({ x: -z, z: x });
-        const camScene = toSceneXZ(camWorldX, camWorldZ);
-        const ownScene = toSceneXZ(ownX, ownZ);
-        this.camera.position.set(camScene.x, camWorldY, camScene.z);
-        this.camera.lookAt(ownScene.x, ownY, ownScene.z);
-        // Keep own-ship heading visually fixed in local view as camera/world yaw changes.
-        if (this.ownShip) {
-            const camForward = new THREE.Vector3();
-            this.camera.getWorldDirection(camForward);
-            camForward.y = 0;
-            if (camForward.lengthSq() > 1e-6) {
-                camForward.normalize();
-                this.ownShip.rotation.y = Math.atan2(camForward.x, camForward.z);
-            }
-        }
+        this.camera.position.set(camWorldX, camWorldY, camWorldZ);
+        this.camera.lookAt(ownX, ownY + 5.0, ownZ);
     }
 
     _buildCavitationEmitters(targets) {
@@ -393,6 +416,123 @@ export class Tactical3DRenderer {
 
         this.marineSnow = new THREE.Points(geometry, material);
         this.scene.add(this.marineSnow);
+    }
+
+    updateTerrainAroundShip(ownX, ownZ) {
+        // Only update if ship has moved significantly (e.g. > 1 unit)
+        // Or if we want smooth terrain, update frequently.
+        // Let's update if moved > 2 units to save CPU, or every frame?
+        // Let's update if distance > 1.0 to avoid shimmering on small movements,
+        // but large enough to keep valid terrain under ship.
+        const distSq = (ownX - this._lastTerrainUpdatePos.x) ** 2 + (ownZ - this._lastTerrainUpdatePos.z) ** 2;
+        if (distSq < 1.0) return;
+
+        this._lastTerrainUpdatePos.x = ownX;
+        this._lastTerrainUpdatePos.z = ownZ;
+
+        // Move terrain mesh to center on ship
+        // We snap to nearest integer or grid unit to keep wireframe stable?
+        // Let's snap to 5-unit grid (since segments are 300/60 = 5 units)
+        // This makes the wireframe lines appear static relative to ground features.
+        const snap = 5.0;
+        const meshX = Math.round(ownX / snap) * snap;
+        const meshZ = Math.round(ownZ / snap) * snap;
+
+        if (this.terrain) {
+            this.terrain.position.set(meshX, 0, meshZ);
+
+            // Update heights
+            const posAttr = this.terrain.geometry.attributes.position;
+            const vertex = new THREE.Vector3();
+
+            for (let i = 0; i < posAttr.count; i++) {
+                // Local position
+                vertex.fromBufferAttribute(posAttr, i);
+
+                // World position for noise sampling
+                const worldX = meshX + vertex.x;
+                const worldZ = meshZ + vertex.z; // z is actually y in local plane geometry if rotated?
+                                                 // Wait, we rotated X by -PI/2.
+                                                 // PlaneGeometry creates on XY plane.
+                                                 // After rotateX(-PI/2):
+                                                 // Local X -> World X.
+                                                 // Local Y -> World -Z (because Y became Z after rotation? No.)
+                                                 // RotateX(-90): Y axis -> Z axis. Z axis -> -Y axis.
+                                                 // So Plane Y becomes World Z?
+                                                 // Let's check loop in setupTerrain:
+                                                 // const x = pos.getX(i); const z = pos.getZ(i);
+                                                 // It reads Z directly.
+                                                 // So geometry is already transformed or we assume X/Z are ground plane.
+
+                // Let's assume vertex.x and vertex.z refer to the horizontal plane.
+                // But attributes.position is raw.
+                // If we rotated the MESH, the geometry attributes are still in local space.
+                // PlaneGeometry default is in XY plane.
+                // We rotated mesh by -PI/2 on X.
+                // So Mesh Local X aligns with World X.
+                // Mesh Local Y aligns with World Z (roughly, depends on sign).
+                // Mesh Local Z aligns with World -Y.
+                // No, wait.
+                // Let's look at setupTerrain:
+                // geometry.rotateX(-Math.PI / 2); <-- This rotates the GEOMETRY vertices.
+                // So attributes.position are ALREADY in XZ plane (Y is up/down).
+
+                const y = this.getTerrainHeight(worldX, worldZ);
+                posAttr.setY(i, y);
+            }
+            posAttr.needsUpdate = true;
+            this.terrain.geometry.computeVertexNormals();
+        }
+
+        if (this.waterSurface) {
+             this.waterSurface.position.set(meshX, 0, meshZ);
+        }
+
+        if (this.scanRingFx) {
+            // Scan Ring centers on ship regardless of grid snap
+             this.scanRingFx.position.set(ownX, -0.2, ownZ);
+        }
+    }
+
+    updateTerrainAroundShip(ownX, ownZ) {
+        // Snap to 5 units for stability of wireframe grid
+        const snap = 5.0;
+        const meshX = Math.round(ownX / snap) * snap;
+        const meshZ = Math.round(ownZ / snap) * snap;
+
+        const moved = Math.abs(meshX - this._lastTerrainUpdatePos.x) > 0.1 ||
+                      Math.abs(meshZ - this._lastTerrainUpdatePos.z) > 0.1;
+
+        if (moved) {
+            this._lastTerrainUpdatePos.x = meshX;
+            this._lastTerrainUpdatePos.z = meshZ;
+
+            if (this.terrain) {
+                this.terrain.position.set(meshX, 0, meshZ);
+                const pos = this.terrain.geometry.attributes.position;
+
+                for (let i = 0; i < pos.count; i++) {
+                    const localX = pos.getX(i);
+                    const localZ = pos.getZ(i); // Already rotated to XZ plane
+                    const worldX = meshX + localX;
+                    const worldZ = meshZ + localZ;
+                    const h = this.getTerrainHeight(worldX, worldZ);
+                    pos.setY(i, h);
+                }
+                pos.needsUpdate = true;
+                this.terrain.geometry.computeVertexNormals();
+            }
+
+            if (this.waterSurface) {
+                this.waterSurface.position.set(meshX, 0, meshZ);
+            }
+        }
+
+        // Always update Scan Ring to exact position
+        if (this.scanRingFx) {
+            const y = this.getTerrainHeight(ownX, ownZ) - 0.2;
+            this.scanRingFx.position.set(ownX, y, ownZ);
+        }
     }
 
     setupTerrain() {
