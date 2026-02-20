@@ -27,6 +27,8 @@ export class Tactical3DRenderer {
         this.waterSurface = null;
         this.scanRingFx = null;
         this.terrainContours = null;
+        this.terrainContoursMajor = null;
+        this.terrainContoursMinor = null;
 
         this.ownShipRoot = null;
         this.ownShipMesh = null;
@@ -154,6 +156,8 @@ export class Tactical3DRenderer {
         this.waterSurface = null;
         this.scanRingFx = null;
         this.terrainContours = null;
+        this.terrainContoursMajor = null;
+        this.terrainContoursMinor = null;
         this.ownShipRoot = null;
         this.ownShipMesh = null;
         this.verticalGuideLine = null;
@@ -493,7 +497,8 @@ export class Tactical3DRenderer {
 
         const half = this._terrainSize / 2;
         const step = this._terrainSize / this._terrainSegments;
-        const lines = [];
+        const majorLines = [];
+        const minorLines = [];
 
         const interpolate = (a, b, level) => {
             const da = level - a.h;
@@ -507,7 +512,9 @@ export class Tactical3DRenderer {
             };
         };
 
-        for (const level of this._contourLevels) {
+        for (let levelIndex = 0; levelIndex < this._contourLevels.length; levelIndex++) {
+            const level = this._contourLevels[levelIndex];
+            const dest = levelIndex % 2 === 0 ? majorLines : minorLines;
             for (let lx = -half; lx < half; lx += step) {
                 for (let lz = -half; lz < half; lz += step) {
                     const p00 = { x: lx, z: lz };
@@ -535,7 +542,7 @@ export class Tactical3DRenderer {
 
                     const segments = this.getContourSegments(caseCode, e0, e1, e2, e3);
                     for (const [a, b] of segments) {
-                        lines.push(
+                        dest.push(
                             gridX + a.x, level + 0.2, gridZ + a.z,
                             gridX + b.x, level + 0.2, gridZ + b.z
                         );
@@ -544,10 +551,15 @@ export class Tactical3DRenderer {
             }
         }
 
-        const geometry = new THREE.BufferGeometry();
-        geometry.setAttribute('position', new THREE.Float32BufferAttribute(lines, 3));
-        this.terrainContours.geometry.dispose();
-        this.terrainContours.geometry = geometry;
+        const majorGeometry = new THREE.BufferGeometry();
+        majorGeometry.setAttribute('position', new THREE.Float32BufferAttribute(majorLines, 3));
+        const minorGeometry = new THREE.BufferGeometry();
+        minorGeometry.setAttribute('position', new THREE.Float32BufferAttribute(minorLines, 3));
+
+        this.terrainContoursMajor.geometry.dispose();
+        this.terrainContoursMajor.geometry = majorGeometry;
+        this.terrainContoursMinor.geometry.dispose();
+        this.terrainContoursMinor.geometry = minorGeometry;
     }
 
     updateTerrainGridLines(gridX, gridZ) {
@@ -686,13 +698,23 @@ export class Tactical3DRenderer {
         this.scene.add(this.terrainGridLines);
         this.updateTerrainGridLines(0, 0);
 
-        const contourMaterial = new THREE.LineBasicMaterial({
-            color: 0x00ffff,
+        const contourMajorMaterial = new THREE.LineBasicMaterial({
+            color: 0x00b4be,
             transparent: true,
-            opacity: 0.35
+            opacity: 0.7
         });
-        this.terrainContours = new THREE.LineSegments(new THREE.BufferGeometry(), contourMaterial);
-        this.terrainContours.frustumCulled = false;
+        const contourMinorMaterial = new THREE.LineBasicMaterial({
+            color: 0x0096a0,
+            transparent: true,
+            opacity: 0.5
+        });
+        this.terrainContours = new THREE.Group();
+        this.terrainContoursMajor = new THREE.LineSegments(new THREE.BufferGeometry(), contourMajorMaterial);
+        this.terrainContoursMinor = new THREE.LineSegments(new THREE.BufferGeometry(), contourMinorMaterial);
+        this.terrainContoursMajor.frustumCulled = false;
+        this.terrainContoursMinor.frustumCulled = false;
+        this.terrainContours.add(this.terrainContoursMajor);
+        this.terrainContours.add(this.terrainContoursMinor);
         this.scene.add(this.terrainContours);
         this.updateTerrainContours(0, 0);
 
