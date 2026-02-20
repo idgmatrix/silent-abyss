@@ -76,7 +76,18 @@ Notes:
 - Grid/contours update whenever the terrain chunk rec enters around own ship.
 - Terrain chunk is snapped to a fixed grid to reduce shimmer.
 
-## 5. 2D View Frames
+## 5. 3D Underwater Atmosphere and Depth Cues
+
+3D tactical now includes environmental depth effects:
+
+- Depth fog (`FogExp2`) with camera-depth-dependent density.
+- Fog-aware terrain shading (terrain shader blends to fog color with distance/depth).
+- Animated water-surface shimmer layer.
+- Marine snow depth layering (near/mid/far particle bands with different size, opacity, and fall speeds).
+
+These effects are implemented in `src/tactical-renderer-3d.js`.
+
+## 6. 2D View Frames
 
 2D rendering uses a shared frame conversion path:
 
@@ -85,7 +96,36 @@ Notes:
 
 Target plotting, picking, and contour sampling all use consistent frame transforms.
 
-## 6. Debug and Verification Overlay (Dev)
+## 7. Compass Overlays
+
+Compass overlays are provided in both tactical orientations:
+
+- 3D view: top-right DOM compass with north needle derived from camera heading.
+- Radial view: top-right canvas compass showing north relative to head-up orientation.
+
+In both, the `N` marker rotates with the north needle direction.
+
+## 8. BTR Bearing Reference
+
+BTR supports two reference modes:
+
+- `REL` (default): bearings relative to own-ship heading (`000` dead ahead).
+- `TRUE`: north-referenced bearings (`000` north).
+
+Behavior:
+
+- BTR plotting, selected-gate labels, and BTR click-selection all follow the selected reference.
+- Labels include suffixes:
+  - `°R` for relative
+  - `°T` for true
+
+UI control:
+
+- `#btr-bearing-reference-select` in `index.html`
+- wired in `src/ui-manager.js`
+- conversion logic in `src/sonar-visuals.js`
+
+## 9. Debug and Verification Overlay (Dev)
 
 Coordinate debug tools are available in development builds.
 
@@ -103,11 +143,10 @@ What is shown:
 - 2D center vectors:
   - `N` (north), `E` (east), `F` (ship forward)
 
-## 7. View Switching Behavior
+## 10. View Switching Behavior
 
 3D renderer continues updating while hidden in 2D mode.
 
 Reason:
 
 - prevents state/camera catch-up jumps when switching from 2D to 3D.
-

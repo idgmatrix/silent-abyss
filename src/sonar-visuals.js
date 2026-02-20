@@ -78,6 +78,7 @@ export class SonarVisuals {
         this.lastTargets = [];
         this.currentTheme = 'CYAN';
         this.currentWaterfallTheme = 'CYAN';
+        this.btrBearingReference = 'REL'; // REL (ship-relative) or TRUE (north-referenced)
 
         this.fftProcessor = options.fftProcessor || null;
         this.lofarSpectrum = null;
@@ -124,6 +125,7 @@ export class SonarVisuals {
 
         this.lineHistory = [];
         this.maxLineHistory = 15;
+        this._ownShipCourseRad = 0;
     }
 
     init() {
@@ -175,7 +177,8 @@ export class SonarVisuals {
         if (!this.btrDisplay || !this.btrDisplay.canvas) return;
         const rect = this.btrDisplay.canvas.getBoundingClientRect();
         const x = e.clientX - rect.left;
-        const clickedBearing = (x / rect.width) * 360;
+        const clickedDisplayBearing = (x / rect.width) * 360;
+        const clickedTrueBearing = this._displayToTrueBearing(clickedDisplayBearing);
 
         // Find closest target by bearing
         let closestTarget = null;
@@ -184,7 +187,9 @@ export class SonarVisuals {
         this.lastTargets.forEach(t => {
             if (t.state !== TrackState.TRACKED) return;
 
-            let diff = Math.abs(t.bearing - clickedBearing);
+            const targetDisplayBearing = this._trueToDisplayBearing(t.bearing);
+            const clickedDisplay = this._trueToDisplayBearing(clickedTrueBearing);
+            let diff = Math.abs(targetDisplayBearing - clickedDisplay);
             if (diff > 180) diff = 360 - diff;
 
             if (diff < minDiff) {
@@ -215,6 +220,7 @@ export class SonarVisuals {
         this._demonSourceMode = options.sourceMode === 'SELECTED' ? 'SELECTED' : 'COMPOSITE';
         this._demonPingTransient = options.pingTransient || this._demonPingTransient;
         this._pingEchoes = options.pingEchoes || [];
+        this._ownShipCourseRad = Number.isFinite(options.ownShipCourseRad) ? options.ownShipCourseRad : this._ownShipCourseRad;
         this._syncDemonTargetCache(selectedTarget);
         this._updateLofarSpectrum(dataArray, timeDomainData, fftSize);
         this._updateDemonSpectrum(timeDomainData, sampleRate, selectedTarget);
@@ -1341,6 +1347,27 @@ export class SonarVisuals {
         }
     }
 
+    setBtrBearingReference(reference) {
+        const normalized = String(reference || '').toUpperCase();
+        this.btrBearingReference = normalized === 'TRUE' ? 'TRUE' : 'REL';
+    }
+
+    _trueToDisplayBearing(trueBearingDeg) {
+        const trueDeg = ((trueBearingDeg % 360) + 360) % 360;
+        if (this.btrBearingReference === 'TRUE') return trueDeg;
+
+        const ownDeg = (((this._ownShipCourseRad * 180) / Math.PI) % 360 + 360) % 360;
+        return (trueDeg - ownDeg + 360) % 360;
+    }
+
+    _displayToTrueBearing(displayBearingDeg) {
+        const displayDeg = ((displayBearingDeg % 360) + 360) % 360;
+        if (this.btrBearingReference === 'TRUE') return displayDeg;
+
+        const ownDeg = (((this._ownShipCourseRad * 180) / Math.PI) % 360 + 360) % 360;
+        return (displayDeg + ownDeg + 360) % 360;
+    }
+
     drawBTR(targets, currentRpm, pingIntensity, _pingEchoes = [], selectedTarget = null) {
         if (!this.btrDisplay) return;
 
@@ -1366,7 +1393,8 @@ export class SonarVisuals {
 
                 // Add small bearing jitter based on SNR
                 const jitter = (Math.random() - 0.5) * (5.0 / (target.snr + 0.1));
-                const targetX = ((target.bearing + jitter) / 360) * width;
+                const displayBearing = this._trueToDisplayBearing(target.bearing);
+                const targetX = ((displayBearing + jitter) / 360) * width;
 
                 let targetIntensity = Math.min(1.0, (target.snr * 40) / 255);
 
@@ -1478,7 +1506,8 @@ export class SonarVisuals {
             : 0;
         const dpr = window.devicePixelRatio || 1;
 
-        const bearing = ((selectedTarget.bearing % 360) + 360) % 360;
+        const trueBearing = ((selectedTarget.bearing % 360) + 360) % 360;
+        const bearing = this._trueToDisplayBearing(trueBearing);
         const x = (bearing / 360) * width;
         const gateHalfWidth = (1.5 / 360) * width; // +/- 1.5 degrees tolerance band
         const isLost = selectedTarget.state === TrackState.LOST;
@@ -1520,7 +1549,8 @@ export class SonarVisuals {
 
         // Label in top lane.
         const labelId = selectedTarget.id ? selectedTarget.id.replace('target-', 'T') : 'SEL';
-        const label = `SEL ${labelId} ${bearing.toFixed(1)}\u00B0`;
+        const suffix = this.btrBearingReference === 'TRUE' ? 'T' : 'R';
+        const label = `SEL ${labelId} ${bearing.toFixed(1)}\u00B0${suffix}`;
         ctx.font = `${Math.max(7, Math.round(7 * dpr))}px "Share Tech Mono", monospace`;
         ctx.textAlign = 'left';
         ctx.textBaseline = 'top';

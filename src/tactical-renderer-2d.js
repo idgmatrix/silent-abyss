@@ -198,6 +198,7 @@ export class Tactical2DRenderer {
         ctx.restore();
 
         this.drawCoordinateDebugVectors(ctx, centerX, centerY, ownShipPose, 'radial');
+        this.drawRadialCompass(ctx, w, h, ownShipPose);
     }
 
     renderGrid(targets, options = {}) {
@@ -353,6 +354,69 @@ export class Tactical2DRenderer {
 
         ctx.font = '10px monospace';
         ctx.fillText(label, centerX + dx + 4, centerY + dy - 4);
+        ctx.restore();
+    }
+
+    drawRadialCompass(ctx, width, _height, ownShipPose = { course: 0 }) {
+        const radius = 34;
+        const cx = width - radius - 12;
+        const cy = radius + 12;
+        const course = Number.isFinite(ownShipPose?.course) ? ownShipPose.course : 0;
+
+        ctx.save();
+
+        ctx.beginPath();
+        ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.45)';
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(0, 255, 255, 0.45)';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+
+        // In head-up radial view, screen up is ship-forward.
+        // North direction in screen space rotates by -course from up.
+        const nx = -Math.sin(course);
+        const ny = -Math.cos(course);
+        const len = radius - 8;
+        const tipX = cx + nx * len;
+        const tipY = cy + ny * len;
+
+        ctx.beginPath();
+        ctx.moveTo(cx, cy);
+        ctx.lineTo(tipX, tipY);
+        ctx.strokeStyle = 'rgba(255, 80, 80, 0.95)';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+
+        const angle = Math.atan2(ny, nx);
+        const head = 7;
+        ctx.beginPath();
+        ctx.moveTo(tipX, tipY);
+        ctx.lineTo(tipX - Math.cos(angle - Math.PI / 6) * head, tipY - Math.sin(angle - Math.PI / 6) * head);
+        ctx.lineTo(tipX - Math.cos(angle + Math.PI / 6) * head, tipY - Math.sin(angle + Math.PI / 6) * head);
+        ctx.closePath();
+        ctx.fillStyle = 'rgba(255, 80, 80, 0.95)';
+        ctx.fill();
+
+        const labelRadius = radius - 7;
+        const labelX = cx + nx * labelRadius;
+        const labelY = cy + ny * labelRadius;
+        const labelAngle = Math.atan2(ny, nx) + Math.PI / 2;
+        ctx.save();
+        ctx.translate(labelX, labelY);
+        ctx.rotate(labelAngle);
+        ctx.fillStyle = '#9bffff';
+        ctx.font = '10px monospace';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('N', 0, 0);
+        ctx.restore();
+
+        ctx.beginPath();
+        ctx.arc(cx, cy, 3, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(200, 255, 255, 0.85)';
+        ctx.fill();
+
         ctx.restore();
     }
 

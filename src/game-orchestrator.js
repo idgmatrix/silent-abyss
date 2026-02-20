@@ -27,7 +27,8 @@ export class GameOrchestrator {
             ownShipSignature: { rpm: 0, bladeCount: 0, bpfHz: 0 },
             sourceMode: 'COMPOSITE',
             pingTransient: { active: false, recent: false, sinceLastPing: Infinity },
-            pingEchoes: []
+            pingEchoes: [],
+            ownShipCourseRad: 0
         };
 
         // Subsystems
@@ -252,6 +253,7 @@ export class GameOrchestrator {
 
             // getAndFlushArrivedEchoes returns an array. We update the reference.
             this.sonarDrawOptions.pingEchoes = this.worldModel.getAndFlushArrivedEchoes();
+            this.sonarDrawOptions.ownShipCourseRad = this.worldModel.ownShipCourse;
 
             this.sonarVisuals.draw(
                 data,

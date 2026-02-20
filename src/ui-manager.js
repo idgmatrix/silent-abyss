@@ -35,6 +35,14 @@ export class UIManager {
             themeSelect.onchange = (e) => this.orch.sonarVisuals.setTheme(e.target.value);
         }
 
+        const btrBearingReferenceSelect = document.getElementById('btr-bearing-reference-select');
+        if (btrBearingReferenceSelect) {
+            btrBearingReferenceSelect.onchange = (e) => {
+                this.orch.sonarVisuals.setBtrBearingReference(e.target.value);
+            };
+            this.orch.sonarVisuals.setBtrBearingReference(btrBearingReferenceSelect.value);
+        }
+
         const waterfallThemeSelect = document.getElementById('waterfall-theme-select');
         if (waterfallThemeSelect) {
             waterfallThemeSelect.onchange = (e) => this.orch.sonarVisuals.setWaterfallTheme(e.target.value);
@@ -71,7 +79,8 @@ export class UIManager {
             'demon-controls-toggle', 'demon-controls-content', 'rudder-slider',
             'rudder-angle-display', 'rudder-port-btn', 'rudder-starboard-btn',
             'rudder-center-btn', 'heading-display', 'throttle-slider', 'throttle-display',
-            'throttle-astern-btn', 'throttle-ahead-btn', 'throttle-stop-btn', 'rpm-slider'
+            'throttle-astern-btn', 'throttle-ahead-btn', 'throttle-stop-btn', 'rpm-slider',
+            'btr-bearing-reference-select'
         ];
 
         ids.forEach(id => {

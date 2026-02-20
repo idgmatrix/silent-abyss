@@ -21,6 +21,9 @@ export class Tactical3DRenderer {
         this.camera = null;
         this.renderer = null;
         this.rendererBackend = 'webgl';
+        this.compassRoot = null;
+        this.compassNeedle = null;
+        this.compassNorthLabel = null;
 
         this.terrain = null;
         this.terrainGridLines = null;
@@ -40,6 +43,7 @@ export class Tactical3DRenderer {
 
         this.selectionRing = null;
         this.marineSnow = null;
+        this.marineSnowLayers = [];
         this.targetMeshes = new Map();
 
         this.cavitationParticles = new CavitationParticles();
@@ -62,6 +66,15 @@ export class Tactical3DRenderer {
         this._tmpVec3A = new THREE.Vector3();
         this._tmpVec3B = new THREE.Vector3();
         this._tmpWorldPos = new THREE.Vector3();
+        this._tmpCamForward = new THREE.Vector3();
+        this._elapsedTime = 0;
+
+        this.baseFogDensity = 0.0035;
+        this.depthFogDensityFactor = 0.00055;
+        this.minFogDensity = 0.0025;
+        this.maxFogDensity = 0.02;
+        this.fogColorShallow = new THREE.Color(0x07212a);
+        this.fogColorDeep = new THREE.Color(0x02080d);
 
         this.debugCoordinatesEnabled = false;
     }
@@ -71,6 +84,8 @@ export class Tactical3DRenderer {
 
         this.container = container;
         this.scene = new THREE.Scene();
+        this.scene.background = this.fogColorShallow.clone();
+        this.scene.fog = new THREE.FogExp2(this.fogColorShallow.clone(), this.baseFogDensity);
 
         const initWidth = Math.max(1, Math.floor(container.clientWidth || 0));
         const initHeight = Math.max(1, Math.floor(container.clientHeight || 0));
@@ -88,6 +103,7 @@ export class Tactical3DRenderer {
         this.renderer.domElement.style.width = '100%';
         this.renderer.domElement.style.height = '100%';
         container.appendChild(this.renderer.domElement);
+        this.setupCompassOverlay(container);
 
         this.setupTerrain();
         this.setupWaterSurface();
@@ -150,6 +166,12 @@ export class Tactical3DRenderer {
         this.camera = null;
         this.renderer = null;
         this.rendererBackend = 'webgl';
+        if (this.compassRoot && this.compassRoot.parentElement) {
+            this.compassRoot.parentElement.removeChild(this.compassRoot);
+        }
+        this.compassRoot = null;
+        this.compassNeedle = null;
+        this.compassNorthLabel = null;
 
         this.terrain = null;
         this.terrainGridLines = null;
@@ -167,6 +189,7 @@ export class Tactical3DRenderer {
         this.worldEastArrow = null;
         this.selectionRing = null;
         this.marineSnow = null;
+        this.marineSnowLayers = [];
 
         this.targetMeshes.clear();
 
@@ -179,6 +202,9 @@ export class Tactical3DRenderer {
     setVisible(visible) {
         if (!this.renderer) return;
         this.renderer.domElement.style.display = visible ? 'block' : 'none';
+        if (this.compassRoot) {
+            this.compassRoot.style.display = visible ? 'block' : 'none';
+        }
     }
 
     setDebugCoordinatesEnabled(enabled) {
@@ -301,6 +327,7 @@ export class Tactical3DRenderer {
 
     render(ownShipPose, selectedTargetId, pulse, targets = [], dt = 0.016) {
         if (!this.renderer || !this.scene || !this.camera) return;
+        this._elapsedTime += Math.max(0, Number.isFinite(dt) ? dt : 0.016);
 
         const ownX = Number.isFinite(ownShipPose?.x) ? ownShipPose.x : 0;
         const ownZ = Number.isFinite(ownShipPose?.z) ? ownShipPose.z : 0;
@@ -308,6 +335,8 @@ export class Tactical3DRenderer {
 
         this.updateTerrainAroundShip(ownX, ownZ);
         this.updateOwnShipAndCamera(ownX, ownZ, ownCourse, dt);
+        this.updateUnderwaterEffects();
+        this.updateCompassHeading();
 
         if (this.selectionRing) {
             if (selectedTargetId && this.targetMeshes.has(selectedTargetId)) {
@@ -416,21 +445,149 @@ export class Tactical3DRenderer {
             });
     }
 
-    updateMarineSnow(dt, ownX, ownZ) {
-        if (!this.marineSnow) return;
+    updateUnderwaterEffects() {
+        if (!this.scene || !this.camera || !this.scene.fog) return;
 
-        const positions = this.marineSnow.geometry.attributes.position.array;
-        const speeds = this.marineSnow.geometry.userData.speeds;
-        const fallFactor = clamp((Number.isFinite(dt) ? dt : 0.016) * 60, 0.1, 2.5);
+        const camDepth = Math.max(0, -this.camera.position.y);
+        const depthNorm = clamp(camDepth / 60, 0, 1);
+        const fogDensity = clamp(
+            this.baseFogDensity + camDepth * this.depthFogDensityFactor,
+            this.minFogDensity,
+            this.maxFogDensity
+        );
 
-        for (let i = 0; i < speeds.length; i++) {
-            positions[i * 3 + 1] -= speeds[i] * fallFactor;
-            if (positions[i * 3 + 1] < -100) positions[i * 3 + 1] = 100;
+        this.scene.fog.density = fogDensity;
+        this.scene.fog.color.copy(this.fogColorShallow).lerp(this.fogColorDeep, depthNorm);
+        if (this.scene.background && this.scene.background.isColor) {
+            this.scene.background.copy(this.scene.fog.color);
         }
 
-        this.marineSnow.geometry.attributes.position.needsUpdate = true;
+        if (this.terrain?.material?.uniforms?.uFogDensity) {
+            this.terrain.material.uniforms.uFogDensity.value = fogDensity;
+        }
+        if (this.terrain?.material?.uniforms?.uFogColor) {
+            this.terrain.material.uniforms.uFogColor.value.copy(this.scene.fog.color);
+        }
+
+        if (this.waterSurface?.material?.uniforms?.uFogDensity) {
+            this.waterSurface.material.uniforms.uFogDensity.value = fogDensity;
+        }
+        if (this.waterSurface?.material?.uniforms?.uFogColor) {
+            this.waterSurface.material.uniforms.uFogColor.value.copy(this.scene.fog.color);
+        }
+        if (this.waterSurface?.material?.uniforms?.uTime) {
+            this.waterSurface.material.uniforms.uTime.value = this._elapsedTime;
+        }
+    }
+
+    setupCompassOverlay(container) {
+        if (!container || this.compassRoot) return;
+
+        const root = document.createElement('div');
+        root.style.position = 'absolute';
+        root.style.top = '10px';
+        root.style.right = '10px';
+        root.style.width = '78px';
+        root.style.height = '78px';
+        root.style.border = '1px solid rgba(0, 255, 255, 0.45)';
+        root.style.borderRadius = '50%';
+        root.style.background = 'rgba(0, 0, 0, 0.45)';
+        root.style.backdropFilter = 'blur(1px)';
+        root.style.pointerEvents = 'none';
+        root.style.zIndex = '14';
+
+        const northLabel = document.createElement('div');
+        northLabel.textContent = 'N';
+        northLabel.style.position = 'absolute';
+        northLabel.style.left = '50%';
+        northLabel.style.top = '50%';
+        northLabel.style.transform = 'translate(-50%, -50%)';
+        northLabel.style.font = '10px monospace';
+        northLabel.style.color = '#9bffff';
+        northLabel.style.textShadow = '0 0 5px rgba(0, 255, 255, 0.55)';
+        northLabel.style.transformOrigin = '50% 50%';
+        root.appendChild(northLabel);
+
+        const needle = document.createElement('div');
+        needle.style.position = 'absolute';
+        needle.style.top = '50%';
+        needle.style.left = '50%';
+        needle.style.width = '2px';
+        needle.style.height = '28px';
+        needle.style.background = 'linear-gradient(to top, rgba(255,255,255,0.2), rgba(255,80,80,0.95))';
+        needle.style.transformOrigin = '50% calc(100% - 2px)';
+        needle.style.transform = 'translate(-50%, -100%) rotate(0deg)';
+        needle.style.borderRadius = '1px';
+        root.appendChild(needle);
+
+        const centerDot = document.createElement('div');
+        centerDot.style.position = 'absolute';
+        centerDot.style.top = '50%';
+        centerDot.style.left = '50%';
+        centerDot.style.width = '6px';
+        centerDot.style.height = '6px';
+        centerDot.style.transform = 'translate(-50%, -50%)';
+        centerDot.style.borderRadius = '50%';
+        centerDot.style.background = 'rgba(200, 255, 255, 0.85)';
+        root.appendChild(centerDot);
+
+        container.appendChild(root);
+        this.compassRoot = root;
+        this.compassNeedle = needle;
+        this.compassNorthLabel = northLabel;
+    }
+
+    updateCompassHeading() {
+        if (!this.camera || !this.compassNeedle) return;
+
+        this.camera.getWorldDirection(this._tmpCamForward);
+        this._tmpCamForward.y = 0;
+        const len = this._tmpCamForward.length();
+        if (len < 1e-5) return;
+        this._tmpCamForward.multiplyScalar(1 / len);
+
+        // Scene north is -Z because model north (+Z) is mirrored to scene space.
+        const northX = 0;
+        const northZ = -1;
+        const fwdX = this._tmpCamForward.x;
+        const fwdZ = this._tmpCamForward.z;
+
+        const dot = clamp((fwdX * northX) + (fwdZ * northZ), -1, 1);
+        const crossY = (fwdX * northZ) - (fwdZ * northX);
+        const angleDeg = Math.atan2(crossY, dot) * 180 / Math.PI;
+
+        this.compassNeedle.style.transform = `translate(-50%, -100%) rotate(${angleDeg.toFixed(2)}deg)`;
+        if (this.compassNorthLabel) {
+            const angleRad = angleDeg * Math.PI / 180;
+            const labelRadius = 30;
+            const lx = Math.sin(angleRad) * labelRadius;
+            const ly = -Math.cos(angleRad) * labelRadius;
+            this.compassNorthLabel.style.transform =
+                `translate(calc(-50% + ${lx.toFixed(2)}px), calc(-50% + ${ly.toFixed(2)}px)) rotate(${angleDeg.toFixed(2)}deg)`;
+        }
+    }
+
+    updateMarineSnow(dt, ownX, ownZ) {
+        if (!Array.isArray(this.marineSnowLayers) || this.marineSnowLayers.length === 0) return;
+        const fallFactor = clamp((Number.isFinite(dt) ? dt : 0.016) * 60, 0.1, 2.5);
+
+        for (const layer of this.marineSnowLayers) {
+            const positions = layer.geometry.attributes.position.array;
+            const speeds = layer.geometry.userData.speeds;
+            const yMin = layer.geometry.userData.yMin;
+            const yMax = layer.geometry.userData.yMax;
+            for (let i = 0; i < speeds.length; i++) {
+                positions[i * 3 + 1] -= speeds[i] * fallFactor;
+                if (positions[i * 3 + 1] < yMin) positions[i * 3 + 1] = yMax;
+            }
+            layer.geometry.attributes.position.needsUpdate = true;
+        }
+
         const scenePos = this.modelToScenePosition(ownX, ownZ);
-        this.marineSnow.position.set(scenePos.x, this.getTerrainHeight(ownX, ownZ) + 10, scenePos.z);
+        const baseY = this.getTerrainHeight(ownX, ownZ) + 10;
+        for (const layer of this.marineSnowLayers) {
+            layer.position.set(scenePos.x, baseY, scenePos.z);
+        }
     }
 
     pickTargetAtPoint(x, y, rect) {
@@ -650,30 +807,42 @@ export class Tactical3DRenderer {
                 uniforms: {
                     uScanRadius: { value: 0 },
                     uColor: { value: new THREE.Color(0x004444) },
-                    uActive: { value: 0.0 }
+                    uActive: { value: 0.0 },
+                    uFogColor: { value: this.fogColorShallow.clone() },
+                    uFogDensity: { value: this.baseFogDensity }
                 },
                 vertexShader: `
                 varying float vDist;
                 varying float vHeight;
+                varying float vViewDepth;
                 void main() {
                     vDist = length(position.xz);
                     vHeight = position.y;
-                    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+                    vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+                    vViewDepth = -mvPosition.z;
+                    gl_Position = projectionMatrix * mvPosition;
                 }`,
                 fragmentShader: `
                 uniform float uScanRadius;
                 uniform vec3 uColor;
                 uniform float uActive;
+                uniform vec3 uFogColor;
+                uniform float uFogDensity;
                 varying float vDist;
                 varying float vHeight;
+                varying float vViewDepth;
                 void main() {
                     float ring = smoothstep(uScanRadius - 12.0, uScanRadius, vDist) * (1.0 - smoothstep(uScanRadius, uScanRadius + 1.0, vDist));
                     vec3 baseColor = uColor * (0.2 + (vHeight + 15.0) / 30.0);
+                    vec4 terrainColor;
                     if (uActive > 0.5) {
-                        gl_FragColor = vec4(baseColor + vec3(0.0, 1.0, 1.0) * ring * 0.8, 0.6 + ring * 0.4);
+                        terrainColor = vec4(baseColor + vec3(0.0, 1.0, 1.0) * ring * 0.8, 0.6 + ring * 0.4);
                     } else {
-                        gl_FragColor = vec4(baseColor, 0.4);
+                        terrainColor = vec4(baseColor, 0.4);
                     }
+                    float fogFactor = 1.0 - exp(-uFogDensity * uFogDensity * vViewDepth * vViewDepth);
+                    terrainColor.rgb = mix(terrainColor.rgb, uFogColor, clamp(fogFactor, 0.0, 1.0));
+                    gl_FragColor = terrainColor;
                 }`,
                 transparent: true,
                 wireframe: false
@@ -738,12 +907,50 @@ export class Tactical3DRenderer {
         const geometry = new THREE.PlaneGeometry(300, 300, 1, 1);
         geometry.rotateX(-Math.PI / 2);
 
-        const material = new THREE.MeshBasicMaterial({
-            color: 0x114444,
-            transparent: true,
-            opacity: 0.14,
-            depthWrite: false
-        });
+        const useShader = this.rendererBackend !== 'webgpu';
+        const material = useShader
+            ? new THREE.ShaderMaterial({
+                uniforms: {
+                    uTime: { value: 0 },
+                    uFogColor: { value: this.fogColorShallow.clone() },
+                    uFogDensity: { value: this.baseFogDensity }
+                },
+                vertexShader: `
+                varying vec3 vWorldPos;
+                varying float vViewDepth;
+                void main() {
+                    vec4 worldPos = modelMatrix * vec4(position, 1.0);
+                    vec4 mvPos = modelViewMatrix * vec4(position, 1.0);
+                    vWorldPos = worldPos.xyz;
+                    vViewDepth = -mvPos.z;
+                    gl_Position = projectionMatrix * mvPos;
+                }`,
+                fragmentShader: `
+                uniform float uTime;
+                uniform vec3 uFogColor;
+                uniform float uFogDensity;
+                varying vec3 vWorldPos;
+                varying float vViewDepth;
+                void main() {
+                    float waveA = sin((vWorldPos.x * 0.09) + uTime * 1.2);
+                    float waveB = sin((vWorldPos.z * 0.07) - uTime * 1.4);
+                    float waveC = sin((vWorldPos.x + vWorldPos.z) * 0.05 + uTime * 0.8);
+                    float shimmer = (waveA + waveB + waveC) / 3.0;
+                    vec3 waterColor = mix(vec3(0.05, 0.22, 0.26), vec3(0.12, 0.42, 0.50), shimmer * 0.5 + 0.5);
+                    float alpha = 0.09 + shimmer * 0.035;
+                    float fogFactor = 1.0 - exp(-uFogDensity * uFogDensity * vViewDepth * vViewDepth);
+                    vec3 outColor = mix(waterColor, uFogColor, clamp(fogFactor, 0.0, 1.0));
+                    gl_FragColor = vec4(outColor, clamp(alpha, 0.04, 0.16));
+                }`,
+                transparent: true,
+                depthWrite: false
+            })
+            : new THREE.MeshBasicMaterial({
+                color: 0x114444,
+                transparent: true,
+                opacity: 0.14,
+                depthWrite: false
+            });
 
         this.waterSurface = new THREE.Mesh(geometry, material);
         this.waterSurface.position.y = 0;
@@ -836,30 +1043,48 @@ export class Tactical3DRenderer {
     }
 
     setupMarineSnow() {
-        const count = 500;
-        const geometry = new THREE.BufferGeometry();
-        const positions = new Float32Array(count * 3);
-        const speeds = new Float32Array(count);
+        const layerConfigs = [
+            { count: 220, size: 0.24, opacity: 0.16, speedMin: 0.010, speedMax: 0.022 },
+            { count: 180, size: 0.48, opacity: 0.24, speedMin: 0.018, speedMax: 0.038 },
+            { count: 120, size: 0.84, opacity: 0.34, speedMin: 0.028, speedMax: 0.056 }
+        ];
 
-        for (let i = 0; i < count; i++) {
-            positions[i * 3] = (Math.random() - 0.5) * 300;
-            positions[i * 3 + 1] = (Math.random() - 0.5) * 200;
-            positions[i * 3 + 2] = (Math.random() - 0.5) * 300;
-            speeds[i] = 0.02 + Math.random() * 0.05;
+        this.marineSnowLayers = [];
+        const span = 320;
+        const ySpan = 220;
+        const yMin = -110;
+        const yMax = 110;
+
+        for (const cfg of layerConfigs) {
+            const geometry = new THREE.BufferGeometry();
+            const positions = new Float32Array(cfg.count * 3);
+            const speeds = new Float32Array(cfg.count);
+
+            for (let i = 0; i < cfg.count; i++) {
+                positions[i * 3] = (Math.random() - 0.5) * span;
+                positions[i * 3 + 1] = (Math.random() - 0.5) * ySpan;
+                positions[i * 3 + 2] = (Math.random() - 0.5) * span;
+                speeds[i] = cfg.speedMin + Math.random() * (cfg.speedMax - cfg.speedMin);
+            }
+
+            geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+            geometry.userData = { speeds, yMin, yMax };
+
+            const material = new THREE.PointsMaterial({
+                color: 0xffffff,
+                size: cfg.size,
+                sizeAttenuation: true,
+                transparent: true,
+                opacity: cfg.opacity,
+                blending: THREE.AdditiveBlending,
+                depthWrite: false
+            });
+
+            const layer = new THREE.Points(geometry, material);
+            this.scene.add(layer);
+            this.marineSnowLayers.push(layer);
         }
 
-        geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-        geometry.userData = { speeds };
-
-        const material = new THREE.PointsMaterial({
-            color: 0xffffff,
-            size: 0.5,
-            transparent: true,
-            opacity: 0.3,
-            blending: THREE.AdditiveBlending
-        });
-
-        this.marineSnow = new THREE.Points(geometry, material);
-        this.scene.add(this.marineSnow);
+        this.marineSnow = this.marineSnowLayers[0] || null;
     }
 }
