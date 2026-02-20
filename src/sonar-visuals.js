@@ -177,8 +177,7 @@ export class SonarVisuals {
         if (!this.btrDisplay || !this.btrDisplay.canvas) return;
         const rect = this.btrDisplay.canvas.getBoundingClientRect();
         const x = e.clientX - rect.left;
-        const clickedDisplayBearing = (x / rect.width) * 360;
-        const clickedTrueBearing = this._displayToTrueBearing(clickedDisplayBearing);
+        const clickedDisplayBearing = this._btrXToBearing(x, rect.width);
 
         // Find closest target by bearing
         let closestTarget = null;
@@ -188,8 +187,7 @@ export class SonarVisuals {
             if (t.state !== TrackState.TRACKED) return;
 
             const targetDisplayBearing = this._trueToDisplayBearing(t.bearing);
-            const clickedDisplay = this._trueToDisplayBearing(clickedTrueBearing);
-            let diff = Math.abs(targetDisplayBearing - clickedDisplay);
+            let diff = Math.abs(targetDisplayBearing - clickedDisplayBearing);
             if (diff > 180) diff = 360 - diff;
 
             if (diff < minDiff) {
@@ -1368,6 +1366,25 @@ export class SonarVisuals {
         return (displayDeg + ownDeg + 360) % 360;
     }
 
+    _bearingToBtrX(displayBearingDeg, width) {
+        const b = ((displayBearingDeg % 360) + 360) % 360;
+        if (this.btrBearingReference === 'REL') {
+            // Ahead-centered relative layout:
+            // 0 ahead at center, 90 starboard right, 270 port left, 180 at wrap edges.
+            return (((b + 180) % 360) / 360) * width;
+        }
+        return (b / 360) * width;
+    }
+
+    _btrXToBearing(x, width) {
+        const normalized = width > 0 ? (x / width) * 360 : 0;
+        const wrapped = ((normalized % 360) + 360) % 360;
+        if (this.btrBearingReference === 'REL') {
+            return (wrapped + 180) % 360;
+        }
+        return wrapped;
+    }
+
     drawBTR(targets, currentRpm, pingIntensity, _pingEchoes = [], selectedTarget = null) {
         if (!this.btrDisplay) return;
 
@@ -1394,7 +1411,7 @@ export class SonarVisuals {
                 // Add small bearing jitter based on SNR
                 const jitter = (Math.random() - 0.5) * (5.0 / (target.snr + 0.1));
                 const displayBearing = this._trueToDisplayBearing(target.bearing);
-                const targetX = ((displayBearing + jitter) / 360) * width;
+                const targetX = this._bearingToBtrX(displayBearing + jitter, width);
 
                 let targetIntensity = Math.min(1.0, (target.snr * 40) / 255);
 
@@ -1420,7 +1437,7 @@ export class SonarVisuals {
             if (selfNoiseIntensity > 0.02) {
                 const centerBearing = 180;
                 const spread = 40 + (currentRpm / 10);
-                const selfX = (centerBearing / 360) * width;
+                const selfX = this._bearingToBtrX(centerBearing, width);
                 const selfW = (spread / 360) * width;
 
                 const grad = ctx.createLinearGradient(selfX - selfW/2, 0, selfX + selfW/2, 0);
@@ -1475,8 +1492,9 @@ export class SonarVisuals {
         ctx.textAlign = 'center';
         ctx.textBaseline = 'top';
 
-        for (let bearing = 0; bearing <= 360; bearing += 10) {
-            const x = (bearing / 360) * width;
+        const maxBearing = this.btrBearingReference === 'REL' ? 350 : 360;
+        for (let bearing = 0; bearing <= maxBearing; bearing += 10) {
+            const x = this._bearingToBtrX(bearing, width);
             const major = bearing % 30 === 0;
             const tickLen = major ? majorTick : minorTick;
             ctx.strokeStyle = major
@@ -1487,7 +1505,7 @@ export class SonarVisuals {
             ctx.lineTo(x + 0.5, topInset);
             ctx.stroke();
 
-            if (major && bearing % 60 === 0) {
+            if (major && bearing % 90 === 0) {
                 ctx.fillStyle = `rgba(${theme.PING[0]}, ${theme.PING[1]}, ${theme.PING[2]}, 0.85)`;
                 ctx.fillText(`${bearing}`, x, 1);
             }
@@ -1508,7 +1526,7 @@ export class SonarVisuals {
 
         const trueBearing = ((selectedTarget.bearing % 360) + 360) % 360;
         const bearing = this._trueToDisplayBearing(trueBearing);
-        const x = (bearing / 360) * width;
+        const x = this._bearingToBtrX(bearing, width);
         const gateHalfWidth = (1.5 / 360) * width; // +/- 1.5 degrees tolerance band
         const isLost = selectedTarget.state === TrackState.LOST;
 
