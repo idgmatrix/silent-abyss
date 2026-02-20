@@ -1,6 +1,7 @@
 import { TrackState, SimulationTarget } from './simulation.js';
 import { EnvironmentModel } from './acoustics/environment-model.js';
 import { buildScenarioTargets, getDefaultScenario } from './data/scenario-loader.js';
+import { bearingDegFromDelta, forwardFromCourse, normalizeCourseRadians } from './coordinate-system.js';
 
 export class WorldModel {
     constructor(simEngine, spatialService, callbacks = {}) {
@@ -88,25 +89,11 @@ export class WorldModel {
         const speedResponse = Math.min(1, Math.max(0, dt * 1.9));
         this.ownShipForwardSpeed += (targetSpeed - this.ownShipForwardSpeed) * speedResponse;
 
-        this.ownShipCourse += this.ownShipTurnRate * dt;
-        this.ownShipCourse = (this.ownShipCourse + Math.PI * 2) % (Math.PI * 2);
+        this.ownShipCourse = normalizeCourseRadians(this.ownShipCourse + this.ownShipTurnRate * dt);
 
-        // Movement Physics: Z is North, X is East.
-        // Course 0 = North (+Z), Course 90 (PI/2) = East (+X).
-        // Standard Math.cos(theta) matches X axis (East). Math.sin(theta) matches Y axis (North/Z here).
-        // Let's verify:
-        // If Course = 0: cos(0)=1, sin(0)=0. We want +Z movement.
-        // Standard trig: x = cos, y = sin.
-        // If we want 0 to be +Z (North) and PI/2 to be +X (East):
-        // Then z = cos(course), x = sin(course).
-        // Let's check rotation direction.
-        // Course increases clockwise (0 -> 90 -> 180).
-        // sin(0)=0, sin(90)=1. Correct for X.
-        // cos(0)=1, cos(90)=0. Correct for Z.
-        // So: x = sin(c), z = cos(c).
-
-        this.ownShipPosition.x += Math.sin(this.ownShipCourse) * this.ownShipForwardSpeed * dt;
-        this.ownShipPosition.z += Math.cos(this.ownShipCourse) * this.ownShipForwardSpeed * dt;
+        const forward = forwardFromCourse(this.ownShipCourse);
+        this.ownShipPosition.x += forward.x * this.ownShipForwardSpeed * dt;
+        this.ownShipPosition.z += forward.z * this.ownShipForwardSpeed * dt;
     }
 
     getRangeToTarget(target) {
@@ -116,30 +103,7 @@ export class WorldModel {
     getBearingToTarget(target) {
         const dx = target.x - this.ownShipPosition.x;
         const dz = target.z - this.ownShipPosition.z;
-        const startRad = (-Math.PI / 2); // North is -Z in 3D? Wait.
-        // Coordinate System: North is +Z in 3D, and Up (0°) in North-Up 2D modes.
-        // This means Z is North?
-        // Let's check SimulationTarget.js:
-        // get angle() { return Math.atan2(this.z, this.x); }
-        // get bearing() { let b = (this.angle * 180 / Math.PI) + 90; return (b + 360) % 360; }
-        // Angle 0 is +X (East). Angle PI/2 is +Z (South? because bearing would be 180).
-        // Let's verify bearing logic. ATAN2(Z, X).
-        // If Z=1, X=0 (South-ish?), Angle=PI/2. Bearing=90+90=180 (South). Correct.
-        // If Z=-1, X=0, Angle=-PI/2. Bearing=-90+90=0 (North). Correct.
-        // So North is -Z.
-        // Wait, CLAUDE.md says: "North is +Z in 3D".
-        // Let's check Three.js setup in TacticalRenderer3D.
-        // this.camera.position.set(0, 50, 80); lookAt(0,0,0). Camera is at +Z looking at origin.
-        // Usually +Z is out of screen (South?). -Z is into screen (North?).
-        // If SimulationTarget says Z=-1 is North (Bearing 0), then CLAUDE.md might be wrong or referring to "Visual North" on screen?
-        // Let's trust the code: bearing = angle + 90. If angle=-90 (-PI/2), bearing=0.
-        // atan2(z, x) = -PI/2 implies x=0, z<0. So z is negative for North.
-        // Okay, so North is -Z.
-
-        // So my calculation for bearing should match.
-        const angle = Math.atan2(dz, dx);
-        let b = (angle * 180 / Math.PI) + 90;
-        return (b + 360) % 360;
+        return bearingDegFromDelta(dx, dz);
     }
 
     setOwnShipRudderAngleDeg(angleDeg) {
@@ -163,7 +127,7 @@ export class WorldModel {
     }
 
     getOwnShipHeadingDeg() {
-        const heading = (this.ownShipCourse * 180 / Math.PI) + 90;
+        const heading = (normalizeCourseRadians(this.ownShipCourse) * 180 / Math.PI);
         return (heading + 360) % 360;
     }
 
@@ -339,10 +303,7 @@ export class WorldModel {
         const endX = target.x;
         const endZ = target.z;
 
-        const ownShipY = this.getOwnShipDepth() * -1; // Assuming getOwnShipDepth returns positive depth, but Y is negative in terrain?
-        // Wait, getOwnShipDepth = -height - 5.0.
         // Terrain is at `height`. Ship is at `height + 5.0`.
-        // Let's use the same logic as before:
         const ownShipYPos = this.spatialService.getTerrainHeight(startX, startZ) + 5.0;
         const targetYPos = this.spatialService.getTerrainHeight(endX, endZ) + 2.0;
 

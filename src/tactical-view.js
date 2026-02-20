@@ -1,5 +1,6 @@
 import { Tactical3DRenderer } from './tactical-renderer-3d.js';
 import { Tactical2DRenderer } from './tactical-renderer-2d.js';
+import { bearingDegFromDelta, forwardFromCourse, normalizeCourseRadians } from './coordinate-system.js';
 
 export class TacticalView {
     constructor() {
@@ -21,6 +22,9 @@ export class TacticalView {
         this._clickHandler = null;
         this._targetSelectedHandler = null;
         this._lastRenderTime = 0;
+
+        this.debugCoordinatesEnabled = this.readCoordinateDebugFlag();
+        this._debugHudEl = null;
     }
 
     // --- Terrain Noise Functions (Static) ---
@@ -78,6 +82,12 @@ export class TacticalView {
         await this.renderer3D.init(this.container);
         this.renderer2D.init(this.container);
         this.renderer2D.setScanState(this.scanRadius, this.scanActive);
+        this.renderer3D.setDebugCoordinatesEnabled(this.debugCoordinatesEnabled);
+        this.renderer2D.setDebugCoordinatesEnabled(this.debugCoordinatesEnabled);
+
+        if (this.debugCoordinatesEnabled) {
+            this.createDebugHud();
+        }
 
         this._resizeHandler = () => this.resize();
         this._clickHandler = (e) => this.handleCanvasClick(e);
@@ -106,6 +116,7 @@ export class TacticalView {
 
         this.renderer3D.dispose();
         this.renderer2D.dispose();
+        this.removeDebugHud();
 
         this.container = null;
         this._lastTargets = [];
@@ -113,6 +124,45 @@ export class TacticalView {
         this._clickHandler = null;
         this._targetSelectedHandler = null;
         this._lastRenderTime = 0;
+    }
+
+    readCoordinateDebugFlag() {
+        if (typeof window === 'undefined') return false;
+        if (!(typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.DEV)) return false;
+
+        try {
+            const params = new URLSearchParams(window.location.search || '');
+            if (params.get('debugCoords') === '1') return true;
+            return window.localStorage.getItem('silentAbyss.debugCoords') === '1';
+        } catch {
+            return false;
+        }
+    }
+
+    createDebugHud() {
+        if (!this.container || this._debugHudEl) return;
+
+        const hud = document.createElement('div');
+        hud.style.position = 'absolute';
+        hud.style.top = '8px';
+        hud.style.left = '8px';
+        hud.style.padding = '8px 10px';
+        hud.style.border = '1px solid rgba(0, 255, 255, 0.45)';
+        hud.style.background = 'rgba(0, 0, 0, 0.55)';
+        hud.style.color = '#b5ffff';
+        hud.style.font = '11px/1.4 monospace';
+        hud.style.whiteSpace = 'pre';
+        hud.style.pointerEvents = 'none';
+        hud.style.zIndex = '20';
+        this.container.appendChild(hud);
+        this._debugHudEl = hud;
+    }
+
+    removeDebugHud() {
+        if (this._debugHudEl && this._debugHudEl.parentElement) {
+            this._debugHudEl.parentElement.removeChild(this._debugHudEl);
+        }
+        this._debugHudEl = null;
     }
 
     addTarget(target) {
@@ -144,6 +194,7 @@ export class TacticalView {
         this.pulse = (Date.now() % 2000) / 2000;
         this._lastTargets = Array.isArray(targets) ? targets : [];
         this.updateOwnShipPose(ownShipCourse, ownShipForwardSpeed, dt, ownShipPosition);
+        this.updateDebugHud();
 
         if (this.viewMode === '3d') {
             this.renderer3D.setVisible(true);
@@ -154,6 +205,8 @@ export class TacticalView {
 
         this.renderer3D.setVisible(false);
         this.renderer2D.setVisible(true);
+        // Keep 3D state/camera warm while hidden so switching views does not cause jumpy catch-up.
+        this.renderer3D.render(this._ownShipPose, this.selectedTargetId, this.pulse, this._lastTargets, dt);
         this.renderer2D.render(this.viewMode, targets, {
             selectedTargetId: this.selectedTargetId,
             pulse: this.pulse,
@@ -183,8 +236,9 @@ export class TacticalView {
             this._ownShipPose.z = ownShipPosition.z;
         } else {
             // Fallback to internal integration (legacy or if position missing)
-            this._ownShipPose.x += Math.cos(rawCourse) * speed * dt;
-            this._ownShipPose.z += Math.sin(rawCourse) * speed * dt;
+            const forward = forwardFromCourse(rawCourse);
+            this._ownShipPose.x += forward.x * speed * dt;
+            this._ownShipPose.z += forward.z * speed * dt;
         }
     }
 
@@ -226,5 +280,42 @@ export class TacticalView {
 
         this.renderer3D.resize(width, height);
         this.renderer2D.resize(width, height);
+    }
+
+    updateDebugHud() {
+        if (!this._debugHudEl) return;
+
+        const courseDeg = (normalizeCourseRadians(this._ownShipPose.course) * 180) / Math.PI;
+        const speed = Number.isFinite(this._ownShipPose.speed) ? this._ownShipPose.speed : 0;
+        const ownX = Number.isFinite(this._ownShipPose.x) ? this._ownShipPose.x : 0;
+        const ownZ = Number.isFinite(this._ownShipPose.z) ? this._ownShipPose.z : 0;
+        const forward = forwardFromCourse(this._ownShipPose.course);
+
+        const selectedTarget = this.selectedTargetId
+            ? this._lastTargets.find((t) => t.id === this.selectedTargetId) || null
+            : null;
+
+        let bearingLine = 'sel bearing: ---';
+        let rangeLine = 'sel range: ---';
+        if (selectedTarget) {
+            const dx = selectedTarget.x - ownX;
+            const dz = selectedTarget.z - ownZ;
+            const bearing = Number.isFinite(selectedTarget.bearing)
+                ? selectedTarget.bearing
+                : bearingDegFromDelta(dx, dz);
+            const range = Math.hypot(dx, dz);
+            bearingLine = `sel bearing: ${bearing.toFixed(1)} deg`;
+            rangeLine = `sel range: ${range.toFixed(1)} u`;
+        }
+
+        this._debugHudEl.textContent = [
+            `coord debug (${this.viewMode.toUpperCase()})`,
+            `course: ${courseDeg.toFixed(1)} deg`,
+            `speed: ${speed.toFixed(2)} u/s`,
+            `own pos: (${ownX.toFixed(1)}, ${ownZ.toFixed(1)})`,
+            `fwd vec: (${forward.x.toFixed(3)}, ${forward.z.toFixed(3)})`,
+            bearingLine,
+            rangeLine
+        ].join('\n');
     }
 }

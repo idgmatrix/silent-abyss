@@ -115,7 +115,7 @@ export class SimulationTarget {
 
         // Relative state (updated by WorldModel)
         this.distance = 0;
-        this.bearing = 0;
+        this._bearing = null;
     }
 
     // Radial velocity component (speed * cos(course - angle))
@@ -133,6 +133,20 @@ export class SimulationTarget {
 
     get angle() {
         return Math.atan2(this.z, this.x);
+    }
+
+    get bearing() {
+        if (Number.isFinite(this._bearing)) {
+            return this._bearing;
+        }
+
+        // Origin-based fallback: North is -Z and East is +X.
+        const b = Math.atan2(this.x, -this.z) * 180 / Math.PI;
+        return (b + 360) % 360;
+    }
+
+    set bearing(value) {
+        this._bearing = Number.isFinite(value) ? value : null;
     }
 
     getAcousticSignature() {
