@@ -111,8 +111,8 @@ export class GameOrchestrator {
         const engineControls = document.getElementById('engine-controls');
         if (setupScreen) setupScreen.classList.add('hidden');
         if (engineControls) engineControls.classList.remove('hidden');
-
         this.uiManager.setupLeftSonarPanelHeightSync();
+
 
         this.simEngine.onTick = (targets, dt) => {
             this.worldModel.update(dt);

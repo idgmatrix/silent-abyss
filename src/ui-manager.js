@@ -10,9 +10,6 @@ export class UIManager {
         this.lastRpmText = '';
         this.lastStatusText = '';
         this.lastStatusClass = '';
-
-        // Resize observers
-        this.leftSonarResizeObserver = null;
         this.leftSonarWindowResizeHandler = null;
 
         // UI Elements Cache
@@ -26,8 +23,8 @@ export class UIManager {
         this.bindCampaignUiHandlers();
         this.bindDemonControlUiHandlers();
         this.bindManeuverUiHandlers();
-        this.setupLeftSonarPanelHeightSync();
         this.bindViewModeHandlers();
+        this.syncLeftSonarPanelHeights();
 
         // Theme selectors
         const themeSelect = document.getElementById('btr-theme-select');
@@ -54,15 +51,11 @@ export class UIManager {
 
     cleanup() {
         if (this.clockInterval) clearInterval(this.clockInterval);
-
-        if (this.leftSonarResizeObserver) {
-            this.leftSonarResizeObserver.disconnect();
-            this.leftSonarResizeObserver = null;
-        }
         if (this.leftSonarWindowResizeHandler) {
             window.removeEventListener('resize', this.leftSonarWindowResizeHandler);
             this.leftSonarWindowResizeHandler = null;
         }
+
     }
 
     cacheDomElements() {
@@ -591,56 +584,22 @@ export class UIManager {
 
     syncLeftSonarPanelHeights() {
         const leftColumn = document.getElementById('left-column');
-        if (!leftColumn) return;
+        if (leftColumn) {
+            const panels = leftColumn.querySelectorAll(':scope > .panel');
+            if (panels[2]) panels[2].style.removeProperty('height');
+            if (panels[3]) panels[3].style.removeProperty('height');
+        }
 
-        const panels = leftColumn.querySelectorAll(':scope > .panel');
-        if (panels.length < 4) return;
-
-        const topControlPanel = panels[0];
-        const targetIntelPanel = panels[1];
-        const lofarPanel = panels[2];
-        const demonPanel = panels[3];
-
-        const style = window.getComputedStyle(leftColumn);
-        const gap = Number.parseFloat(style.rowGap || style.gap || '0') || 0;
-        const availableHeight = leftColumn.clientHeight - topControlPanel.offsetHeight - targetIntelPanel.offsetHeight - (gap * 3);
-        const perPanelHeight = Math.max(0, Math.floor(availableHeight / 2));
-
-        lofarPanel.style.height = `${perPanelHeight}px`;
-        demonPanel.style.height = `${perPanelHeight}px`;
-
-        // Keep canvases in sync when panel sizes are adjusted
+        // Left sidebar layout is CSS-driven; keep canvases in sync after layout changes.
         this.orch.sonarVisuals.resize();
     }
 
     setupLeftSonarPanelHeightSync() {
-        const leftColumn = document.getElementById('left-column');
-        if (!leftColumn) return;
-
-        if (this.leftSonarResizeObserver) {
-            this.leftSonarResizeObserver.disconnect();
-            this.leftSonarResizeObserver = null;
-        }
-
         if (this.leftSonarWindowResizeHandler) {
             window.removeEventListener('resize', this.leftSonarWindowResizeHandler);
-            this.leftSonarWindowResizeHandler = null;
         }
-
-        if (typeof ResizeObserver === 'function') {
-            this.leftSonarResizeObserver = new ResizeObserver(() => {
-                this.syncLeftSonarPanelHeights();
-            });
-
-            this.leftSonarResizeObserver.observe(leftColumn);
-            const directChildren = leftColumn.querySelectorAll(':scope > .panel');
-            if (directChildren[0]) this.leftSonarResizeObserver.observe(directChildren[0]);
-            if (directChildren[1]) this.leftSonarResizeObserver.observe(directChildren[1]);
-        } else {
-            this.leftSonarWindowResizeHandler = () => this.syncLeftSonarPanelHeights();
-            window.addEventListener('resize', this.leftSonarWindowResizeHandler);
-        }
-
+        this.leftSonarWindowResizeHandler = () => this.syncLeftSonarPanelHeights();
+        window.addEventListener('resize', this.leftSonarWindowResizeHandler);
         this.syncLeftSonarPanelHeights();
     }
 

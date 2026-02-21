@@ -67,9 +67,27 @@ canvas {
 .label-tech { font-size: 9px; color: #008888; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 2px; }
 
 #left-column {
-    display: grid;
-    grid-template-rows: auto auto minmax(0, 1fr) minmax(0, 1fr);
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    height: 100%;
+    align-self: stretch;
     gap: 0.75rem;
+}
+
+#left-column > .panel {
+    box-sizing: border-box;
+    min-height: 0;
+}
+
+#left-column > .panel:nth-child(1),
+#left-column > .panel:nth-child(2) {
+    flex: 0 0 auto;
+}
+
+#left-column > .panel:nth-child(3),
+#left-column > .panel:nth-child(4) {
+    flex: 1 1 0%;
 }
 
 .contact-list {
