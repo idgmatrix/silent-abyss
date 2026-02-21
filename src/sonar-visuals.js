@@ -1171,35 +1171,12 @@ export class SonarVisuals {
                 const v_p1 = enhancedSpectrum[k + 1] || v_0;
                 const v_p2 = enhancedSpectrum[k + 2] || v_p1;
 
-                // Catmull-Rom or Cubic Hermite would be even better,
-                // but let's stick to a simple quadratic-like interpolation for now.
-                // Actually, simple linear is what was there. Let's use a basic quadratic fit.
-                // For sub-bin peaks, quadratic interpolation of magnitudes is standard.
-                let value;
-                if (t < 0.5) {
-                    // Interpolate between k-0.5 and k+0.5 using v_m1, v_0, v_p1
-                    const a = (v_m1 + v_p1) / 2 - v_0;
-                    const b = (v_p1 - v_m1) / 2;
-                    const c = v_0;
-                    // shifted t to be around 0
-                    const t_shifted = t;
-                    // This is slightly complex for a loop. Let's use a simpler 4-point cubic spline
-                    // for the best visual "sharpness" and smoothness.
-                    const a0 = -0.5 * v_m1 + 1.5 * v_0 - 1.5 * v_p1 + 0.5 * v_p2;
-                    const a1 = v_m1 - 2.5 * v_0 + 2 * v_p1 - 0.5 * v_p2;
-                    const a2 = -0.5 * v_m1 + 0.5 * v_p1;
-                    const a3 = v_0;
-                    value = Math.max(0, a0 * t * t * t + a1 * t * t + a2 * t + a3);
-                } else {
-                    value = v_0 + (v_p1 - v_0) * t; // Fallback to linear if needed, but the cubic above handles all t in [0,1]
-                }
-
-                // Redo cubic more cleanly for the whole [0,1] range
+                // 4-point cubic interpolation for smoother sub-bin magnitude sampling.
                 const c0 = -0.5 * v_m1 + 1.5 * v_0 - 1.5 * v_p1 + 0.5 * v_p2;
                 const c1 = v_m1 - 2.5 * v_0 + 2 * v_p1 - 0.5 * v_p2;
                 const c2 = -0.5 * v_m1 + 0.5 * v_p1;
                 const c3 = v_0;
-                value = Math.max(0, c0 * t * t * t + c1 * t * t + c2 * t + c3);
+                const value = Math.max(0, c0 * t * t * t + c1 * t * t + c2 * t + c3);
 
                 const norm = Math.log1p((value / peak) * 50) / Math.log1p(50);
                 const y = cvs.height - norm * cvs.height * 0.75;

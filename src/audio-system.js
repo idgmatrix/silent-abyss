@@ -1,5 +1,14 @@
 import { WasmAudioManager } from './audio/wasm-audio-manager.js';
 
+const BIO_TYPE_TO_PARAM = {
+    chirp: 0,
+    snapping_shrimp: 1,
+    whale_moan: 2,
+    dolphin_whistle: 3,
+    echolocation_click: 4,
+    humpback_song: 5
+};
+
 export class AudioSystem {
     constructor() {
         this.ctx = null;
@@ -238,11 +247,15 @@ export class AudioSystem {
         let baseEngineMix = 1.0;
         let baseCavMix = 0.6;
         let baseBioMix = 0.0;
+        let baseBioType = 0; // Chirp
+        let baseBioRate = 0.35;
 
         if (type === 'BIOLOGICAL') {
             baseEngineMix = 0.0;
             baseCavMix = 0.0;
             baseBioMix = 1.0;
+            baseBioType = 1; // Snapping shrimp (Phase 1)
+            baseBioRate = 0.8;
         } else if (type === 'STATIC') {
             baseEngineMix = 0.1; // Low rumble
             baseCavMix = 0.3;
@@ -254,9 +267,21 @@ export class AudioSystem {
             baseBioMix = 0.0;
         }
 
+        if (typeof target.bioType === 'string') {
+            const mappedBioType = BIO_TYPE_TO_PARAM[target.bioType.trim().toLowerCase()];
+            if (Number.isInteger(mappedBioType)) {
+                baseBioType = mappedBioType;
+            }
+        }
+        if (Number.isFinite(target.bioRate)) {
+            baseBioRate = Math.max(0, Math.min(1, target.bioRate));
+        }
+
         this.wasmManager.setEngineMix(baseEngineMix, speakerVoiceId);
         this.wasmManager.setCavMix(baseCavMix, speakerVoiceId);
         this.wasmManager.setBioMix(baseBioMix, speakerVoiceId);
+        this.wasmManager.setBioType(baseBioType, speakerVoiceId);
+        this.wasmManager.setBioRate(baseBioRate, speakerVoiceId);
 
         if (analysisVoiceId >= 0) {
             this.analysisWasmManager.setGain(initialGain, analysisVoiceId);
@@ -265,6 +290,8 @@ export class AudioSystem {
             this.analysisWasmManager.setEngineMix(baseEngineMix, analysisVoiceId);
             this.analysisWasmManager.setCavMix(baseCavMix, analysisVoiceId);
             this.analysisWasmManager.setBioMix(baseBioMix, analysisVoiceId);
+            this.analysisWasmManager.setBioType(baseBioType, analysisVoiceId);
+            this.analysisWasmManager.setBioRate(baseBioRate, analysisVoiceId);
         }
 
         this.targetNodes.set(targetId, {

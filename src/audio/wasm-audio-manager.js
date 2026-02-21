@@ -19,6 +19,8 @@ export class WasmAudioManager {
             ENGINE_MIX: 3,
             CAV_MIX: 4,
             BIO_MIX: 5,
+            BIO_TYPE: 6,
+            BIO_RATE: 7,
         };
     }
 
@@ -200,6 +202,14 @@ export class WasmAudioManager {
 
     setBioMix(value, voiceId = this.defaultVoiceId) {
         this.setParam(this.paramIds.BIO_MIX, value, voiceId);
+    }
+
+    setBioType(value, voiceId = this.defaultVoiceId) {
+        this.setParam(this.paramIds.BIO_TYPE, value, voiceId);
+    }
+
+    setBioRate(value, voiceId = this.defaultVoiceId) {
+        this.setParam(this.paramIds.BIO_RATE, value, voiceId);
     }
 
     addVoice() {

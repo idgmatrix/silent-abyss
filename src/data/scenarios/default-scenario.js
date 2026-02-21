@@ -4,9 +4,9 @@ export const DEFAULT_SCENARIO = {
     coreTargets: [
         { id: 'target-01', x: -60, z: 20, course: 0.2, speed: 0.8, type: 'SHIP', classId: 'cargo-vessel', rpm: 120, bladeCount: 3, isPatrolling: false },
         { id: 'target-02', distance: 45, angle: Math.PI * 0.75, speed: 0.3, type: 'SUBMARINE', classId: 'triumph-class', rpm: 80, bladeCount: 7, isPatrolling: true, patrolRadius: 60 },
-        { id: 'target-03', distance: 30, angle: -Math.PI * 0.25, type: 'BIOLOGICAL', isPatrolling: true, patrolRadius: 30 },
+        { id: 'target-03', distance: 30, angle: -Math.PI * 0.25, type: 'BIOLOGICAL', isPatrolling: true, patrolRadius: 30, bioType: 'humpback_song', bioRate: 0.45 },
         { id: 'target-04', x: 40, z: -50, type: 'STATIC', isPatrolling: false },
-        { id: 'target-05', distance: 80, angle: Math.PI * 0.4, type: 'BIOLOGICAL', isPatrolling: true, patrolRadius: 15 },
+        { id: 'target-05', distance: 80, angle: Math.PI * 0.4, type: 'BIOLOGICAL', isPatrolling: true, patrolRadius: 15, bioType: 'dolphin_whistle', bioRate: 0.65 },
         { id: 'target-06', x: -90, z: -30, type: 'STATIC', isPatrolling: false },
         { id: 'target-07', distance: 90, angle: Math.PI * 1.6, type: 'SHIP', classId: 'fishery-trawler', speed: 1.2, rpm: 180, isPatrolling: true, patrolRadius: 80 }
     ],

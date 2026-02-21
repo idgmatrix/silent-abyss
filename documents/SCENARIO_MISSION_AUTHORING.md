@@ -17,7 +17,12 @@ Scenario shape:
 Each `coreTargets` entry requires:
 - `id`
 - position via either `(x, z)` or `(distance, angle)`
-- optional fields: `type`, `classId`, `speed`, `rpm`, `bladeCount`, `isPatrolling`, `patrolRadius`
+- optional fields: `type`, `classId`, `speed`, `rpm`, `bladeCount`, `isPatrolling`, `patrolRadius`, `bioType`, `bioRate`
+
+Biological audio fields:
+- `bioType`: `"chirp" | "snapping_shrimp" | "whale_moan" | "dolphin_whistle" | "echolocation_click" | "humpback_song"`
+- `bioRate`: number in `[0.0, 1.0]`
+- These are optional and default to existing behavior when omitted.
 
 Validation rules are enforced by `validateScenarioDefinition(...)` in `src/data/scenario-loader.js`.
 

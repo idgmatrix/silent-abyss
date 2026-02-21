@@ -90,6 +90,22 @@ export function param_bio_mix() {
 /**
  * @returns {number}
  */
+export function param_bio_rate() {
+    const ret = wasm.param_bio_rate();
+    return ret >>> 0;
+}
+
+/**
+ * @returns {number}
+ */
+export function param_bio_type() {
+    const ret = wasm.param_bio_type();
+    return ret >>> 0;
+}
+
+/**
+ * @returns {number}
+ */
 export function param_blades() {
     const ret = wasm.param_blades();
     return ret >>> 0;

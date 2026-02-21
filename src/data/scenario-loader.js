@@ -23,6 +23,9 @@ const ACOUSTIC_LIMITS = {
     shaftRate: { min: 0, max: 120 }
 };
 
+const BIO_SOUND_TYPES = ['chirp', 'snapping_shrimp', 'whale_moan', 'dolphin_whistle', 'echolocation_click', 'humpback_song'];
+const BIO_RATE_LIMITS = { min: 0, max: 1 };
+
 function isObject(value) {
     return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
@@ -64,6 +67,17 @@ function normalizeAcousticTargetConfig(target) {
     const bladeRaw = Number.isFinite(target.bladeCount) ? target.bladeCount : defaults.bladeCount;
 
     const normalized = { ...target };
+    if (typeof target.bioType === 'string') {
+        const normalizedBioType = target.bioType.trim().toLowerCase();
+        if (BIO_SOUND_TYPES.includes(normalizedBioType)) {
+            normalized.bioType = normalizedBioType;
+        }
+    }
+
+    if (Number.isFinite(target.bioRate)) {
+        normalized.bioRate = Math.max(BIO_RATE_LIMITS.min, Math.min(BIO_RATE_LIMITS.max, target.bioRate));
+    }
+
     if (isPropulsionTarget) {
         const rpm = Math.max(ACOUSTIC_LIMITS.rpm.min, Math.min(ACOUSTIC_LIMITS.rpm.max, rpmRaw));
         const bladeCount = Math.max(
@@ -122,6 +136,15 @@ function validateTarget(target, index, context) {
     if (target.shaftRate !== undefined) {
         assert(Number.isFinite(target.shaftRate), `${context}[${index}].shaftRate must be numeric`);
         assert(target.shaftRate >= ACOUSTIC_LIMITS.shaftRate.min && target.shaftRate <= ACOUSTIC_LIMITS.shaftRate.max, `${context}[${index}].shaftRate must be in ${ACOUSTIC_LIMITS.shaftRate.min}-${ACOUSTIC_LIMITS.shaftRate.max}`);
+    }
+    if (target.bioType !== undefined) {
+        assert(typeof target.bioType === 'string', `${context}[${index}].bioType must be a string`);
+        const normalizedBioType = target.bioType.trim().toLowerCase();
+        assert(BIO_SOUND_TYPES.includes(normalizedBioType), `${context}[${index}].bioType must be one of ${BIO_SOUND_TYPES.join(', ')}`);
+    }
+    if (target.bioRate !== undefined) {
+        assert(Number.isFinite(target.bioRate), `${context}[${index}].bioRate must be numeric`);
+        assert(target.bioRate >= BIO_RATE_LIMITS.min && target.bioRate <= BIO_RATE_LIMITS.max, `${context}[${index}].bioRate must be in ${BIO_RATE_LIMITS.min}-${BIO_RATE_LIMITS.max}`);
     }
 }
 
