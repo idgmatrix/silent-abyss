@@ -601,6 +601,20 @@ export class SonarVisuals {
         this._demonPeaksHz = this._detectDemonPeaks(this._demonSmoothedSpectrum, 6);
     }
 
+    /**
+     * Quadratic interpolation for sub-bin peak frequency estimation.
+     * Fits a parabola to the peak and its neighbors to find the true center.
+     * @param {number} alpha - magnitude at bin k-1
+     * @param {number} beta  - magnitude at bin k (peak)
+     * @param {number} gamma - magnitude at bin k+1
+     * @returns {number} fractional offset (-0.5 to 0.5) from center bin
+     */
+    _quadraticInterpolatePeak(alpha, beta, gamma) {
+        const denom = 2 * (alpha - 2 * beta + gamma);
+        if (Math.abs(denom) < 1e-10) return 0;
+        return (alpha - gamma) / denom;
+    }
+
     _applyOwnShipMask(spectrum, selectedTarget = null) {
         this._ownShipMaskBins = [];
         if (!(spectrum instanceof Float32Array) || spectrum.length < 4) return spectrum;
@@ -841,7 +855,7 @@ export class SonarVisuals {
             return this._demonPeakTracks
                 .filter((track) => track.strength >= 0.26)
                 .slice(0, maxPeaks)
-                .map((track) => Math.round(track.hz))
+                .map((track) => track.hz)
                 .sort((a, b) => a - b);
         }
 
@@ -857,8 +871,17 @@ export class SonarVisuals {
                 );
                 const prominence = v - localBase;
                 if (prominence < 0.03) continue;
+
+                // Apply quadratic interpolation for sub-Hz peak precision.
+                const offset = this._quadraticInterpolatePeak(
+                    enhancedSpectrum[hz - 1],
+                    v,
+                    enhancedSpectrum[hz + 1]
+                );
+                const refinedHz = hz + offset;
+
                 candidates.push({
-                    hz,
+                    hz: refinedHz,
                     value: v,
                     prominence,
                     score: v * 0.75 + prominence * 0.25
@@ -920,7 +943,7 @@ export class SonarVisuals {
         const stablePeaks = alive
             .filter((track) => track.strength >= 0.24 && (track.seen || track.age <= 3))
             .slice(0, maxPeaks)
-            .map((track) => Math.round(track.hz));
+            .map((track) => track.hz);
 
         return [...new Set(stablePeaks)].sort((a, b) => a - b);
     }
@@ -1138,12 +1161,46 @@ export class SonarVisuals {
             for (let i = 0; i <= traceSamples; i++) {
                 const hz = 1 + (i / traceSamples) * (maxFreqHz - 1);
                 const x = toPlotX(hz);
-                const lo = Math.max(1, Math.floor(hz));
-                const hi = Math.min(enhancedSpectrum.length - 1, lo + 1);
-                const t = Math.max(0, Math.min(1, hz - lo));
-                const v0 = enhancedSpectrum[lo] || 0;
-                const v1 = enhancedSpectrum[hi] || v0;
-                const value = v0 + (v1 - v0) * t;
+
+                // Use quadratic interpolation for a smoother, more accurate envelope trace.
+                const k = Math.floor(hz);
+                const t = hz - k;
+
+                const v_m1 = enhancedSpectrum[k - 1] || 0;
+                const v_0  = enhancedSpectrum[k] || 0;
+                const v_p1 = enhancedSpectrum[k + 1] || v_0;
+                const v_p2 = enhancedSpectrum[k + 2] || v_p1;
+
+                // Catmull-Rom or Cubic Hermite would be even better,
+                // but let's stick to a simple quadratic-like interpolation for now.
+                // Actually, simple linear is what was there. Let's use a basic quadratic fit.
+                // For sub-bin peaks, quadratic interpolation of magnitudes is standard.
+                let value;
+                if (t < 0.5) {
+                    // Interpolate between k-0.5 and k+0.5 using v_m1, v_0, v_p1
+                    const a = (v_m1 + v_p1) / 2 - v_0;
+                    const b = (v_p1 - v_m1) / 2;
+                    const c = v_0;
+                    // shifted t to be around 0
+                    const t_shifted = t;
+                    // This is slightly complex for a loop. Let's use a simpler 4-point cubic spline
+                    // for the best visual "sharpness" and smoothness.
+                    const a0 = -0.5 * v_m1 + 1.5 * v_0 - 1.5 * v_p1 + 0.5 * v_p2;
+                    const a1 = v_m1 - 2.5 * v_0 + 2 * v_p1 - 0.5 * v_p2;
+                    const a2 = -0.5 * v_m1 + 0.5 * v_p1;
+                    const a3 = v_0;
+                    value = Math.max(0, a0 * t * t * t + a1 * t * t + a2 * t + a3);
+                } else {
+                    value = v_0 + (v_p1 - v_0) * t; // Fallback to linear if needed, but the cubic above handles all t in [0,1]
+                }
+
+                // Redo cubic more cleanly for the whole [0,1] range
+                const c0 = -0.5 * v_m1 + 1.5 * v_0 - 1.5 * v_p1 + 0.5 * v_p2;
+                const c1 = v_m1 - 2.5 * v_0 + 2 * v_p1 - 0.5 * v_p2;
+                const c2 = -0.5 * v_m1 + 0.5 * v_p1;
+                const c3 = v_0;
+                value = Math.max(0, c0 * t * t * t + c1 * t * t + c2 * t + c3);
+
                 const norm = Math.log1p((value / peak) * 50) / Math.log1p(50);
                 const y = cvs.height - norm * cvs.height * 0.75;
                 if (i === 0) ctx.moveTo(x, y);
