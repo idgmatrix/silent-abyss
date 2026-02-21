@@ -7,6 +7,7 @@ export class TacticalView {
         this.container = null;
 
         this.viewMode = '3d'; // '3d', 'radial', 'grid'
+        this.terrainRenderStyle = 'default'; // 'default', 'point-cloud'
         this.selectedTargetId = null;
         this.scanRadius = 0;
         this.scanActive = false;
@@ -83,6 +84,7 @@ export class TacticalView {
         this.renderer2D.init(this.container);
         this.renderer2D.setScanState(this.scanRadius, this.scanActive);
         this.renderer3D.setDebugCoordinatesEnabled(this.debugCoordinatesEnabled);
+        this.renderer3D.setTerrainRenderStyle(this.terrainRenderStyle);
         this.renderer2D.setDebugCoordinatesEnabled(this.debugCoordinatesEnabled);
 
         if (this.debugCoordinatesEnabled) {
@@ -244,6 +246,11 @@ export class TacticalView {
 
     setViewMode(mode) {
         this.viewMode = mode;
+    }
+
+    setTerrainRenderStyle(style) {
+        this.terrainRenderStyle = style === 'point-cloud' ? 'point-cloud' : 'default';
+        this.renderer3D.setTerrainRenderStyle(this.terrainRenderStyle);
     }
 
     handleCanvasClick(e) {

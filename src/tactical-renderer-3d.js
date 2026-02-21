@@ -26,6 +26,7 @@ export class Tactical3DRenderer {
         this.compassNorthLabel = null;
 
         this.terrain = null;
+        this.terrainPointCloud = null;
         this.terrainGridLines = null;
         this.waterSurface = null;
         this.scanRingFx = null;
@@ -77,6 +78,9 @@ export class Tactical3DRenderer {
         this.fogColorDeep = new THREE.Color(0x02080d);
 
         this.debugCoordinatesEnabled = false;
+        this.terrainRenderStyle = 'default';
+        this._scanRadius = 0;
+        this._scanActive = false;
     }
 
     async init(container) {
@@ -174,6 +178,7 @@ export class Tactical3DRenderer {
         this.compassNorthLabel = null;
 
         this.terrain = null;
+        this.terrainPointCloud = null;
         this.terrainGridLines = null;
         this.waterSurface = null;
         this.scanRingFx = null;
@@ -214,6 +219,24 @@ export class Tactical3DRenderer {
         }
         if (this.worldAxisGizmos) {
             this.worldAxisGizmos.visible = this.debugCoordinatesEnabled;
+        }
+    }
+
+    setTerrainRenderStyle(style) {
+        this.terrainRenderStyle = style === 'point-cloud' ? 'point-cloud' : 'default';
+        this.applyTerrainRenderStyle();
+    }
+
+    applyTerrainRenderStyle() {
+        const usePointCloud = this.terrainRenderStyle === 'point-cloud';
+
+        if (this.terrain) this.terrain.visible = !usePointCloud;
+        if (this.terrainGridLines) this.terrainGridLines.visible = !usePointCloud;
+        if (this.terrainContours) this.terrainContours.visible = !usePointCloud;
+        if (this.waterSurface) this.waterSurface.visible = !usePointCloud;
+        if (this.terrainPointCloud) this.terrainPointCloud.visible = usePointCloud;
+        if (this.scanRingFx) {
+            this.scanRingFx.visible = this._scanActive && !usePointCloud;
         }
     }
 
@@ -313,13 +336,15 @@ export class Tactical3DRenderer {
     }
 
     setScanExUniforms(radius, active) {
+        this._scanRadius = radius;
+        this._scanActive = !!active;
         if (this.terrain && this.terrain.material.uniforms) {
             this.terrain.material.uniforms.uScanRadius.value = radius;
             this.terrain.material.uniforms.uActive.value = active ? 1.0 : 0.0;
         }
 
         if (this.scanRingFx) {
-            this.scanRingFx.visible = !!active;
+            this.scanRingFx.visible = !!active && this.terrainRenderStyle !== 'point-cloud';
             const ringRadius = Math.max(1, radius);
             this.scanRingFx.scale.set(ringRadius, ringRadius, ringRadius);
         }
@@ -634,6 +659,25 @@ export class Tactical3DRenderer {
                 this.terrain.geometry.computeVertexNormals();
             }
 
+            if (this.terrainPointCloud) {
+                this.terrainPointCloud.position.set(gridX, 0, gridZ);
+                const pos = this.terrainPointCloud.geometry.attributes.position;
+                const colors = this.terrainPointCloud.geometry.attributes.color;
+
+                for (let i = 0; i < pos.count; i++) {
+                    const sceneX = gridX + pos.getX(i);
+                    const sceneZ = gridZ + pos.getZ(i);
+                    const terrainHeight = this.getTerrainHeightAtScene(sceneX, sceneZ);
+                    pos.setY(i, terrainHeight);
+
+                    const t = clamp((terrainHeight + 24.0) / 40.0, 0, 1);
+                    colors.setXYZ(i, 0.18 + (0.82 * t), 0.85 + (0.15 * t), 0.88 + (0.12 * t));
+                }
+
+                pos.needsUpdate = true;
+                colors.needsUpdate = true;
+            }
+
             this.updateTerrainGridLines(gridX, gridZ);
 
             if (this.waterSurface) {
@@ -857,6 +901,35 @@ export class Tactical3DRenderer {
         this.terrain = new THREE.Mesh(geometry, material);
         this.scene.add(this.terrain);
 
+        const pointGeometry = new THREE.PlaneGeometry(300, 300, 60, 60);
+        pointGeometry.rotateX(-Math.PI / 2);
+        const pointPos = pointGeometry.attributes.position;
+        const pointColors = new Float32Array(pointPos.count * 3);
+        for (let i = 0; i < pointPos.count; i++) {
+            const sceneX = pointPos.getX(i);
+            const sceneZ = pointPos.getZ(i);
+            const terrainHeight = this.getTerrainHeightAtScene(sceneX, sceneZ);
+            pointPos.setY(i, terrainHeight);
+
+            const t = clamp((terrainHeight + 24.0) / 40.0, 0, 1);
+            pointColors[i * 3] = 0.18 + (0.82 * t);
+            pointColors[i * 3 + 1] = 0.85 + (0.15 * t);
+            pointColors[i * 3 + 2] = 0.88 + (0.12 * t);
+        }
+        pointGeometry.setAttribute('color', new THREE.Float32BufferAttribute(pointColors, 3));
+        const pointMaterial = new THREE.PointsMaterial({
+            size: 0.95,
+            sizeAttenuation: true,
+            vertexColors: true,
+            transparent: true,
+            opacity: 0.9,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false
+        });
+        this.terrainPointCloud = new THREE.Points(pointGeometry, pointMaterial);
+        this.terrainPointCloud.visible = false;
+        this.scene.add(this.terrainPointCloud);
+
         const gridMaterial = new THREE.LineBasicMaterial({
             color: 0x0f5f5f,
             transparent: true,
@@ -901,6 +974,8 @@ export class Tactical3DRenderer {
             this.scanRingFx.visible = false;
             this.scene.add(this.scanRingFx);
         }
+
+        this.applyTerrainRenderStyle();
     }
 
     setupWaterSurface() {
