@@ -500,7 +500,6 @@ export class UIManager {
                 demonControlsContentEl.classList.toggle('hidden');
                 const isHidden = demonControlsContentEl.classList.contains('hidden');
                 demonControlsToggleEl.innerHTML = isHidden ? '&#9654;' : '&#9660;';
-                requestAnimationFrame(() => this.syncLeftSonarPanelHeights());
             });
         }
     }
