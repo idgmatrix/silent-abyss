@@ -19,6 +19,11 @@
 - `npm run lint`: run ESLint across repo.
 - `npm run format` / `npm run format:check`: apply/check Prettier formatting.
 
+## Coordinate System
+- Detailed in `documents/Technical_Guide_Submarine_Follow_Cam.md`.
+- **Model / 2D Space**: `+X` = East, `+Z` = North, `+Y` = Up. Course (in radians): 0 = North, increases clockwise.
+- **Three.js 3D View**: The scene space mirrors the model on Z (`sceneZ = -modelZ`) because Three.js uses a right-handed system (-Z is forward).
+
 ## Coding Style & Naming Conventions
 - Language: modern JavaScript (ESM), browser-first.
 - Indentation: 4 spaces; keep code and comments concise.

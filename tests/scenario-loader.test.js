@@ -196,4 +196,22 @@ describe('Scenario loader', () => {
         expect(p3Target?.bioType).toBe('humpback_song');
         expect(p3Target?.bioRate).toBe(0.45);
     });
+
+    it('default scenario includes all biological sound profiles', () => {
+        const scenario = getDefaultScenario();
+        const bioTypes = scenario.coreTargets
+            .filter((target) => target.type === 'BIOLOGICAL')
+            .map((target) => target.bioType);
+
+        expect(bioTypes).toEqual(
+            expect.arrayContaining([
+                'chirp',
+                'snapping_shrimp',
+                'whale_moan',
+                'dolphin_whistle',
+                'echolocation_click',
+                'humpback_song'
+            ])
+        );
+    });
 });
