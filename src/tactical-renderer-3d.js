@@ -1643,20 +1643,93 @@ export class Tactical3DRenderer {
         this.scene.add(this.underwaterLightRig);
     }
 
+    createOwnShipSubmarineMesh() {
+        const root = new THREE.Group();
+
+        const hullMaterial = new THREE.MeshStandardMaterial({
+            color: 0x8fc0c7,
+            emissive: 0x08292f,
+            roughness: 0.84,
+            metalness: 0.08
+        });
+        const sailMaterial = new THREE.MeshStandardMaterial({
+            color: 0x79aeb6,
+            emissive: 0x082126,
+            roughness: 0.8,
+            metalness: 0.1
+        });
+        const detailMaterial = new THREE.MeshStandardMaterial({
+            color: 0x5d8f98,
+            emissive: 0x05181c,
+            roughness: 0.76,
+            metalness: 0.12
+        });
+
+        // Low-poly cylindrical hull aligned with +Z as forward.
+        const hull = new THREE.Mesh(new THREE.CylinderGeometry(1.35, 1.35, 8.8, 10, 1, false), hullMaterial);
+        hull.rotation.x = Math.PI / 2;
+        root.add(hull);
+
+        const bow = new THREE.Mesh(new THREE.SphereGeometry(1.35, 10, 8), hullMaterial);
+        bow.scale.set(1, 1, 0.72);
+        bow.position.z = 4.45;
+        root.add(bow);
+
+        const stern = new THREE.Mesh(new THREE.ConeGeometry(1.2, 2.2, 10), hullMaterial);
+        stern.rotation.x = -Math.PI / 2;
+        stern.position.z = -5.2;
+        root.add(stern);
+
+        const sail = new THREE.Mesh(new THREE.BoxGeometry(1.1, 1.3, 2.0, 1, 1, 1), sailMaterial);
+        sail.position.set(0, 1.35, 0.55);
+        root.add(sail);
+
+        const sailCap = new THREE.Mesh(new THREE.SphereGeometry(0.58, 8, 6), sailMaterial);
+        sailCap.scale.set(1.05, 0.55, 1);
+        sailCap.position.set(0, 2.02, 0.55);
+        root.add(sailCap);
+
+        const sternPlaneGeo = new THREE.BoxGeometry(0.1, 0.95, 2.2, 1, 1, 1);
+        const topFin = new THREE.Mesh(sternPlaneGeo, detailMaterial);
+        topFin.position.set(0, 0.55, -4.9);
+        root.add(topFin);
+        const bottomFin = topFin.clone();
+        bottomFin.position.y = -0.55;
+        root.add(bottomFin);
+
+        const sidePlaneGeo = new THREE.BoxGeometry(2.2, 0.1, 0.95, 1, 1, 1);
+        const portFin = new THREE.Mesh(sidePlaneGeo, detailMaterial);
+        portFin.position.set(-1.1, 0, -4.95);
+        root.add(portFin);
+        const starboardFin = portFin.clone();
+        starboardFin.position.x = 1.1;
+        root.add(starboardFin);
+
+        const rudder = new THREE.Mesh(new THREE.BoxGeometry(0.12, 1.45, 0.8, 1, 1, 1), detailMaterial);
+        rudder.position.set(0, 0.62, -5.55);
+        root.add(rudder);
+
+        const propHub = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.2, 0.35, 8), detailMaterial);
+        propHub.rotation.x = Math.PI / 2;
+        propHub.position.z = -6.0;
+        root.add(propHub);
+
+        const bladeGeo = new THREE.BoxGeometry(0.06, 0.55, 0.16, 1, 1, 1);
+        for (let i = 0; i < 4; i++) {
+            const blade = new THREE.Mesh(bladeGeo, detailMaterial);
+            const angle = (i / 4) * Math.PI * 2;
+            blade.position.set(Math.cos(angle) * 0.34, Math.sin(angle) * 0.34, -6.03);
+            blade.rotation.z = angle;
+            root.add(blade);
+        }
+
+        return root;
+    }
+
     setupOwnShip() {
         this.ownShipRoot = new THREE.Object3D();
 
-        const shipGeometry = new THREE.ConeGeometry(2, 6, 6);
-        shipGeometry.rotateX(Math.PI / 2);
-        const shipMaterial = new THREE.MeshStandardMaterial({
-            color: 0x7ce3d7,
-            emissive: 0x042328,
-            roughness: 0.86,
-            metalness: 0.02,
-            wireframe: true
-        });
-
-        this.ownShipMesh = new THREE.Mesh(shipGeometry, shipMaterial);
+        this.ownShipMesh = this.createOwnShipSubmarineMesh();
         this.ownShipRoot.add(this.ownShipMesh);
 
         const lineGeometry = new THREE.BufferGeometry().setFromPoints([
