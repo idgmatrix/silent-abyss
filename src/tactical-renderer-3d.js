@@ -938,9 +938,9 @@ export class Tactical3DRenderer {
         root.style.right = '10px';
         root.style.width = '78px';
         root.style.height = '78px';
-        root.style.border = '1px solid rgba(0, 255, 255, 0.45)';
+        root.style.border = '1px solid rgba(118, 189, 204, 0.4)';
         root.style.borderRadius = '50%';
-        root.style.background = 'rgba(0, 0, 0, 0.45)';
+        root.style.background = 'rgba(3, 14, 18, 0.5)';
         root.style.backdropFilter = 'blur(1px)';
         root.style.pointerEvents = 'none';
         root.style.zIndex = '14';
@@ -952,8 +952,8 @@ export class Tactical3DRenderer {
         northLabel.style.top = '50%';
         northLabel.style.transform = 'translate(-50%, -50%)';
         northLabel.style.font = '10px monospace';
-        northLabel.style.color = '#9bffff';
-        northLabel.style.textShadow = '0 0 5px rgba(0, 255, 255, 0.55)';
+        northLabel.style.color = '#a3d3de';
+        northLabel.style.textShadow = '0 0 4px rgba(107, 186, 203, 0.34)';
         northLabel.style.transformOrigin = '50% 50%';
         root.appendChild(northLabel);
 
@@ -963,7 +963,7 @@ export class Tactical3DRenderer {
         needle.style.left = '50%';
         needle.style.width = '2px';
         needle.style.height = '28px';
-        needle.style.background = 'linear-gradient(to top, rgba(255,255,255,0.2), rgba(255,80,80,0.95))';
+        needle.style.background = 'linear-gradient(to top, rgba(171, 213, 224, 0.22), rgba(223, 183, 112, 0.88))';
         needle.style.transformOrigin = '50% calc(100% - 2px)';
         needle.style.transform = 'translate(-50%, -100%) rotate(0deg)';
         needle.style.borderRadius = '1px';
@@ -977,7 +977,7 @@ export class Tactical3DRenderer {
         centerDot.style.height = '6px';
         centerDot.style.transform = 'translate(-50%, -50%)';
         centerDot.style.borderRadius = '50%';
-        centerDot.style.background = 'rgba(200, 255, 255, 0.85)';
+        centerDot.style.background = 'rgba(179, 224, 231, 0.85)';
         root.appendChild(centerDot);
 
         container.appendChild(root);
