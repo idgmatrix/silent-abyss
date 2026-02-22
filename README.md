@@ -38,12 +38,32 @@ App URL: `http://localhost:5173`
 
 - `npm run dev`: start dev server
 - `npm run build`: create production build in `dist/`
+- `npm run build:pages`: build with GitHub Pages base path
 - `npm run preview`: serve production build locally
+- `npm run deploy`: build and publish `dist/` to `gh-pages` branch
 - `npm test`: run Vitest suite
 - `npm run lint`: run ESLint
 - `npm run lint:fix`: auto-fix lint issues where possible
 - `npm run format`: format with Prettier
 - `npm run format:check`: check formatting only
+
+## GitHub Pages Deployment
+
+This repository is configured to deploy to GitHub Pages using the `gh-pages` branch.
+
+1. In GitHub, open `Settings -> Pages`.
+2. Under "Build and deployment", set:
+   - Source: `Deploy from a branch`
+   - Branch: `gh-pages` and folder `/ (root)`
+3. Push to `main` to trigger `.github/workflows/deploy-gh-pages.yml`, or deploy manually:
+
+```bash
+npm run deploy
+```
+
+Project site URL:
+
+`https://idgmatrix.github.io/silent-abyss/`
 
 ## Repository Health (Reviewed 2026-02-17)
 

@@ -6,7 +6,10 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "build:pages": "vite build --base=/silent-abyss/",
     "preview": "vite preview",
+    "deploy": "npm run build:pages && gh-pages -d dist",
+    "deploy:ci": "npm run build:pages && gh-pages -d dist -r https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "eslint .",
@@ -22,6 +25,7 @@
     "autoprefixer": "^10.4.24",
     "eslint": "^9.35.0",
     "eslint-config-prettier": "^10.1.8",
+    "gh-pages": "^6.3.0",
     "globals": "^16.4.0",
     "postcss": "^8.5.6",
     "prettier": "^3.6.2",
