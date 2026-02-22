@@ -3,6 +3,7 @@
 A browser-based tactical submarine sonar simulation with 2D acoustic displays, a 3D tactical view, and real-time audio synthesis.
 
 ![The Silent Abyss screenshot](The%20Silent%20Abyss%20Screenshot.png)
+![The Silent Abyss radial screenshot](The%20Silent%20Abyss%20Screenshot%20radial.png)
 
 ## Features
 
