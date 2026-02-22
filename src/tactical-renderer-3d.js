@@ -12,6 +12,24 @@ function expSmoothingAlpha(responsiveness, dt) {
     return 1 - Math.exp(-safeResp * safeDt);
 }
 
+function readRendererPreference() {
+    if (typeof window === 'undefined') return 'webgpu';
+    try {
+        const params = new URLSearchParams(window.location.search || '');
+        const queryRenderer = params.get('renderer');
+        if (queryRenderer === 'webgpu' || queryRenderer === 'webgl') {
+            return queryRenderer;
+        }
+        const stored = window.localStorage.getItem('silentAbyss.renderer');
+        if (stored === 'webgpu' || stored === 'webgl') {
+            return stored;
+        }
+    } catch {
+        // Fallback to WebGPU by default; query/localStorage can override.
+    }
+    return 'webgpu';
+}
+
 export class Tactical3DRenderer {
     constructor(getTerrainHeight) {
         this.getTerrainHeight = typeof getTerrainHeight === 'function' ? getTerrainHeight : () => 0;
@@ -21,6 +39,8 @@ export class Tactical3DRenderer {
         this.camera = null;
         this.renderer = null;
         this.rendererBackend = 'webgl';
+        this.rendererPreference = readRendererPreference();
+        this.webgpuModule = null;
         this.compassRoot = null;
         this.compassNeedle = null;
         this.compassNorthLabel = null;
@@ -28,11 +48,19 @@ export class Tactical3DRenderer {
         this.primarySunLight = null;
         this.ambientUnderwaterLight = null;
         this.fillUnderwaterLight = null;
+        this.postFxOverlay = null;
 
         this.terrain = null;
         this.terrainPointCloud = null;
         this.terrainGridLines = null;
         this.waterSurface = null;
+        this.webgpuTerrainMaterial = null;
+        this.webgpuWaterMaterial = null;
+        this.webgpuTerrainNodes = null;
+        this.webgpuWaterNodes = null;
+        this.causticTexture = null;
+        this.causticCanvas = null;
+        this.causticCtx = null;
         this.scanRingFx = null;
         this.terrainContours = null;
         this.terrainContoursMajor = null;
@@ -115,6 +143,15 @@ export class Tactical3DRenderer {
                     sunColor: 0x9fcbd8,
                     sunIntensity: 0.78,
                     sunFadeByDepth: 0.28
+                },
+                polish: {
+                    causticIntensity: 0.12,
+                    causticScale: 0.05,
+                    causticSpeed: 1.0,
+                    desatNear: 72,
+                    desatFar: 290,
+                    vignetteOpacity: 0.22,
+                    grainOpacity: 0.03
                 }
             },
             balanced: {
@@ -140,6 +177,15 @@ export class Tactical3DRenderer {
                     sunColor: 0x7fb3c4,
                     sunIntensity: 0.9,
                     sunFadeByDepth: 0.42
+                },
+                polish: {
+                    causticIntensity: 0.18,
+                    causticScale: 0.06,
+                    causticSpeed: 1.3,
+                    desatNear: 52,
+                    desatFar: 230,
+                    vignetteOpacity: 0.3,
+                    grainOpacity: 0.045
                 }
             },
             cinematic: {
@@ -165,10 +211,20 @@ export class Tactical3DRenderer {
                     sunColor: 0x6ca2b3,
                     sunIntensity: 0.68,
                     sunFadeByDepth: 0.55
+                },
+                polish: {
+                    causticIntensity: 0.23,
+                    causticScale: 0.07,
+                    causticSpeed: 1.5,
+                    desatNear: 36,
+                    desatFar: 180,
+                    vignetteOpacity: 0.4,
+                    grainOpacity: 0.07
                 }
             }
         };
         this._activeLightingProfile = this._atmosphereProfiles.balanced.lighting;
+        this._activePolishProfile = this._atmosphereProfiles.balanced.polish;
 
         this.debugCoordinatesEnabled = false;
         this.terrainRenderStyle = 'default';
@@ -203,6 +259,7 @@ export class Tactical3DRenderer {
         this.renderer.domElement.style.height = '100%';
         this.applyRendererColorGrade();
         container.appendChild(this.renderer.domElement);
+        this.setupPostFxOverlay(container);
         this.setupCompassOverlay(container);
         this.setupUnderwaterLighting();
 
@@ -218,26 +275,30 @@ export class Tactical3DRenderer {
     }
 
     async _createRenderer() {
-        const webgpuAvailable = typeof navigator !== 'undefined' && !!navigator.gpu;
+        if (this.rendererPreference === 'webgpu') {
+            const webgpuAvailable = typeof navigator !== 'undefined' && !!navigator.gpu;
 
-        if (webgpuAvailable) {
-            try {
-                const webgpuModule = await import('three/webgpu');
-                const WebGPURenderer = webgpuModule.WebGPURenderer || webgpuModule.default;
-                if (WebGPURenderer) {
-                    const renderer = new WebGPURenderer({ antialias: true, alpha: true });
-                    if (typeof renderer.init === 'function') {
-                        await renderer.init();
+            if (webgpuAvailable) {
+                try {
+                    const webgpuModule = await import('three/webgpu');
+                    const WebGPURenderer = webgpuModule.WebGPURenderer || webgpuModule.default;
+                    if (WebGPURenderer) {
+                        const renderer = new WebGPURenderer({ antialias: true, alpha: true });
+                        if (typeof renderer.init === 'function') {
+                            await renderer.init();
+                        }
+                        this.webgpuModule = webgpuModule;
+                        this.rendererBackend = 'webgpu';
+                        return renderer;
                     }
-                    this.rendererBackend = 'webgpu';
-                    return renderer;
+                } catch (error) {
+                    console.warn('Failed to create WebGPU renderer, using WebGL fallback:', error);
                 }
-            } catch (error) {
-                console.warn('Failed to create WebGPU renderer, using WebGL fallback:', error);
             }
         }
 
         this.rendererBackend = 'webgl';
+        this.webgpuModule = null;
         return new THREE.WebGLRenderer({ antialias: true, alpha: true });
     }
 
@@ -275,15 +336,32 @@ export class Tactical3DRenderer {
         this.compassRoot = null;
         this.compassNeedle = null;
         this.compassNorthLabel = null;
+        if (this.postFxOverlay && this.postFxOverlay.parentElement) {
+            this.postFxOverlay.parentElement.removeChild(this.postFxOverlay);
+        }
+        this.postFxOverlay = null;
         this.underwaterLightRig = null;
         this.primarySunLight = null;
         this.ambientUnderwaterLight = null;
         this.fillUnderwaterLight = null;
+        if (this.causticTexture) {
+            this.causticTexture.dispose();
+        }
+        this.causticTexture = null;
+        this.causticCanvas = null;
+        this.causticCtx = null;
 
         this.terrain = null;
         this.terrainPointCloud = null;
         this.terrainGridLines = null;
         this.waterSurface = null;
+        this.webgpuTerrainMaterial = null;
+        this.webgpuWaterMaterial = null;
+        this.webgpuTerrainNodes = null;
+        this.webgpuWaterNodes = null;
+        this.causticTexture = null;
+        this.causticCanvas = null;
+        this.causticCtx = null;
         this.scanRingFx = null;
         this.terrainContours = null;
         this.terrainContoursMajor = null;
@@ -312,6 +390,9 @@ export class Tactical3DRenderer {
     setVisible(visible) {
         if (!this.renderer) return;
         this.renderer.domElement.style.display = visible ? 'block' : 'none';
+        if (this.postFxOverlay) {
+            this.postFxOverlay.style.display = visible ? 'block' : 'none';
+        }
         if (this.compassRoot) {
             this.compassRoot.style.display = visible ? 'block' : 'none';
         }
@@ -622,6 +703,9 @@ export class Tactical3DRenderer {
         if (this.terrain?.material?.uniforms?.uFogColor) {
             this.terrain.material.uniforms.uFogColor.value.copy(this.scene.fog.color);
         }
+        if (this.terrain?.material?.uniforms?.uTime) {
+            this.terrain.material.uniforms.uTime.value = this._elapsedTime;
+        }
 
         if (this.waterSurface?.material?.uniforms?.uFogDensity) {
             this.waterSurface.material.uniforms.uFogDensity.value = fogDensity;
@@ -638,6 +722,41 @@ export class Tactical3DRenderer {
             const base = this._activeLightingProfile?.sunIntensity ?? 0.9;
             const fade = this._activeLightingProfile?.sunFadeByDepth ?? 0.42;
             this.primarySunLight.intensity = Math.max(0.1, base - (depthNorm * fade));
+        }
+        if (this.postFxOverlay) {
+            const grainOffsetX = Math.floor((this._elapsedTime * 23) % 320);
+            const grainOffsetY = Math.floor((this._elapsedTime * 17) % 240);
+            this.postFxOverlay.style.backgroundPosition = `center center, ${grainOffsetX}px ${grainOffsetY}px`;
+        }
+
+        if (this.rendererBackend === 'webgpu') {
+            if (this.webgpuTerrainNodes) {
+                this.webgpuTerrainNodes.time.value = this._elapsedTime;
+                this.webgpuTerrainNodes.opacity.value = 0.52 - (depthNorm * 0.12);
+            } else {
+                this.updateCausticTexture(this._elapsedTime * (this._activePolishProfile?.causticSpeed ?? 1));
+                if (this.webgpuTerrainMaterial && this.webgpuTerrainMaterial.isMeshStandardMaterial) {
+                    const terrainNear = new THREE.Color(0x1f6f76);
+                    const terrainDeep = new THREE.Color(0x24363f);
+                    this.webgpuTerrainMaterial.color.copy(terrainNear).lerp(terrainDeep, depthNorm * 0.75);
+                    this.webgpuTerrainMaterial.opacity = 0.52 - (depthNorm * 0.12);
+                    this.webgpuTerrainMaterial.emissiveIntensity = (this._activePolishProfile?.causticIntensity ?? 0.16) * (1.1 - depthNorm * 0.35);
+                    if (this.causticTexture) {
+                        const drift = this._elapsedTime * 0.018;
+                        this.causticTexture.offset.set(drift % 1, (drift * 0.72) % 1);
+                    }
+                }
+            }
+            if (this.webgpuWaterNodes) {
+                this.webgpuWaterNodes.time.value = this._elapsedTime;
+                this.webgpuWaterNodes.opacityScale.value = clamp(1.0 - (depthNorm * 0.25), 0.72, 1.1);
+            } else if (this.webgpuWaterMaterial && this.webgpuWaterMaterial.isMeshBasicMaterial) {
+                const waterNear = new THREE.Color(0x13434b);
+                const waterDeep = new THREE.Color(0x1b2f37);
+                this.webgpuWaterMaterial.color.copy(waterNear).lerp(waterDeep, depthNorm * 0.85);
+                const wave = Math.sin(this._elapsedTime * 1.12) * 0.02;
+                this.webgpuWaterMaterial.opacity = clamp(0.15 + wave - depthNorm * 0.04, 0.08, 0.2);
+            }
         }
     }
 
@@ -663,6 +782,7 @@ export class Tactical3DRenderer {
         this.underwaterColorGrade.cssFilter = profile.colorGrade.cssFilter;
         this.underwaterColorGrade.exposure = profile.colorGrade.exposure;
         this._activeLightingProfile = profile.lighting;
+        this._activePolishProfile = profile.polish;
         this.applyRendererColorGrade();
 
         if (this.scene?.fog) {
@@ -679,11 +799,32 @@ export class Tactical3DRenderer {
         if (this.terrain?.material?.uniforms?.uFogDensity) {
             this.terrain.material.uniforms.uFogDensity.value = this.baseFogDensity;
         }
+        if (this.terrain?.material?.uniforms?.uCausticIntensity) {
+            this.terrain.material.uniforms.uCausticIntensity.value = this._activePolishProfile.causticIntensity;
+        }
+        if (this.terrain?.material?.uniforms?.uCausticScale) {
+            this.terrain.material.uniforms.uCausticScale.value = this._activePolishProfile.causticScale;
+        }
+        if (this.terrain?.material?.uniforms?.uCausticSpeed) {
+            this.terrain.material.uniforms.uCausticSpeed.value = this._activePolishProfile.causticSpeed;
+        }
+        if (this.terrain?.material?.uniforms?.uDesatNear) {
+            this.terrain.material.uniforms.uDesatNear.value = this._activePolishProfile.desatNear;
+        }
+        if (this.terrain?.material?.uniforms?.uDesatFar) {
+            this.terrain.material.uniforms.uDesatFar.value = this._activePolishProfile.desatFar;
+        }
         if (this.waterSurface?.material?.uniforms?.uFogColor) {
             this.waterSurface.material.uniforms.uFogColor.value.copy(this.fogColorShallow);
         }
         if (this.waterSurface?.material?.uniforms?.uFogDensity) {
             this.waterSurface.material.uniforms.uFogDensity.value = this.baseFogDensity;
+        }
+        if (this.waterSurface?.material?.uniforms?.uDesatNear) {
+            this.waterSurface.material.uniforms.uDesatNear.value = this._activePolishProfile.desatNear;
+        }
+        if (this.waterSurface?.material?.uniforms?.uDesatFar) {
+            this.waterSurface.material.uniforms.uDesatFar.value = this._activePolishProfile.desatFar;
         }
 
         if (this.ambientUnderwaterLight) {
@@ -699,6 +840,93 @@ export class Tactical3DRenderer {
             this.primarySunLight.color.setHex(profile.lighting.sunColor);
             this.primarySunLight.intensity = profile.lighting.sunIntensity;
         }
+        if (this.postFxOverlay) {
+            this.postFxOverlay.style.opacity = `${this._activePolishProfile.vignetteOpacity}`;
+            const grainAlpha = clamp(this._activePolishProfile.grainOpacity, 0.0, 0.2);
+            this.postFxOverlay.style.backgroundImage = [
+                'radial-gradient(circle at 50% 55%, rgba(140, 190, 205, 0.10) 0%, rgba(18, 35, 44, 0.06) 54%, rgba(2, 9, 14, 0.75) 100%)',
+                `repeating-linear-gradient(0deg, rgba(255, 255, 255, ${grainAlpha.toFixed(3)}) 0px, rgba(255, 255, 255, 0.0) 2px, rgba(255, 255, 255, 0.0) 4px)`
+            ].join(',');
+        }
+        if (this.webgpuTerrainNodes) {
+            this.webgpuTerrainNodes.causticIntensity.value = this._activePolishProfile.causticIntensity;
+            this.webgpuTerrainNodes.causticScale.value = this._activePolishProfile.causticScale;
+            this.webgpuTerrainNodes.causticSpeed.value = this._activePolishProfile.causticSpeed;
+            this.webgpuTerrainNodes.desatNear.value = this._activePolishProfile.desatNear;
+            this.webgpuTerrainNodes.desatFar.value = this._activePolishProfile.desatFar;
+        } else if (this.webgpuTerrainMaterial && this.webgpuTerrainMaterial.isMeshStandardMaterial) {
+            this.webgpuTerrainMaterial.emissiveIntensity = this._activePolishProfile.causticIntensity;
+        }
+        if (this.webgpuWaterNodes) {
+            this.webgpuWaterNodes.desatNear.value = this._activePolishProfile.desatNear;
+            this.webgpuWaterNodes.desatFar.value = this._activePolishProfile.desatFar;
+        }
+    }
+
+    setupPostFxOverlay(container) {
+        if (!container || this.postFxOverlay) return;
+
+        const overlay = document.createElement('div');
+        overlay.style.position = 'absolute';
+        overlay.style.inset = '0';
+        overlay.style.pointerEvents = 'none';
+        overlay.style.zIndex = '13';
+        overlay.style.mixBlendMode = 'screen';
+        overlay.style.backgroundImage = [
+            'radial-gradient(circle at 50% 55%, rgba(140, 190, 205, 0.10) 0%, rgba(18, 35, 44, 0.06) 54%, rgba(2, 9, 14, 0.75) 100%)',
+            'repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.028) 0px, rgba(255, 255, 255, 0.0) 2px, rgba(255, 255, 255, 0.0) 4px)'
+        ].join(',');
+        overlay.style.backgroundSize = '100% 100%, 100% 4px';
+        overlay.style.backgroundPosition = 'center center, 0 0';
+        overlay.style.opacity = '0.28';
+        container.appendChild(overlay);
+        this.postFxOverlay = overlay;
+    }
+
+    createCausticTexture() {
+        const canvas = document.createElement('canvas');
+        canvas.width = 192;
+        canvas.height = 192;
+        this.causticCanvas = canvas;
+        this.causticCtx = canvas.getContext('2d');
+
+        const texture = new THREE.CanvasTexture(canvas);
+        texture.colorSpace = THREE.SRGBColorSpace;
+        texture.wrapS = THREE.RepeatWrapping;
+        texture.wrapT = THREE.RepeatWrapping;
+        texture.repeat.set(2.2, 2.2);
+        this.updateCausticTexture(0);
+        return texture;
+    }
+
+    updateCausticTexture(timeSec) {
+        if (!this.causticCtx || !this.causticCanvas || !this.causticTexture) return;
+
+        const ctx = this.causticCtx;
+        const w = this.causticCanvas.width;
+        const h = this.causticCanvas.height;
+        ctx.clearRect(0, 0, w, h);
+        ctx.fillStyle = '#00060a';
+        ctx.fillRect(0, 0, w, h);
+        ctx.globalCompositeOperation = 'lighter';
+
+        for (let i = 0; i < 9; i++) {
+            const t = timeSec * (0.4 + (i * 0.07));
+            const cx = (Math.sin(t + (i * 0.83)) * 0.38 + 0.5) * w;
+            const cy = (Math.cos(t * 0.92 + (i * 1.31)) * 0.38 + 0.5) * h;
+            const radius = 12 + ((i % 4) * 7);
+            const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, radius * 2.4);
+            grad.addColorStop(0.0, 'rgba(165, 255, 255, 0.30)');
+            grad.addColorStop(0.35, 'rgba(130, 230, 255, 0.14)');
+            grad.addColorStop(1.0, 'rgba(0, 0, 0, 0.0)');
+            ctx.fillStyle = grad;
+            ctx.beginPath();
+            ctx.arc(cx, cy, radius * 2.4, 0, Math.PI * 2);
+            ctx.fill();
+        }
+
+        ctx.globalCompositeOperation = 'source-over';
+        this.causticTexture.needsUpdate = true;
     }
 
     setupCompassOverlay(container) {
@@ -1045,6 +1273,98 @@ export class Tactical3DRenderer {
         }
     }
 
+    createWebGPUTerrainNodeMaterial() {
+        const MeshStandardNodeMaterial = this.webgpuModule?.MeshStandardNodeMaterial;
+        const TSL = this.webgpuModule?.TSL;
+        if (!MeshStandardNodeMaterial || !TSL) return null;
+
+        const material = new MeshStandardNodeMaterial();
+        material.transparent = true;
+        material.roughness = 0.9;
+        material.metalness = 0.02;
+
+        const uTime = TSL.uniform(0);
+        const uCausticIntensity = TSL.uniform(this._activePolishProfile?.causticIntensity ?? 0.18);
+        const uCausticScale = TSL.uniform(this._activePolishProfile?.causticScale ?? 0.06);
+        const uCausticSpeed = TSL.uniform(this._activePolishProfile?.causticSpeed ?? 1.3);
+        const uDesatNear = TSL.uniform(this._activePolishProfile?.desatNear ?? 52);
+        const uDesatFar = TSL.uniform(this._activePolishProfile?.desatFar ?? 230);
+        const uOpacity = TSL.uniform(0.44);
+
+        const worldPos = TSL.positionWorld;
+        const viewDepth = TSL.positionView.z.negate();
+
+        const cA = TSL.sin(worldPos.x.mul(uCausticScale).add(uTime.mul(uCausticSpeed)));
+        const cB = TSL.sin(worldPos.z.mul(uCausticScale.mul(1.18)).sub(uTime.mul(uCausticSpeed.mul(0.8))));
+        const cC = TSL.sin(worldPos.x.add(worldPos.z).mul(uCausticScale.mul(0.72)).add(uTime.mul(uCausticSpeed.mul(0.56))));
+        const causticPattern = TSL.max(TSL.float(0), cA.add(cB).add(cC).mul(1 / 3));
+        const caustic = TSL.pow(causticPattern, 2.2).mul(uCausticIntensity);
+
+        const baseColor = TSL.color(0x1c656d);
+        const depthDesat = TSL.smoothstep(uDesatNear, uDesatFar, viewDepth).mul(0.58);
+        const baseLuma = TSL.luminance(baseColor);
+        const depthColor = TSL.mix(baseColor, TSL.vec3(baseLuma), depthDesat);
+        const causticColor = TSL.vec3(0.16, 0.4, 0.45).mul(caustic);
+
+        material.colorNode = depthColor;
+        material.emissiveNode = causticColor;
+        material.opacityNode = uOpacity;
+
+        this.webgpuTerrainNodes = {
+            time: uTime,
+            causticIntensity: uCausticIntensity,
+            causticScale: uCausticScale,
+            causticSpeed: uCausticSpeed,
+            desatNear: uDesatNear,
+            desatFar: uDesatFar,
+            opacity: uOpacity
+        };
+
+        return material;
+    }
+
+    createWebGPUWaterNodeMaterial() {
+        const MeshBasicNodeMaterial = this.webgpuModule?.MeshBasicNodeMaterial;
+        const TSL = this.webgpuModule?.TSL;
+        if (!MeshBasicNodeMaterial || !TSL) return null;
+
+        const material = new MeshBasicNodeMaterial();
+        material.transparent = true;
+        material.depthWrite = false;
+
+        const uTime = TSL.uniform(0);
+        const uDesatNear = TSL.uniform(this._activePolishProfile?.desatNear ?? 52);
+        const uDesatFar = TSL.uniform(this._activePolishProfile?.desatFar ?? 230);
+        const uOpacityScale = TSL.uniform(1);
+
+        const worldPos = TSL.positionWorld;
+        const viewDepth = TSL.positionView.z.negate();
+
+        const waveA = TSL.sin(worldPos.x.mul(0.09).add(uTime.mul(1.2)));
+        const waveB = TSL.sin(worldPos.z.mul(0.07).sub(uTime.mul(1.4)));
+        const waveC = TSL.sin(worldPos.x.add(worldPos.z).mul(0.05).add(uTime.mul(0.8)));
+        const shimmer = waveA.add(waveB).add(waveC).mul(1 / 3);
+        const mixFactor = shimmer.mul(0.5).add(0.5);
+
+        const waterColor = TSL.mix(TSL.vec3(0.03, 0.14, 0.18), TSL.vec3(0.07, 0.3, 0.38), mixFactor);
+        const desat = TSL.smoothstep(uDesatNear, uDesatFar, viewDepth).mul(0.65);
+        const waterLuma = TSL.luminance(waterColor);
+        const finalColor = TSL.mix(waterColor, TSL.vec3(waterLuma), desat);
+        const opacity = TSL.clamp(TSL.float(0.11).add(shimmer.mul(0.02)).mul(uOpacityScale), 0.06, 0.16);
+
+        material.colorNode = finalColor;
+        material.opacityNode = opacity;
+
+        this.webgpuWaterNodes = {
+            time: uTime,
+            desatNear: uDesatNear,
+            desatFar: uDesatFar,
+            opacityScale: uOpacityScale
+        };
+
+        return material;
+    }
+
     setupTerrain() {
         const geometry = new THREE.PlaneGeometry(300, 300, 60, 60);
         geometry.rotateX(-Math.PI / 2);
@@ -1064,49 +1384,74 @@ export class Tactical3DRenderer {
                     uScanRadius: { value: 0 },
                     uColor: { value: new THREE.Color(0x0d5f66) },
                     uActive: { value: 0.0 },
+                    uTime: { value: 0 },
                     uFogColor: { value: this.fogColorShallow.clone() },
                     uFogDensity: { value: this.baseFogDensity },
                     uLightDirection: { value: new THREE.Vector3(-0.34, -1.0, 0.28).normalize() },
                     uLightColor: { value: new THREE.Color(0x85becd) },
-                    uAmbientColor: { value: new THREE.Color(0x0b2f3a) }
+                    uAmbientColor: { value: new THREE.Color(0x0b2f3a) },
+                    uCausticIntensity: { value: 0.18 },
+                    uCausticScale: { value: 0.06 },
+                    uCausticSpeed: { value: 1.3 },
+                    uDesatNear: { value: 52.0 },
+                    uDesatFar: { value: 230.0 }
                 },
                 vertexShader: `
                 varying float vDist;
                 varying float vHeight;
                 varying float vViewDepth;
                 varying vec3 vNormalVS;
+                varying vec2 vWorldXZ;
                 void main() {
                     vDist = length(position.xz);
                     vHeight = position.y;
                     vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
                     vViewDepth = -mvPosition.z;
                     vNormalVS = normalize(normalMatrix * normal);
+                    vec4 worldPos = modelMatrix * vec4(position, 1.0);
+                    vWorldXZ = worldPos.xz;
                     gl_Position = projectionMatrix * mvPosition;
                 }`,
                 fragmentShader: `
                 uniform float uScanRadius;
                 uniform vec3 uColor;
                 uniform float uActive;
+                uniform float uTime;
                 uniform vec3 uFogColor;
                 uniform float uFogDensity;
                 uniform vec3 uLightDirection;
                 uniform vec3 uLightColor;
                 uniform vec3 uAmbientColor;
+                uniform float uCausticIntensity;
+                uniform float uCausticScale;
+                uniform float uCausticSpeed;
+                uniform float uDesatNear;
+                uniform float uDesatFar;
                 varying float vDist;
                 varying float vHeight;
                 varying float vViewDepth;
                 varying vec3 vNormalVS;
+                varying vec2 vWorldXZ;
                 void main() {
                     float ring = smoothstep(uScanRadius - 12.0, uScanRadius, vDist) * (1.0 - smoothstep(uScanRadius, uScanRadius + 1.0, vDist));
                     vec3 baseColor = uColor * (0.2 + (vHeight + 15.0) / 30.0);
                     float lambert = clamp(dot(normalize(vNormalVS), normalize(-uLightDirection)), 0.0, 1.0);
                     vec3 litColor = baseColor * (uAmbientColor + (uLightColor * (0.25 + lambert * 0.75)));
+                    float cA = sin((vWorldXZ.x * uCausticScale) + (uTime * uCausticSpeed));
+                    float cB = sin((vWorldXZ.y * (uCausticScale * 1.18)) - (uTime * uCausticSpeed * 0.8));
+                    float cC = sin(((vWorldXZ.x + vWorldXZ.y) * (uCausticScale * 0.72)) + (uTime * uCausticSpeed * 0.56));
+                    float causticPattern = max(0.0, (cA + cB + cC) / 3.0);
+                    float caustic = pow(causticPattern, 2.2) * uCausticIntensity;
+                    litColor += vec3(0.16, 0.40, 0.45) * caustic;
                     vec4 terrainColor;
                     if (uActive > 0.5) {
                         terrainColor = vec4(litColor + vec3(0.2, 0.9, 1.0) * ring * 0.48, 0.62 + ring * 0.28);
                     } else {
                         terrainColor = vec4(litColor, 0.44);
                     }
+                    float desat = smoothstep(uDesatNear, uDesatFar, vViewDepth);
+                    float luma = dot(terrainColor.rgb, vec3(0.2126, 0.7152, 0.0722));
+                    terrainColor.rgb = mix(terrainColor.rgb, vec3(luma), desat * 0.58);
                     float fogFactor = 1.0 - exp(-uFogDensity * uFogDensity * vViewDepth * vViewDepth);
                     terrainColor.rgb = mix(terrainColor.rgb, uFogColor, clamp(fogFactor, 0.0, 1.0));
                     gl_FragColor = terrainColor;
@@ -1114,12 +1459,26 @@ export class Tactical3DRenderer {
                 transparent: true,
                 wireframe: false
             })
-            : new THREE.MeshBasicMaterial({
-                color: 0x0f5f5f,
+            : this.createWebGPUTerrainNodeMaterial() || new THREE.MeshStandardMaterial({
+                color: 0x1c656d,
+                emissive: 0x2d8f96,
+                emissiveIntensity: 0.22,
                 transparent: true,
-                opacity: 0.45,
-                wireframe: false
+                opacity: 0.5,
+                roughness: 0.9,
+                metalness: 0.02
             });
+
+        if (!useShader && material.isMeshStandardMaterial && !material.isNodeMaterial) {
+            this.causticTexture = this.createCausticTexture();
+            material.emissiveMap = this.causticTexture;
+            material.emissiveMap.wrapS = THREE.RepeatWrapping;
+            material.emissiveMap.wrapT = THREE.RepeatWrapping;
+            material.emissiveMap.repeat.set(2.2, 2.2);
+        }
+        if (!useShader) {
+            this.webgpuTerrainMaterial = material;
+        }
 
         this.terrain = new THREE.Mesh(geometry, material);
         this.scene.add(this.terrain);
@@ -1211,7 +1570,9 @@ export class Tactical3DRenderer {
                 uniforms: {
                     uTime: { value: 0 },
                     uFogColor: { value: this.fogColorShallow.clone() },
-                    uFogDensity: { value: this.baseFogDensity }
+                    uFogDensity: { value: this.baseFogDensity },
+                    uDesatNear: { value: 52.0 },
+                    uDesatFar: { value: 230.0 }
                 },
                 vertexShader: `
                 varying vec3 vWorldPos;
@@ -1227,6 +1588,8 @@ export class Tactical3DRenderer {
                 uniform float uTime;
                 uniform vec3 uFogColor;
                 uniform float uFogDensity;
+                uniform float uDesatNear;
+                uniform float uDesatFar;
                 varying vec3 vWorldPos;
                 varying float vViewDepth;
                 void main() {
@@ -1236,6 +1599,9 @@ export class Tactical3DRenderer {
                     float shimmer = (waveA + waveB + waveC) / 3.0;
                     vec3 waterColor = mix(vec3(0.03, 0.14, 0.18), vec3(0.07, 0.30, 0.38), shimmer * 0.5 + 0.5);
                     float alpha = 0.11 + shimmer * 0.02;
+                    float desat = smoothstep(uDesatNear, uDesatFar, vViewDepth);
+                    float luma = dot(waterColor, vec3(0.2126, 0.7152, 0.0722));
+                    waterColor = mix(waterColor, vec3(luma), desat * 0.65);
                     float fogFactor = 1.0 - exp(-uFogDensity * uFogDensity * vViewDepth * vViewDepth);
                     vec3 outColor = mix(waterColor, uFogColor, clamp(fogFactor, 0.0, 1.0));
                     gl_FragColor = vec4(outColor, clamp(alpha, 0.06, 0.16));
@@ -1243,12 +1609,16 @@ export class Tactical3DRenderer {
                 transparent: true,
                 depthWrite: false
             })
-            : new THREE.MeshBasicMaterial({
+            : this.createWebGPUWaterNodeMaterial() || new THREE.MeshBasicMaterial({
                 color: 0x114444,
                 transparent: true,
                 opacity: 0.14,
                 depthWrite: false
             });
+
+        if (!useShader) {
+            this.webgpuWaterMaterial = material;
+        }
 
         this.waterSurface = new THREE.Mesh(geometry, material);
         this.waterSurface.position.y = 0;
@@ -1278,7 +1648,13 @@ export class Tactical3DRenderer {
 
         const shipGeometry = new THREE.ConeGeometry(2, 6, 6);
         shipGeometry.rotateX(Math.PI / 2);
-        const shipMaterial = new THREE.MeshBasicMaterial({ color: 0x00ff00, wireframe: true });
+        const shipMaterial = new THREE.MeshStandardMaterial({
+            color: 0x7ce3d7,
+            emissive: 0x042328,
+            roughness: 0.86,
+            metalness: 0.02,
+            wireframe: true
+        });
 
         this.ownShipMesh = new THREE.Mesh(shipGeometry, shipMaterial);
         this.ownShipRoot.add(this.ownShipMesh);
