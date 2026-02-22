@@ -28,8 +28,6 @@ export class Tactical3DRenderer {
         this.primarySunLight = null;
         this.ambientUnderwaterLight = null;
         this.fillUnderwaterLight = null;
-        this.ambientUnderwaterLight = null;
-        this.fillUnderwaterLight = null;
 
         this.terrain = null;
         this.terrainPointCloud = null;
@@ -51,6 +49,8 @@ export class Tactical3DRenderer {
         this.selectionRing = null;
         this.marineSnow = null;
         this.marineSnowLayers = [];
+        this.ownWakeParticles = null;
+        this._ownWakeParticleState = null;
         this.targetMeshes = new Map();
 
         this.cavitationParticles = new CavitationParticles();
@@ -67,6 +67,9 @@ export class Tactical3DRenderer {
         this.followLookAtOffsetLocal = new THREE.Vector3(0, 6, 45);
         this.cameraPositionResponsiveness = 7.5;
         this.cameraLookResponsiveness = 10.0;
+        this.cameraSwayBaseAmplitude = 0.18;
+        this.cameraSwaySpeedAmplitude = 0.32;
+        this.cameraSwayFrequency = 0.85;
 
         this._currentLookAt = new THREE.Vector3();
         this._cameraReady = false;
@@ -208,6 +211,7 @@ export class Tactical3DRenderer {
         this.setupOwnShip();
         this.setupSelectionRing();
         this.setupMarineSnow();
+        this.setupOwnWakeParticles();
         this.applyAtmospherePreset();
 
         await this.cavitationParticles.init(this.scene);
@@ -273,6 +277,8 @@ export class Tactical3DRenderer {
         this.compassNorthLabel = null;
         this.underwaterLightRig = null;
         this.primarySunLight = null;
+        this.ambientUnderwaterLight = null;
+        this.fillUnderwaterLight = null;
 
         this.terrain = null;
         this.terrainPointCloud = null;
@@ -292,6 +298,8 @@ export class Tactical3DRenderer {
         this.selectionRing = null;
         this.marineSnow = null;
         this.marineSnowLayers = [];
+        this.ownWakeParticles = null;
+        this._ownWakeParticleState = null;
 
         this.targetMeshes.clear();
 
@@ -464,9 +472,10 @@ export class Tactical3DRenderer {
         const ownX = Number.isFinite(ownShipPose?.x) ? ownShipPose.x : 0;
         const ownZ = Number.isFinite(ownShipPose?.z) ? ownShipPose.z : 0;
         const ownCourse = Number.isFinite(ownShipPose?.course) ? ownShipPose.course : 0;
+        const ownSpeed = Number.isFinite(ownShipPose?.speed) ? ownShipPose.speed : 0;
 
         this.updateTerrainAroundShip(ownX, ownZ);
-        this.updateOwnShipAndCamera(ownX, ownZ, ownCourse, dt);
+        this.updateOwnShipAndCamera(ownX, ownZ, ownCourse, ownSpeed, dt);
         this.updateUnderwaterEffects();
         this.updateCompassHeading();
 
@@ -483,6 +492,7 @@ export class Tactical3DRenderer {
         }
 
         this.updateMarineSnow(dt, ownX, ownZ);
+        this.updateOwnWakeParticles(ownX, ownZ, ownCourse, ownSpeed, dt);
         this.updateCavitation(targets, dt);
 
         if (typeof this.renderer.renderAsync === 'function') {
@@ -501,7 +511,7 @@ export class Tactical3DRenderer {
         this.renderer.render(this.scene, this.camera);
     }
 
-    updateOwnShipAndCamera(ownX, ownZ, ownCourse, dt) {
+    updateOwnShipAndCamera(ownX, ownZ, ownCourse, ownSpeed, dt) {
         if (!this.camera || !this.ownShipRoot) return;
 
         const scenePos = this.modelToScenePosition(ownX, ownZ);
@@ -525,6 +535,18 @@ export class Tactical3DRenderer {
 
         const idealCameraPos = shipLocalToWorld(this.followCameraOffsetLocal, shipPosition, sceneCourse);
         const idealLookAt = shipLocalToWorld(this.followLookAtOffsetLocal, shipPosition, sceneCourse);
+
+        const speedFactor = clamp(Math.abs(ownSpeed) / 18, 0, 1);
+        const swayAmp = this.cameraSwayBaseAmplitude + (this.cameraSwaySpeedAmplitude * speedFactor);
+        const swayT = this._elapsedTime * this.cameraSwayFrequency;
+        const swaySide = Math.sin(swayT) * swayAmp;
+        const swayHeave = Math.cos(swayT * 0.84) * swayAmp * 0.42;
+        const courseRightX = Math.cos(sceneCourse);
+        const courseRightZ = -Math.sin(sceneCourse);
+        idealCameraPos.x += courseRightX * swaySide;
+        idealCameraPos.y += swayHeave;
+        idealCameraPos.z += courseRightZ * swaySide;
+        idealLookAt.y += swayHeave * 0.28;
 
         this._tmpVec3A.set(idealCameraPos.x, idealCameraPos.y, idealCameraPos.z);
         this._tmpVec3B.set(idealLookAt.x, idealLookAt.y, idealLookAt.z);
@@ -768,16 +790,32 @@ export class Tactical3DRenderer {
 
     updateMarineSnow(dt, ownX, ownZ) {
         if (!Array.isArray(this.marineSnowLayers) || this.marineSnowLayers.length === 0) return;
-        const fallFactor = clamp((Number.isFinite(dt) ? dt : 0.016) * 60, 0.1, 2.5);
+        const safeDt = Number.isFinite(dt) ? Math.max(0.001, dt) : 0.016;
+        const fallFactor = clamp(safeDt * 60, 0.1, 2.5);
+        const currentPhase = this._elapsedTime * 0.2;
 
         for (const layer of this.marineSnowLayers) {
             const positions = layer.geometry.attributes.position.array;
             const speeds = layer.geometry.userData.speeds;
             const yMin = layer.geometry.userData.yMin;
             const yMax = layer.geometry.userData.yMax;
+            const span = layer.geometry.userData.span;
+            const halfSpan = span * 0.5;
+            const driftScale = layer.geometry.userData.driftScale;
+            const driftX = (Math.sin(currentPhase + driftScale) * 0.024 + (0.01 * driftScale)) * safeDt * 60;
+            const driftZ = (Math.cos(currentPhase * 0.83 + driftScale * 0.7) * 0.019) * safeDt * 60;
             for (let i = 0; i < speeds.length; i++) {
+                const xIndex = i * 3;
+                const yIndex = xIndex + 1;
+                const zIndex = xIndex + 2;
+                positions[xIndex] += driftX;
+                if (positions[xIndex] > halfSpan) positions[xIndex] -= span;
+                if (positions[xIndex] < -halfSpan) positions[xIndex] += span;
                 positions[i * 3 + 1] -= speeds[i] * fallFactor;
-                if (positions[i * 3 + 1] < yMin) positions[i * 3 + 1] = yMax;
+                if (positions[yIndex] < yMin) positions[yIndex] = yMax;
+                positions[zIndex] += driftZ;
+                if (positions[zIndex] > halfSpan) positions[zIndex] -= span;
+                if (positions[zIndex] < -halfSpan) positions[zIndex] += span;
             }
             layer.geometry.attributes.position.needsUpdate = true;
         }
@@ -1322,9 +1360,9 @@ export class Tactical3DRenderer {
 
     setupMarineSnow() {
         const layerConfigs = [
-            { count: 220, size: 0.24, opacity: 0.16, speedMin: 0.010, speedMax: 0.022 },
-            { count: 180, size: 0.48, opacity: 0.24, speedMin: 0.018, speedMax: 0.038 },
-            { count: 120, size: 0.84, opacity: 0.34, speedMin: 0.028, speedMax: 0.056 }
+            { count: 220, size: 0.24, opacity: 0.16, speedMin: 0.010, speedMax: 0.022, driftScale: 0.7 },
+            { count: 180, size: 0.48, opacity: 0.24, speedMin: 0.018, speedMax: 0.038, driftScale: 1.1 },
+            { count: 120, size: 0.84, opacity: 0.34, speedMin: 0.028, speedMax: 0.056, driftScale: 1.6 }
         ];
 
         this.marineSnowLayers = [];
@@ -1346,7 +1384,7 @@ export class Tactical3DRenderer {
             }
 
             geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-            geometry.userData = { speeds, yMin, yMax };
+            geometry.userData = { speeds, yMin, yMax, span, driftScale: cfg.driftScale };
 
             const material = new THREE.PointsMaterial({
                 color: 0xffffff,
@@ -1364,5 +1402,96 @@ export class Tactical3DRenderer {
         }
 
         this.marineSnow = this.marineSnowLayers[0] || null;
+    }
+
+    setupOwnWakeParticles() {
+        if (!this.scene) return;
+
+        const particleCount = 480;
+        const positions = new Float32Array(particleCount * 3);
+        const velocities = new Float32Array(particleCount * 3);
+        const life = new Float32Array(particleCount);
+        positions.fill(0);
+
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+
+        const material = new THREE.PointsMaterial({
+            color: 0xd6f3fa,
+            size: 0.86,
+            sizeAttenuation: true,
+            transparent: true,
+            opacity: 0.52,
+            depthWrite: false,
+            depthTest: false
+        });
+
+        this.ownWakeParticles = new THREE.Points(geometry, material);
+        this.ownWakeParticles.frustumCulled = false;
+        this.scene.add(this.ownWakeParticles);
+        this._ownWakeParticleState = {
+            cursor: 0,
+            positions,
+            velocities,
+            life,
+            count: particleCount
+        };
+    }
+
+    updateOwnWakeParticles(ownX, ownZ, ownCourse, ownSpeed, dt) {
+        if (!this._ownWakeParticleState || !this.ownWakeParticles) return;
+
+        const safeDt = Number.isFinite(dt) ? Math.max(0.001, dt) : 0.016;
+        const state = this._ownWakeParticleState;
+        const speedAbs = Math.abs(ownSpeed);
+        const speedNorm = clamp(speedAbs / 2.8, 0, 1);
+        const emitBudget = speedAbs > 0.05 ? Math.floor(3 + (speedNorm * 14)) : 0;
+        const scenePos = this.modelToScenePosition(ownX, ownZ);
+        const sceneCourse = this.sceneCourseFromModelCourse(ownCourse);
+        const forwardX = Math.sin(sceneCourse);
+        const forwardZ = Math.cos(sceneCourse);
+        const rightX = Math.cos(sceneCourse);
+        const rightZ = -Math.sin(sceneCourse);
+        const sternX = scenePos.x - (forwardX * 3.2);
+        const sternZ = scenePos.z - (forwardZ * 3.2);
+        const sternY = this.getTerrainHeight(ownX, ownZ) + 4.8;
+
+        if (this.ownWakeParticles.material && this.ownWakeParticles.material.isPointsMaterial) {
+            this.ownWakeParticles.material.opacity = 0.2 + (speedNorm * 0.45);
+            this.ownWakeParticles.material.size = 0.72 + (speedNorm * 0.5);
+        }
+
+        for (let i = 0; i < emitBudget; i++) {
+            const index = state.cursor;
+            const p = index * 3;
+            const sideJitter = (Math.random() - 0.5) * 1.8;
+            state.positions[p] = sternX + (rightX * sideJitter);
+            state.positions[p + 1] = sternY + ((Math.random() - 0.5) * 0.7);
+            state.positions[p + 2] = sternZ + (rightZ * sideJitter);
+            state.velocities[p] = (-forwardX * (0.08 + speedNorm * 0.65)) + ((Math.random() - 0.5) * 0.06);
+            state.velocities[p + 1] = 0.09 + (Math.random() * 0.12);
+            state.velocities[p + 2] = (-forwardZ * (0.08 + speedNorm * 0.65)) + ((Math.random() - 0.5) * 0.06);
+            state.life[index] = 1.2 + (Math.random() * 1.0);
+            state.cursor = (state.cursor + 1) % state.count;
+        }
+
+        for (let i = 0; i < state.count; i++) {
+            const remaining = state.life[i];
+            if (remaining <= 0) continue;
+            const p = i * 3;
+            state.life[i] = remaining - safeDt;
+            state.positions[p] += state.velocities[p] * safeDt * 60;
+            state.positions[p + 1] += state.velocities[p + 1] * safeDt * 60;
+            state.positions[p + 2] += state.velocities[p + 2] * safeDt * 60;
+            state.velocities[p] *= 0.978;
+            state.velocities[p + 2] *= 0.978;
+            if (state.life[i] <= 0) {
+                state.positions[p] = scenePos.x;
+                state.positions[p + 1] = sternY;
+                state.positions[p + 2] = scenePos.z;
+            }
+        }
+
+        this.ownWakeParticles.geometry.attributes.position.needsUpdate = true;
     }
 }
