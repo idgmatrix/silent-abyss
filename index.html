@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>The Silent Abyss - Phase 5.7 Acoustic Fidelity</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+    <link rel="icon" href="/silent-abyss/favicon.svg" type="image/svg+xml">
+    <link rel="icon" href="/silent-abyss/favicon.png" type="image/png" sizes="64x64">
+    <link rel="shortcut icon" href="/silent-abyss/favicon.ico">
+  <script type="module" crossorigin src="/silent-abyss/assets/index-UBEatf5T.js"></script>
+  <link rel="stylesheet" crossorigin href="/silent-abyss/assets/index-yGTwV1dh.css">
+</head>
+<body class="p-3 h-screen flex flex-col gap-3">
+    <div class="crt-overlay"></div>
+
+    <header class="panel p-2 flex justify-between items-center border-b-2 border-cyan-800">
+        <h1 class="text-lg font-bold tracking-[0.2em] glow-text uppercase text-cyan-400">SILENT ABYSS // TACTICAL</h1>
+        <div class="flex gap-6 text-[11px]">
+            <div>DEPTH: <span id="depth-text" class="text-white">125m</span></div>
+            <div class="flex items-center gap-4">
+                <div class="flex items-center gap-2 border border-cyan-900 px-2 py-1 bg-cyan-950/10">
+                    <span class="text-cyan-500 text-[9px] uppercase tracking-wider">MANEUVER</span>
+                    <button id="rudder-port-btn" class="border border-cyan-900 text-cyan-400 text-[9px] px-1 hover:bg-cyan-950/40">PORT</button>
+                    <input
+                        type="range"
+                        id="rudder-slider"
+                        min="-30"
+                        max="30"
+                        step="1"
+                        value="0"
+                        class="w-24"
+                    >
+                    <button id="rudder-starboard-btn" class="border border-cyan-900 text-cyan-400 text-[9px] px-1 hover:bg-cyan-950/40">STBD</button>
+                    <button id="rudder-center-btn" class="border border-cyan-900 text-cyan-300 text-[9px] px-1 hover:bg-cyan-950/40">MID</button>
+                    <span id="rudder-angle-display" class="text-cyan-300 text-[10px] font-bold w-10 text-right">0°</span>
+                    <span class="text-cyan-600">HDG</span>
+                    <span id="heading-display" class="text-cyan-300 font-bold tracking-wider">090°</span>
+                </div>
+                <div class="flex items-center gap-2 border border-cyan-900 px-2 py-1 bg-cyan-950/10">
+                    <span class="text-cyan-500 text-[9px] uppercase tracking-wider">PROP</span>
+                    <button id="throttle-astern-btn" class="border border-cyan-900 text-cyan-400 text-[9px] px-1 hover:bg-cyan-950/40">ASTERN</button>
+                    <input
+                        type="range"
+                        id="throttle-slider"
+                        min="-100"
+                        max="100"
+                        step="5"
+                        value="0"
+                        class="w-24"
+                    >
+                    <button id="throttle-ahead-btn" class="border border-cyan-900 text-cyan-400 text-[9px] px-1 hover:bg-cyan-950/40">AHEAD</button>
+                    <button id="throttle-stop-btn" class="border border-cyan-900 text-cyan-300 text-[9px] px-1 hover:bg-cyan-950/40">STOP</button>
+                    <span id="throttle-display" class="text-cyan-300 text-[10px] font-bold w-14 text-right">STOP</span>
+                </div>
+                <div class="flex gap-2 text-[10px] border border-cyan-900 px-2 py-1">
+                    <label class="cursor-pointer flex items-center gap-1">
+                        <input type="radio" name="view-mode" value="3d" checked> <span class="text-cyan-400">3D</span>
+                    </label>
+                    <label class="cursor-pointer flex items-center gap-1">
+                        <input type="radio" name="view-mode" value="radial"> <span class="text-cyan-400">RADAR</span>
+                    </label>
+                    <label class="cursor-pointer flex items-center gap-1">
+                        <input type="radio" name="view-mode" value="grid"> <span class="text-cyan-400">GRID</span>
+                    </label>
+                    <label class="cursor-pointer flex items-center gap-1 border-l border-cyan-900 pl-2">
+                        <input type="checkbox" id="terrain-point-cloud-toggle"> <span class="text-cyan-300">P-CLOUD</span>
+                    </label>
+                </div>
+                <div>SONAR: <span id="tactical-status" class="text-green-500 font-bold tracking-widest">PASSIVE MODE</span></div>
+                <div id="clock">00:00:00</div>
+            </div>
+        </div>
+    </header>
+
+    <main class="flex-1 grid grid-cols-12 grid-rows-1 gap-3 overflow-hidden min-h-0">
+        <section id="left-column" class="col-span-3 h-full overflow-hidden min-h-0 self-stretch">
+            <div class="panel p-3 flex-none flex flex-col gap-2">
+                <div class="label-tech border-b border-cyan-900 pb-1">Main Drive Control</div>
+
+                <div id="setup-screen" class="flex flex-col items-center justify-center text-center py-2">
+                    <button id="start-btn" class="px-6 py-2 border border-cyan-400 hover:bg-cyan-900 transition-all uppercase text-sm font-bold shadow-[0_0_15px_rgba(0,255,204,0.3)]">
+                        Boot Tactical Core
+                    </button>
+                </div>
+
+                <div id="engine-controls" class="hidden space-y-3">
+                    <div>
+                        <div class="flex justify-between text-[10px] mb-1">
+                            <span>OWN SHIP RPM</span>
+                            <span id="rpm-display" class="font-bold text-cyan-300">0 RPM</span>
+                        </div>
+                        <input type="range" id="rpm-slider" min="0" max="400" value="0" class="w-full">
+                    </div>
+                    <button id="ping-btn" class="w-full py-2 border border-red-900 bg-red-950/10 hover:bg-red-950/40 text-red-500 text-[10px] font-bold uppercase tracking-widest transition-all">
+                        Active Pulse (Ping)
+                    </button>
+                </div>
+            </div>
+
+            <div class="panel p-2 flex-none bg-cyan-950/10">
+                <div class="label-tech mb-2 border-b border-cyan-900">Target Acoustic Intelligence</div>
+                <div class="grid grid-cols-2 gap-2 text-[10px] mb-2 border-b border-cyan-900 pb-2">
+                    <div class="col-span-2 flex justify-between items-center bg-cyan-950/30 px-2 py-1">
+                        <span class="text-cyan-700">TARGET ID</span>
+                        <div class="flex gap-4 items-center">
+                            <span id="target-class-text" class="text-cyan-500 text-[10px] font-mono">---</span>
+                            <span id="target-id-text" class="text-white font-bold text-sm">---</span>
+                        </div>
+                    </div>
+                    <div class="flex flex-col">
+                        <span class="text-cyan-700">RANGE (RNG)</span>
+                        <span id="target-range-text" class="text-white font-bold text-sm italic">---</span>
+                    </div>
+                    <div class="flex flex-col">
+                        <span class="text-cyan-700">VELOCITY (VEL)</span>
+                        <span id="target-vel-text" class="text-white font-bold text-sm italic">---</span>
+                    </div>
+                    <div class="flex flex-col">
+                        <span class="text-cyan-700">BEARING (BRG)</span>
+                        <span id="target-brg-text" class="text-white font-bold text-sm italic">---</span>
+                    </div>
+                    <div class="flex flex-col">
+                        <span class="text-cyan-700">CONFIDENCE</span>
+                        <span id="sig-text" class="text-orange-400 font-bold text-sm animate-pulse">SEARCHING</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="panel p-2 flex-1 min-h-0">
+                <div class="label-tech">LOFAR (Narrowband Frequency)</div>
+                <div class="flex-1 min-h-0 bg-black/50 relative">
+                    <canvas id="lofar-canvas"></canvas>
+                </div>
+            </div>
+
+            <div class="panel p-2 flex-1 min-h-0">
+                <div class="label-tech mb-1">DEMON (Propeller Signature)</div>
+                <div class="border border-cyan-900/60 p-2 mb-2 space-y-2 bg-cyan-950/10">
+                    <div class="flex justify-between items-center text-[9px] text-cyan-500 uppercase tracking-wider">
+                        <span>DEMON Controls</span>
+                        <button id="demon-controls-toggle" class="text-cyan-400 hover:text-cyan-200 text-lg leading-none" title="Toggle DEMON Controls">&#9654;</button>
+                    </div>
+                    <div id="demon-controls-content" class="hidden space-y-2">
+                        <div>
+                            <div class="flex justify-between text-[9px] mb-1">
+                                <span>Focus Width</span>
+                                <span id="demon-focus-width-value" class="text-cyan-300">1.3Hz</span>
+                            </div>
+                            <input
+                                type="range"
+                                id="demon-focus-width-slider"
+                                min="0.6"
+                                max="3.0"
+                                step="0.1"
+                                value="1.3"
+                                class="w-full"
+                            >
+                        </div>
+                        <div class="flex items-center justify-between text-[9px]">
+                            <span>Self-Noise Suppression</span>
+                            <label class="flex items-center gap-1 cursor-pointer">
+                                <input type="checkbox" id="demon-self-noise-toggle" checked>
+                                <span class="text-cyan-300">ON</span>
+                            </label>
+                        </div>
+                        <div>
+                            <div class="flex justify-between text-[9px] mb-1">
+                                <span>Stability/Responsiveness</span>
+                                <span id="demon-stability-value" class="text-cyan-300">55</span>
+                            </div>
+                            <input
+                                type="range"
+                                id="demon-stability-slider"
+                                min="0"
+                                max="100"
+                                step="1"
+                                value="55"
+                                class="w-full"
+                            >
+                        </div>
+                    </div>
+                </div>
+                <div class="flex-1 min-h-0 bg-black/50 relative">
+                    <canvas id="demon-canvas"></canvas>
+                </div>
+            </div>
+        </section>
+
+        <section class="col-span-6 h-full flex flex-col gap-3 overflow-hidden min-h-0">
+            <div class="panel flex-[2] relative overflow-hidden">
+                <div class="h-full flex">
+                    <div id="tactical-viewport" class="flex-1"></div>
+                    <div id="depth-profile-panel" class="border-l border-cyan-900 bg-black/40 p-1">
+                        <div class="text-[8px] text-cyan-600 text-center mb-1">WATER COLUMN</div>
+                        <canvas id="depth-profile-canvas"></canvas>
+                    </div>
+                </div>
+                <div id="contact-alert" class="absolute top-10 left-[44%] -translate-x-1/2 pointer-events-none hidden">
+                    <div class="text-red-500 font-bold text-sm tracking-widest animate-pulse border border-red-500 px-4 py-1 bg-red-950/50 shadow-[0_0_20px_rgba(255,0,0,0.4)]">CONTACT ACQUIRED</div>
+                </div>
+            </div>
+
+            <div class="panel flex-1 p-2">
+                <div class="label-tech mb-1 flex justify-between items-center">
+                    <div class="flex items-center gap-3">
+                        <span>BTR (Bearing Time Recorder)</span>
+                        <select id="btr-theme-select" class="bg-black border border-cyan-800 text-cyan-500 text-[9px] px-1 outline-none">
+                            <option value="CYAN">CYAN</option>
+                            <option value="PHOSPHOR">PHOSPHOR</option>
+                            <option value="AMBER">AMBER</option>
+                            <option value="THERMAL">THERMAL</option>
+                        </select>
+                        <select id="btr-bearing-reference-select" class="bg-black border border-cyan-800 text-cyan-500 text-[9px] px-1 outline-none" title="BTR bearing reference">
+                            <option value="REL" selected>REL</option>
+                            <option value="TRUE">TRUE</option>
+                        </select>
+                    </div>
+                    <span>000° &lt;---&gt; 360°</span>
+                </div>
+                <div class="flex-1">
+                    <canvas id="btr-canvas" class="bg-black"></canvas>
+                </div>
+            </div>
+        </section>
+
+        <section class="col-span-3 h-full flex flex-col gap-3 overflow-hidden min-h-0">
+            <div class="panel p-2 flex-none">
+                <div class="label-tech mb-2 border-b border-cyan-900 pb-1">Contact Registry</div>
+                <div class="grid grid-cols-2 gap-1 mb-2">
+                    <select id="contact-filter" class="bg-black border border-cyan-900 text-cyan-500 text-[9px] px-1 py-1 outline-none">
+                        <option value="ALL">FILTER: ALL</option>
+                        <option value="TRACKED">FILTER: TRACKED</option>
+                        <option value="AMBIGUOUS">FILTER: AMBIG</option>
+                        <option value="LOST">FILTER: LOST</option>
+                        <option value="PINNED">FILTER: PINNED</option>
+                    </select>
+                    <select id="contact-sort" class="bg-black border border-cyan-900 text-cyan-500 text-[9px] px-1 py-1 outline-none">
+                        <option value="THREAT">SORT: THREAT</option>
+                        <option value="RANGE">SORT: RANGE</option>
+                        <option value="LABEL">SORT: LABEL</option>
+                        <option value="CONFIDENCE">SORT: CONF</option>
+                    </select>
+                </div>
+                <div id="contact-list" class="contact-list mb-2"></div>
+                <div class="grid grid-cols-3 gap-1 mb-2">
+                    <button id="contact-pin-btn" class="text-[9px] border border-cyan-900 hover:bg-cyan-950/40 px-1 py-1">PIN/UNPIN</button>
+                    <input id="contact-relabel-input" type="text" maxlength="12" placeholder="ALIAS" class="bg-black border border-cyan-900 text-cyan-400 text-[9px] px-1 py-1 uppercase">
+                    <button id="contact-relabel-btn" class="text-[9px] border border-cyan-900 hover:bg-cyan-950/40 px-1 py-1">RENAME</button>
+                </div>
+                <button id="contact-clear-lost" class="w-full text-[9px] border border-red-900 text-red-400 hover:bg-red-950/30 px-1 py-1">CLEAR LOST CONTACTS</button>
+            </div>
+
+            <div class="panel p-2 flex-none">
+                <div class="label-tech mb-2 border-b border-cyan-900 pb-1">Manual Solution</div>
+                <div class="grid grid-cols-2 gap-1 text-[9px]">
+                    <input id="solution-bearing" type="number" placeholder="BRG (deg)" class="bg-black border border-cyan-900 text-cyan-400 px-1 py-1">
+                    <input id="solution-range" type="number" placeholder="RNG (m)" class="bg-black border border-cyan-900 text-cyan-400 px-1 py-1">
+                    <input id="solution-course" type="number" placeholder="CRS (deg)" class="bg-black border border-cyan-900 text-cyan-400 px-1 py-1">
+                    <input id="solution-speed" type="number" placeholder="SPD (kts)" class="bg-black border border-cyan-900 text-cyan-400 px-1 py-1">
+                </div>
+                <div class="flex items-center justify-between mt-2 text-[9px]">
+                    <span id="solution-confidence" class="text-orange-400">CONF: --</span>
+                    <button id="solution-save-btn" class="border border-cyan-900 px-2 py-1 hover:bg-cyan-950/40">SAVE SOLUTION</button>
+                </div>
+            </div>
+
+            <div class="panel p-2 flex-none">
+                <div class="label-tech mb-2 border-b border-cyan-900 pb-1">Campaign</div>
+                <div class="grid grid-cols-3 gap-1 mb-2">
+                    <select id="mission-select" class="col-span-2 bg-black border border-cyan-900 text-cyan-500 text-[9px] px-1 py-1 outline-none"></select>
+                    <button id="mission-reset-btn" class="text-[9px] border border-red-900 text-red-400 hover:bg-red-950/30 px-1 py-1">RESET</button>
+                </div>
+                <div id="mission-title" class="text-[10px] text-cyan-300 font-bold mb-1">--</div>
+                <div id="mission-status" class="text-[9px] text-orange-300 mb-1">--</div>
+                <div id="mission-briefing" class="text-[9px] text-cyan-700 mb-2 leading-tight">--</div>
+                <div id="mission-objectives" class="text-[9px] text-cyan-400"></div>
+            </div>
+
+            <div class="panel flex-1 flex flex-col">
+                <div class="p-2 border-b border-cyan-900 label-tech text-center flex justify-between items-center">
+                    <span>Broadband Waterfall (Ambient)</span>
+                    <select id="waterfall-theme-select" class="bg-black border border-cyan-800 text-cyan-500 text-[9px] px-1 outline-none">
+                        <option value="CYAN">CYAN</option>
+                        <option value="PHOSPHOR">PHOSPHOR</option>
+                        <option value="AMBER">AMBER</option>
+                        <option value="THERMAL">THERMAL</option>
+                    </select>
+                </div>
+                <div id="waterfall-container" class="flex-1 bg-black overflow-hidden">
+                    <canvas id="waterfall-canvas"></canvas>
+                </div>
+            </div>
+        </section>
+    </main>
+
+</body>
+</html>
