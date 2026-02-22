@@ -73,7 +73,7 @@ export class UIManager {
             'rudder-angle-display', 'rudder-port-btn', 'rudder-starboard-btn',
             'rudder-center-btn', 'heading-display', 'throttle-slider', 'throttle-display',
             'throttle-astern-btn', 'throttle-ahead-btn', 'throttle-stop-btn', 'rpm-slider',
-            'btr-bearing-reference-select', 'terrain-point-cloud-toggle'
+            'btr-bearing-reference-select', 'terrain-point-cloud-toggle', 'atmosphere-preset-select'
         ];
 
         ids.forEach(id => {
@@ -134,6 +134,15 @@ export class UIManager {
                 this.orch.tacticalView.setTerrainRenderStyle(e.target.checked ? 'point-cloud' : 'default');
             };
             this.orch.tacticalView.setTerrainRenderStyle(terrainPointCloudToggle.checked ? 'point-cloud' : 'default');
+        }
+
+        const atmospherePresetSelect = this.getEl('atmosphere-preset-select');
+        if (atmospherePresetSelect) {
+            atmospherePresetSelect.onchange = (e) => {
+                this.orch.tacticalView.setAtmospherePreset(e.target.value);
+            };
+            atmospherePresetSelect.value = this.orch.tacticalView.getAtmospherePreset();
+            this.orch.tacticalView.setAtmospherePreset(atmospherePresetSelect.value);
         }
     }
 

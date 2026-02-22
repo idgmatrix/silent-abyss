@@ -67,6 +67,14 @@
                     <label class="cursor-pointer flex items-center gap-1 border-l border-cyan-900 pl-2">
                         <input type="checkbox" id="terrain-point-cloud-toggle"> <span class="text-cyan-300">P-CLOUD</span>
                     </label>
+                    <label class="cursor-pointer flex items-center gap-1 border-l border-cyan-900 pl-2">
+                        <span class="text-cyan-300">ATM</span>
+                        <select id="atmosphere-preset-select" class="bg-black border border-cyan-900 text-cyan-300 text-[9px] px-1 py-[1px] outline-none">
+                            <option value="subtle">SUBTLE</option>
+                            <option value="balanced" selected>BALANCED</option>
+                            <option value="cinematic">CINEMATIC</option>
+                        </select>
+                    </label>
                 </div>
                 <div>SONAR: <span id="tactical-status" class="text-green-500 font-bold tracking-widest">PASSIVE MODE</span></div>
                 <div id="clock">00:00:00</div>

@@ -24,6 +24,12 @@ export class Tactical3DRenderer {
         this.compassRoot = null;
         this.compassNeedle = null;
         this.compassNorthLabel = null;
+        this.underwaterLightRig = null;
+        this.primarySunLight = null;
+        this.ambientUnderwaterLight = null;
+        this.fillUnderwaterLight = null;
+        this.ambientUnderwaterLight = null;
+        this.fillUnderwaterLight = null;
 
         this.terrain = null;
         this.terrainPointCloud = null;
@@ -70,12 +76,96 @@ export class Tactical3DRenderer {
         this._tmpCamForward = new THREE.Vector3();
         this._elapsedTime = 0;
 
-        this.baseFogDensity = 0.0035;
-        this.depthFogDensityFactor = 0.00055;
-        this.minFogDensity = 0.0025;
-        this.maxFogDensity = 0.02;
-        this.fogColorShallow = new THREE.Color(0x07212a);
-        this.fogColorDeep = new THREE.Color(0x02080d);
+        this.baseFogDensity = 0.0052;
+        this.depthFogDensityFactor = 0.00048;
+        this.minFogDensity = 0.0044;
+        this.maxFogDensity = 0.024;
+        this.fogColorShallow = new THREE.Color(0x0b2730);
+        this.fogColorDeep = new THREE.Color(0x031017);
+        this.underwaterColorGrade = {
+            enabled: true,
+            cssFilter: 'saturate(0.78) hue-rotate(-12deg) contrast(0.9) brightness(0.9)',
+            exposure: 0.82
+        };
+        this.atmospherePreset = 'balanced';
+        this._atmosphereProfiles = {
+            subtle: {
+                fog: {
+                    baseDensity: 0.0042,
+                    depthFactor: 0.00036,
+                    minDensity: 0.0036,
+                    maxDensity: 0.0195,
+                    shallowColor: 0x12303a,
+                    deepColor: 0x06171f
+                },
+                colorGrade: {
+                    enabled: true,
+                    cssFilter: 'saturate(0.9) hue-rotate(-6deg) contrast(0.96) brightness(0.96)',
+                    exposure: 0.88
+                },
+                lighting: {
+                    ambientColor: 0x163842,
+                    ambientIntensity: 0.64,
+                    fillSkyColor: 0x5fa4b6,
+                    fillGroundColor: 0x08151c,
+                    fillIntensity: 0.28,
+                    sunColor: 0x9fcbd8,
+                    sunIntensity: 0.78,
+                    sunFadeByDepth: 0.28
+                }
+            },
+            balanced: {
+                fog: {
+                    baseDensity: 0.0052,
+                    depthFactor: 0.00048,
+                    minDensity: 0.0044,
+                    maxDensity: 0.024,
+                    shallowColor: 0x0b2730,
+                    deepColor: 0x031017
+                },
+                colorGrade: {
+                    enabled: true,
+                    cssFilter: 'saturate(0.78) hue-rotate(-12deg) contrast(0.9) brightness(0.9)',
+                    exposure: 0.82
+                },
+                lighting: {
+                    ambientColor: 0x11333d,
+                    ambientIntensity: 0.75,
+                    fillSkyColor: 0x4d95a8,
+                    fillGroundColor: 0x041015,
+                    fillIntensity: 0.35,
+                    sunColor: 0x7fb3c4,
+                    sunIntensity: 0.9,
+                    sunFadeByDepth: 0.42
+                }
+            },
+            cinematic: {
+                fog: {
+                    baseDensity: 0.0078,
+                    depthFactor: 0.00064,
+                    minDensity: 0.0064,
+                    maxDensity: 0.03,
+                    shallowColor: 0x081d26,
+                    deepColor: 0x02090f
+                },
+                colorGrade: {
+                    enabled: true,
+                    cssFilter: 'saturate(0.68) hue-rotate(-18deg) contrast(0.84) brightness(0.82)',
+                    exposure: 0.74
+                },
+                lighting: {
+                    ambientColor: 0x0c2831,
+                    ambientIntensity: 0.82,
+                    fillSkyColor: 0x3f7886,
+                    fillGroundColor: 0x020b10,
+                    fillIntensity: 0.26,
+                    sunColor: 0x6ca2b3,
+                    sunIntensity: 0.68,
+                    sunFadeByDepth: 0.55
+                }
+            }
+        };
+        this._activeLightingProfile = this._atmosphereProfiles.balanced.lighting;
 
         this.debugCoordinatesEnabled = false;
         this.terrainRenderStyle = 'default';
@@ -101,19 +191,24 @@ export class Tactical3DRenderer {
         this.renderer = await this._createRenderer();
         this.renderer.setPixelRatio(window.devicePixelRatio || 1);
         this.renderer.setSize(initWidth, initHeight);
+        this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+        this.renderer.toneMappingExposure = this.underwaterColorGrade.exposure;
         this.renderer.domElement.style.position = 'absolute';
         this.renderer.domElement.style.top = '0';
         this.renderer.domElement.style.left = '0';
         this.renderer.domElement.style.width = '100%';
         this.renderer.domElement.style.height = '100%';
+        this.applyRendererColorGrade();
         container.appendChild(this.renderer.domElement);
         this.setupCompassOverlay(container);
+        this.setupUnderwaterLighting();
 
         this.setupTerrain();
         this.setupWaterSurface();
         this.setupOwnShip();
         this.setupSelectionRing();
         this.setupMarineSnow();
+        this.applyAtmospherePreset();
 
         await this.cavitationParticles.init(this.scene);
     }
@@ -176,6 +271,8 @@ export class Tactical3DRenderer {
         this.compassRoot = null;
         this.compassNeedle = null;
         this.compassNorthLabel = null;
+        this.underwaterLightRig = null;
+        this.primarySunLight = null;
 
         this.terrain = null;
         this.terrainPointCloud = null;
@@ -225,6 +322,16 @@ export class Tactical3DRenderer {
     setTerrainRenderStyle(style) {
         this.terrainRenderStyle = style === 'point-cloud' ? 'point-cloud' : 'default';
         this.applyTerrainRenderStyle();
+    }
+
+    setAtmospherePreset(presetName) {
+        const preset = typeof presetName === 'string' ? presetName.toLowerCase() : '';
+        this.atmospherePreset = this._atmosphereProfiles[preset] ? preset : 'balanced';
+        this.applyAtmospherePreset();
+    }
+
+    getAtmospherePreset() {
+        return this.atmospherePreset;
     }
 
     applyTerrainRenderStyle() {
@@ -502,6 +609,73 @@ export class Tactical3DRenderer {
         }
         if (this.waterSurface?.material?.uniforms?.uTime) {
             this.waterSurface.material.uniforms.uTime.value = this._elapsedTime;
+        }
+
+        if (this.primarySunLight) {
+            // Fade top-down light with depth so deeper water feels murkier and less direct-lit.
+            const base = this._activeLightingProfile?.sunIntensity ?? 0.9;
+            const fade = this._activeLightingProfile?.sunFadeByDepth ?? 0.42;
+            this.primarySunLight.intensity = Math.max(0.1, base - (depthNorm * fade));
+        }
+    }
+
+    applyRendererColorGrade() {
+        if (!this.renderer || !this.renderer.domElement) return;
+        this.renderer.toneMappingExposure = this.underwaterColorGrade.exposure;
+        this.renderer.domElement.style.filter = this.underwaterColorGrade.enabled
+            ? this.underwaterColorGrade.cssFilter
+            : 'none';
+    }
+
+    applyAtmospherePreset() {
+        const profile = this._atmosphereProfiles[this.atmospherePreset] || this._atmosphereProfiles.balanced;
+
+        this.baseFogDensity = profile.fog.baseDensity;
+        this.depthFogDensityFactor = profile.fog.depthFactor;
+        this.minFogDensity = profile.fog.minDensity;
+        this.maxFogDensity = profile.fog.maxDensity;
+        this.fogColorShallow.setHex(profile.fog.shallowColor);
+        this.fogColorDeep.setHex(profile.fog.deepColor);
+
+        this.underwaterColorGrade.enabled = !!profile.colorGrade.enabled;
+        this.underwaterColorGrade.cssFilter = profile.colorGrade.cssFilter;
+        this.underwaterColorGrade.exposure = profile.colorGrade.exposure;
+        this._activeLightingProfile = profile.lighting;
+        this.applyRendererColorGrade();
+
+        if (this.scene?.fog) {
+            this.scene.fog.density = this.baseFogDensity;
+            this.scene.fog.color.copy(this.fogColorShallow);
+        }
+        if (this.scene?.background?.isColor) {
+            this.scene.background.copy(this.fogColorShallow);
+        }
+
+        if (this.terrain?.material?.uniforms?.uFogColor) {
+            this.terrain.material.uniforms.uFogColor.value.copy(this.fogColorShallow);
+        }
+        if (this.terrain?.material?.uniforms?.uFogDensity) {
+            this.terrain.material.uniforms.uFogDensity.value = this.baseFogDensity;
+        }
+        if (this.waterSurface?.material?.uniforms?.uFogColor) {
+            this.waterSurface.material.uniforms.uFogColor.value.copy(this.fogColorShallow);
+        }
+        if (this.waterSurface?.material?.uniforms?.uFogDensity) {
+            this.waterSurface.material.uniforms.uFogDensity.value = this.baseFogDensity;
+        }
+
+        if (this.ambientUnderwaterLight) {
+            this.ambientUnderwaterLight.color.setHex(profile.lighting.ambientColor);
+            this.ambientUnderwaterLight.intensity = profile.lighting.ambientIntensity;
+        }
+        if (this.fillUnderwaterLight) {
+            this.fillUnderwaterLight.color.setHex(profile.lighting.fillSkyColor);
+            this.fillUnderwaterLight.groundColor.setHex(profile.lighting.fillGroundColor);
+            this.fillUnderwaterLight.intensity = profile.lighting.fillIntensity;
+        }
+        if (this.primarySunLight) {
+            this.primarySunLight.color.setHex(profile.lighting.sunColor);
+            this.primarySunLight.intensity = profile.lighting.sunIntensity;
         }
     }
 
@@ -850,20 +1024,25 @@ export class Tactical3DRenderer {
             ? new THREE.ShaderMaterial({
                 uniforms: {
                     uScanRadius: { value: 0 },
-                    uColor: { value: new THREE.Color(0x004444) },
+                    uColor: { value: new THREE.Color(0x0d5f66) },
                     uActive: { value: 0.0 },
                     uFogColor: { value: this.fogColorShallow.clone() },
-                    uFogDensity: { value: this.baseFogDensity }
+                    uFogDensity: { value: this.baseFogDensity },
+                    uLightDirection: { value: new THREE.Vector3(-0.34, -1.0, 0.28).normalize() },
+                    uLightColor: { value: new THREE.Color(0x85becd) },
+                    uAmbientColor: { value: new THREE.Color(0x0b2f3a) }
                 },
                 vertexShader: `
                 varying float vDist;
                 varying float vHeight;
                 varying float vViewDepth;
+                varying vec3 vNormalVS;
                 void main() {
                     vDist = length(position.xz);
                     vHeight = position.y;
                     vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
                     vViewDepth = -mvPosition.z;
+                    vNormalVS = normalize(normalMatrix * normal);
                     gl_Position = projectionMatrix * mvPosition;
                 }`,
                 fragmentShader: `
@@ -872,17 +1051,23 @@ export class Tactical3DRenderer {
                 uniform float uActive;
                 uniform vec3 uFogColor;
                 uniform float uFogDensity;
+                uniform vec3 uLightDirection;
+                uniform vec3 uLightColor;
+                uniform vec3 uAmbientColor;
                 varying float vDist;
                 varying float vHeight;
                 varying float vViewDepth;
+                varying vec3 vNormalVS;
                 void main() {
                     float ring = smoothstep(uScanRadius - 12.0, uScanRadius, vDist) * (1.0 - smoothstep(uScanRadius, uScanRadius + 1.0, vDist));
                     vec3 baseColor = uColor * (0.2 + (vHeight + 15.0) / 30.0);
+                    float lambert = clamp(dot(normalize(vNormalVS), normalize(-uLightDirection)), 0.0, 1.0);
+                    vec3 litColor = baseColor * (uAmbientColor + (uLightColor * (0.25 + lambert * 0.75)));
                     vec4 terrainColor;
                     if (uActive > 0.5) {
-                        terrainColor = vec4(baseColor + vec3(0.0, 1.0, 1.0) * ring * 0.8, 0.6 + ring * 0.4);
+                        terrainColor = vec4(litColor + vec3(0.2, 0.9, 1.0) * ring * 0.48, 0.62 + ring * 0.28);
                     } else {
-                        terrainColor = vec4(baseColor, 0.4);
+                        terrainColor = vec4(litColor, 0.44);
                     }
                     float fogFactor = 1.0 - exp(-uFogDensity * uFogDensity * vViewDepth * vViewDepth);
                     terrainColor.rgb = mix(terrainColor.rgb, uFogColor, clamp(fogFactor, 0.0, 1.0));
@@ -1011,11 +1196,11 @@ export class Tactical3DRenderer {
                     float waveB = sin((vWorldPos.z * 0.07) - uTime * 1.4);
                     float waveC = sin((vWorldPos.x + vWorldPos.z) * 0.05 + uTime * 0.8);
                     float shimmer = (waveA + waveB + waveC) / 3.0;
-                    vec3 waterColor = mix(vec3(0.05, 0.22, 0.26), vec3(0.12, 0.42, 0.50), shimmer * 0.5 + 0.5);
-                    float alpha = 0.09 + shimmer * 0.035;
+                    vec3 waterColor = mix(vec3(0.03, 0.14, 0.18), vec3(0.07, 0.30, 0.38), shimmer * 0.5 + 0.5);
+                    float alpha = 0.11 + shimmer * 0.02;
                     float fogFactor = 1.0 - exp(-uFogDensity * uFogDensity * vViewDepth * vViewDepth);
                     vec3 outColor = mix(waterColor, uFogColor, clamp(fogFactor, 0.0, 1.0));
-                    gl_FragColor = vec4(outColor, clamp(alpha, 0.04, 0.16));
+                    gl_FragColor = vec4(outColor, clamp(alpha, 0.06, 0.16));
                 }`,
                 transparent: true,
                 depthWrite: false
@@ -1030,6 +1215,24 @@ export class Tactical3DRenderer {
         this.waterSurface = new THREE.Mesh(geometry, material);
         this.waterSurface.position.y = 0;
         this.scene.add(this.waterSurface);
+    }
+
+    setupUnderwaterLighting() {
+        if (!this.scene) return;
+
+        this.underwaterLightRig = new THREE.Group();
+
+        this.ambientUnderwaterLight = new THREE.AmbientLight(0x11333d, 0.75);
+        this.underwaterLightRig.add(this.ambientUnderwaterLight);
+
+        this.fillUnderwaterLight = new THREE.HemisphereLight(0x4d95a8, 0x041015, 0.35);
+        this.underwaterLightRig.add(this.fillUnderwaterLight);
+
+        this.primarySunLight = new THREE.DirectionalLight(0x7fb3c4, 0.9);
+        this.primarySunLight.position.set(36, 90, -24);
+        this.underwaterLightRig.add(this.primarySunLight);
+
+        this.scene.add(this.underwaterLightRig);
     }
 
     setupOwnShip() {

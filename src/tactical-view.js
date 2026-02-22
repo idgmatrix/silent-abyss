@@ -25,6 +25,7 @@ export class TacticalView {
         this._lastRenderTime = 0;
 
         this.debugCoordinatesEnabled = this.readCoordinateDebugFlag();
+        this.atmospherePreset = this.readAtmospherePreset();
         this._debugHudEl = null;
     }
 
@@ -85,6 +86,7 @@ export class TacticalView {
         this.renderer2D.setScanState(this.scanRadius, this.scanActive);
         this.renderer3D.setDebugCoordinatesEnabled(this.debugCoordinatesEnabled);
         this.renderer3D.setTerrainRenderStyle(this.terrainRenderStyle);
+        this.renderer3D.setAtmospherePreset(this.atmospherePreset);
         this.renderer2D.setDebugCoordinatesEnabled(this.debugCoordinatesEnabled);
 
         if (this.debugCoordinatesEnabled) {
@@ -139,6 +141,27 @@ export class TacticalView {
         } catch {
             return false;
         }
+    }
+
+    readAtmospherePreset() {
+        if (typeof window === 'undefined') return 'balanced';
+
+        try {
+            const params = new URLSearchParams(window.location.search || '');
+            const fromQuery = params.get('atmo');
+            if (fromQuery === 'subtle' || fromQuery === 'balanced' || fromQuery === 'cinematic') {
+                return fromQuery;
+            }
+
+            const fromStorage = window.localStorage.getItem('silentAbyss.atmospherePreset');
+            if (fromStorage === 'subtle' || fromStorage === 'balanced' || fromStorage === 'cinematic') {
+                return fromStorage;
+            }
+        } catch {
+            // Ignore storage/query access issues and fallback to default preset.
+        }
+
+        return 'balanced';
     }
 
     createDebugHud() {
@@ -251,6 +274,23 @@ export class TacticalView {
     setTerrainRenderStyle(style) {
         this.terrainRenderStyle = style === 'point-cloud' ? 'point-cloud' : 'default';
         this.renderer3D.setTerrainRenderStyle(this.terrainRenderStyle);
+    }
+
+    setAtmospherePreset(preset) {
+        const normalized = preset === 'subtle' || preset === 'cinematic' ? preset : 'balanced';
+        this.atmospherePreset = normalized;
+        this.renderer3D.setAtmospherePreset(this.atmospherePreset);
+        if (typeof window !== 'undefined') {
+            try {
+                window.localStorage.setItem('silentAbyss.atmospherePreset', this.atmospherePreset);
+            } catch {
+                // Ignore local storage failures.
+            }
+        }
+    }
+
+    getAtmospherePreset() {
+        return this.atmospherePreset;
     }
 
     handleCanvasClick(e) {
