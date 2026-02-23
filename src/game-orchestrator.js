@@ -90,6 +90,8 @@ export class GameOrchestrator {
 
         this.worldModel.seedTargets();
         await this.tacticalView.init('tactical-viewport');
+        this.sonarVisuals.setEnhancedVisualsEnabled(this.tacticalView.enhanced2DVisuals);
+        this.sonarVisuals.setVisualMode(this.tacticalView.visualMode);
         this.sonarVisuals.init();
 
         // Initialize Targets in subsystems
@@ -206,7 +208,8 @@ export class GameOrchestrator {
             this.simEngine.targets,
             this.worldModel.ownShipCourse,
             this.worldModel.getOwnShipForwardSpeed(),
-            this.worldModel.ownShipPosition
+            this.worldModel.ownShipPosition,
+            this.worldModel.pingActiveIntensity
         );
 
         // Render Visuals

@@ -1,6 +1,7 @@
 import { ScrollingDisplay } from './scrolling-display.js';
 import { TrackState } from './simulation.js';
 import { float32Pool } from './utils/buffer-pool.js';
+import { RENDER_STYLE_TOKENS, resolveVisualMode, VISUAL_MODES } from './render-style-tokens.js';
 
 export const BTR_THEMES = {
     'CYAN': {
@@ -109,6 +110,8 @@ export class SonarVisuals {
         this._demonFocusWidthHz = 1.3;
         this._demonResponsiveness = 0.55;
         this._demonLocks = new Map();
+        this.enhancedVisualsEnabled = true;
+        this.visualMode = VISUAL_MODES.STEALTH;
         this._demonLockConfig = {
             combToleranceHz: 1.3,
             maxHarmonics: 8,
@@ -126,6 +129,14 @@ export class SonarVisuals {
         this.lineHistory = [];
         this.maxLineHistory = 15;
         this._ownShipCourseRad = 0;
+    }
+
+    setEnhancedVisualsEnabled(enabled) {
+        this.enhancedVisualsEnabled = !!enabled;
+    }
+
+    setVisualMode(mode) {
+        this.visualMode = resolveVisualMode(mode);
     }
 
     init() {
@@ -1423,79 +1434,111 @@ export class SonarVisuals {
         if (!this.btrDisplay) return;
 
         const theme = BTR_THEMES[this.currentTheme];
+        const btrTokens = RENDER_STYLE_TOKENS.sonar2d.btr;
+        const noiseChance = this.enhancedVisualsEnabled ? btrTokens.scanLineNoiseChance : 0.05;
+        const noiseStep = this.enhancedVisualsEnabled ? btrTokens.scanLineNoiseStepPx : 4;
+        const noiseWidth = this.enhancedVisualsEnabled ? btrTokens.scanLineNoiseWidthPx : 2;
 
         this.btrDisplay.drawNextLine((ctx, width, _height, scanY) => {
-            // Background with faint sea-noise speckle
-            ctx.fillStyle = '#000000';
-            ctx.fillRect(0, scanY, width, 1);
-
-            // Speckle noise
-            for (let i = 0; i < width; i += 4) {
-                if (Math.random() > 0.95) {
-                    const noiseVal = Math.random() * 0.15;
-                    ctx.fillStyle = `rgba(${theme.BACKGROUND[0]}, ${theme.BACKGROUND[1]}, ${theme.BACKGROUND[2]}, ${noiseVal})`;
-                    ctx.fillRect(i, scanY, 2, 1);
-                }
-            }
-
-            // Targets
-            targets.forEach(target => {
-                if (target.state !== TrackState.TRACKED && pingIntensity <= 0) return;
-
-                // Add small bearing jitter based on SNR
-                const jitter = (Math.random() - 0.5) * (5.0 / (target.snr + 0.1));
-                const displayBearing = this._trueToDisplayBearing(target.bearing);
-                const targetX = this._bearingToBtrX(displayBearing + jitter, width);
-
-                let targetIntensity = Math.min(1.0, (target.snr * 40) / 255);
-
-                // Boost intensity if target is tracked
-                if (target.state === TrackState.TRACKED) {
-                    targetIntensity = Math.max(targetIntensity, 0.4);
-                }
-
-                let baseColor = theme[target.type] || theme.SHIP;
-
-                // Implement Smearing (Horizontal Gradient)
-                const grad = ctx.createLinearGradient(targetX - 4, 0, targetX + 4, 0);
-                grad.addColorStop(0, 'rgba(0,0,0,0)');
-                grad.addColorStop(0.5, `rgba(${baseColor[0]}, ${baseColor[1]}, ${baseColor[2]}, ${targetIntensity})`);
-                grad.addColorStop(1, 'rgba(0,0,0,0)');
-
-                ctx.fillStyle = grad;
-                ctx.fillRect(targetX - 5, scanY, 10, 1);
-            });
-
-            // Self Noise
-            const selfNoiseIntensity = (currentRpm / 400);
-            if (selfNoiseIntensity > 0.02) {
-                const centerBearing = 180;
-                const spread = 40 + (currentRpm / 10);
-                const selfX = this._bearingToBtrX(centerBearing, width);
-                const selfW = (spread / 360) * width;
-
-                const grad = ctx.createLinearGradient(selfX - selfW/2, 0, selfX + selfW/2, 0);
-                grad.addColorStop(0, 'rgba(0,0,0,0)');
-                grad.addColorStop(0.5, `rgba(${theme.SELF[0]}, ${theme.SELF[1]}, ${theme.SELF[2]}, ${selfNoiseIntensity * 0.5})`);
-                grad.addColorStop(1, 'rgba(0,0,0,0)');
-
-                ctx.fillStyle = grad;
-                ctx.fillRect(selfX - selfW/2, scanY, selfW, 1);
-
-                // Wide background noise from self engines
-                ctx.fillStyle = `rgba(${theme.SELF[0]}, ${theme.SELF[1]}, ${theme.SELF[2]}, ${selfNoiseIntensity * 0.05})`;
-                ctx.fillRect(0, scanY, width, 1);
-            }
-
-            // Outgoing ping — faint full-panel wash (represents own transmitted pulse)
-            if (pingIntensity > 0) {
-                ctx.fillStyle = `rgba(${theme.PING[0]}, ${theme.PING[1]}, ${theme.PING[2]}, ${pingIntensity * 0.18})`;
-                ctx.fillRect(0, scanY, width, 1);
-            }
+            this._drawBtrBackgroundLine(ctx, width, scanY, theme, noiseChance, noiseStep, noiseWidth);
+            this._drawBtrContactsLine(ctx, width, scanY, targets, pingIntensity, theme);
+            this._drawBtrSelfNoiseLine(ctx, width, scanY, currentRpm, theme);
+            this._drawBtrEchoLine(ctx, width, scanY, _pingEchoes, theme);
+            this._drawBtrPingLine(ctx, width, scanY, pingIntensity, theme);
         });
 
         this._drawBTRBearingScale(theme);
         this._drawBTRSelectedGate(selectedTarget, theme);
+    }
+
+    _drawBtrBackgroundLine(ctx, width, scanY, theme, noiseChance, noiseStep, noiseWidth) {
+        ctx.fillStyle = '#000000';
+        ctx.fillRect(0, scanY, width, 1);
+
+        for (let i = 0; i < width; i += noiseStep) {
+            if (Math.random() > 1 - noiseChance) {
+                const noiseVal = Math.random() * 0.15;
+                ctx.fillStyle = `rgba(${theme.BACKGROUND[0]}, ${theme.BACKGROUND[1]}, ${theme.BACKGROUND[2]}, ${noiseVal})`;
+                ctx.fillRect(i, scanY, noiseWidth, 1);
+            }
+        }
+    }
+
+    _drawBtrContactsLine(ctx, width, scanY, targets, pingIntensity, theme) {
+        targets.forEach((target) => {
+            if (target.state !== TrackState.TRACKED && pingIntensity <= 0) return;
+
+            const jitterScale = this.enhancedVisualsEnabled ? 4.0 : 5.0;
+            const jitter = (Math.random() - 0.5) * (jitterScale / ((target.snr || 0) + 0.1));
+            const displayBearing = this._trueToDisplayBearing(target.bearing);
+            const targetX = this._bearingToBtrX(displayBearing + jitter, width);
+
+            let targetIntensity = Math.min(1.0, ((target.snr || 0) * 40) / 255);
+            if (target.state === TrackState.TRACKED) targetIntensity = Math.max(targetIntensity, 0.4);
+
+            const baseColor = theme[target.type] || theme.SHIP;
+            const smear = this.enhancedVisualsEnabled ? 5 : 4;
+            const grad = ctx.createLinearGradient(targetX - smear, 0, targetX + smear, 0);
+            grad.addColorStop(0, 'rgba(0,0,0,0)');
+            grad.addColorStop(0.5, `rgba(${baseColor[0]}, ${baseColor[1]}, ${baseColor[2]}, ${targetIntensity})`);
+            grad.addColorStop(1, 'rgba(0,0,0,0)');
+
+            ctx.fillStyle = grad;
+            ctx.fillRect(targetX - (smear + 1), scanY, (smear + 1) * 2, 1);
+        });
+    }
+
+    _drawBtrSelfNoiseLine(ctx, width, scanY, currentRpm, theme) {
+        const selfNoiseIntensity = currentRpm / 400;
+        if (selfNoiseIntensity <= 0.02) return;
+
+        const centerBearing = 180;
+        const spread = 40 + currentRpm / 10;
+        const selfX = this._bearingToBtrX(centerBearing, width);
+        const selfW = (spread / 360) * width;
+
+        const grad = ctx.createLinearGradient(selfX - selfW / 2, 0, selfX + selfW / 2, 0);
+        grad.addColorStop(0, 'rgba(0,0,0,0)');
+        grad.addColorStop(0.5, `rgba(${theme.SELF[0]}, ${theme.SELF[1]}, ${theme.SELF[2]}, ${selfNoiseIntensity * 0.5})`);
+        grad.addColorStop(1, 'rgba(0,0,0,0)');
+
+        ctx.fillStyle = grad;
+        ctx.fillRect(selfX - selfW / 2, scanY, selfW, 1);
+
+        ctx.fillStyle = `rgba(${theme.SELF[0]}, ${theme.SELF[1]}, ${theme.SELF[2]}, ${selfNoiseIntensity * 0.05})`;
+        ctx.fillRect(0, scanY, width, 1);
+    }
+
+    _drawBtrEchoLine(ctx, width, scanY, pingEchoes, theme) {
+        if (!this.enhancedVisualsEnabled || !Array.isArray(pingEchoes) || pingEchoes.length === 0) return;
+        const alphaScale = RENDER_STYLE_TOKENS.sonar2d.btr.echoAlpha;
+        pingEchoes.forEach((echo) => {
+            const bearing = Number.isFinite(echo?.bearingDeg) ? echo.bearingDeg : 0;
+            const widthDeg = Number.isFinite(echo?.spreadDeg) ? Math.max(1, echo.spreadDeg) : 4;
+            const intensity = Number.isFinite(echo?.intensity) ? Math.max(0, Math.min(1, echo.intensity)) : 0.5;
+            const x = this._bearingToBtrX(this._trueToDisplayBearing(bearing), width);
+            const w = Math.max(2, (widthDeg / 360) * width);
+            const grad = ctx.createLinearGradient(x - w, 0, x + w, 0);
+            grad.addColorStop(0, 'rgba(0,0,0,0)');
+            grad.addColorStop(0.5, `rgba(${theme.PING[0]}, ${theme.PING[1]}, ${theme.PING[2]}, ${(intensity * alphaScale).toFixed(3)})`);
+            grad.addColorStop(1, 'rgba(0,0,0,0)');
+            ctx.fillStyle = grad;
+            ctx.fillRect(x - w, scanY, w * 2, 1);
+        });
+    }
+
+    _drawBtrPingLine(ctx, width, scanY, pingIntensity, theme) {
+        if (pingIntensity <= 0) return;
+        const tokens = RENDER_STYLE_TOKENS.sonar2d.btr;
+        const washAlpha = tokens.pingWashAlpha;
+        ctx.fillStyle = `rgba(${theme.PING[0]}, ${theme.PING[1]}, ${theme.PING[2]}, ${(pingIntensity * washAlpha).toFixed(3)})`;
+        ctx.fillRect(0, scanY, width, 1);
+
+        if (this.enhancedVisualsEnabled && pingIntensity > 0.08) {
+            const flashAlpha = Math.min(0.45, pingIntensity * tokens.pingFlashAlpha);
+            ctx.fillStyle = `rgba(${theme.PING[0]}, ${theme.PING[1]}, ${theme.PING[2]}, ${flashAlpha.toFixed(3)})`;
+            ctx.fillRect(0, scanY, width, 1);
+        }
     }
 
     _drawBTRBearingScale(theme) {
@@ -1633,13 +1676,14 @@ export class SonarVisuals {
         const totalSamples = Math.floor(source.length * 0.8);
         const binHz = sampleRate > 0 && fftSize > 0 ? sampleRate / fftSize : 0;
         const maxFreqHz = totalSamples > 0 && binHz > 0 ? totalSamples * binHz : 0;
+        const wfTokens = RENDER_STYLE_TOKENS.sonar2d.waterfall;
+        const noiseFloor = this.enhancedVisualsEnabled ? wfTokens.noiseFloor : 0.004;
+        const displayGain = this.enhancedVisualsEnabled ? wfTokens.displayGain : 2.0;
+        const logNormalizer = this.enhancedVisualsEnabled ? wfTokens.logNormalizer : Math.log1p(40);
 
         this.waterfallDisplay.drawNextLine((ctx, width, _height, scanY) => {
             const imageData = ctx.createImageData(width, 1);
             const data = imageData.data;
-            const NOISE_FLOOR = 0.004;
-            const DISPLAY_GAIN = 2.0;
-            const LOG_NORMALIZER = Math.log1p(40);
 
             // Cache colors to avoid overhead in loop
             const low = theme.low;
@@ -1651,9 +1695,9 @@ export class SonarVisuals {
                 const val = source[sampleIdx] ?? 0;
                 const norm = sourceIsFloat ? val : val / 255;
                 const i = x * 4;
-                const lifted = Math.max(0, norm - NOISE_FLOOR);
+                const lifted = Math.max(0, norm - noiseFloor);
                 const boosted =
-                    Math.log1p(Math.max(0, lifted) * DISPLAY_GAIN * 40) / LOG_NORMALIZER;
+                    Math.log1p(Math.max(0, lifted) * displayGain * 40) / logNormalizer;
                 const dimFloor = norm > 0 ? Math.min(0.12, Math.sqrt(norm) * 0.08) : 0;
                 const level = Math.max(dimFloor, Math.min(1.0, boosted));
 
@@ -1680,10 +1724,20 @@ export class SonarVisuals {
             }
 
             ctx.putImageData(imageData, 0, scanY);
-
+            if (this.enhancedVisualsEnabled) {
+                this._drawWaterfallNoiseLine(ctx, width, scanY, high);
+            }
 
         });
         this._drawWaterfallFrequencyScale(theme, maxFreqHz);
+    }
+
+    _drawWaterfallNoiseLine(ctx, width, scanY, highColor) {
+        if (Math.random() < 0.45) return;
+        ctx.fillStyle = `rgba(${highColor[0]}, ${highColor[1]}, ${highColor[2]}, 0.03)`;
+        const sliceWidth = Math.max(1, Math.floor(width / 48));
+        const start = Math.floor(Math.random() * Math.max(1, width - sliceWidth));
+        ctx.fillRect(start, scanY, sliceWidth, 1);
     }
 
     _drawWaterfallFrequencyScale(theme, maxFreqHz) {

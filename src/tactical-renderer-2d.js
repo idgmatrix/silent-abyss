@@ -1,5 +1,6 @@
 import { TrackState } from './simulation.js';
 import { shipLocalToWorld, worldToShipLocal } from './coordinate-system.js';
+import { RENDER_STYLE_TOKENS, resolveVisualMode, VISUAL_MODES } from './render-style-tokens.js';
 
 export class Tactical2DRenderer {
     constructor(getTerrainHeight) {
@@ -11,6 +12,14 @@ export class Tactical2DRenderer {
         this.getTerrainHeight = typeof getTerrainHeight === 'function' ? getTerrainHeight : (() => 0);
         this.contourCache = new Map();
         this.debugCoordinatesEnabled = false;
+        this.enhancedVisualsEnabled = true;
+        this.visualMode = VISUAL_MODES.STEALTH;
+        this.trackHistory = new Map();
+        this.trackGhosts = new Map();
+        this.snapToContactEnabled = false;
+        this.predictionCompareEnabled = false;
+        this.cameraOffsetLocal = { x: 0, z: 0 };
+        this.cameraScale = 1.5;
     }
 
     init(container) {
@@ -36,6 +45,8 @@ export class Tactical2DRenderer {
         this.canvas = null;
         this.ctx = null;
         this.contourCache.clear();
+        this.trackHistory.clear();
+        this.trackGhosts.clear();
     }
 
     setVisible(visible) {
@@ -63,6 +74,24 @@ export class Tactical2DRenderer {
         this.debugCoordinatesEnabled = !!enabled;
     }
 
+    setEnhancedVisualsEnabled(enabled) {
+        this.enhancedVisualsEnabled = !!enabled;
+        this.contourCache.clear();
+    }
+
+    setVisualMode(mode) {
+        this.visualMode = resolveVisualMode(mode);
+        this.contourCache.clear();
+    }
+
+    setSnapToContactEnabled(enabled) {
+        this.snapToContactEnabled = !!enabled;
+    }
+
+    setPredictionCompareEnabled(enabled) {
+        this.predictionCompareEnabled = !!enabled;
+    }
+
     render(mode, targets, options = {}) {
         if (!this.ctx || !this.container) return;
         if (mode === 'radial') {
@@ -81,17 +110,16 @@ export class Tactical2DRenderer {
         if (!Array.isArray(targets)) return null;
         const centerX = rect.width / 2;
         const centerY = rect.height / 2;
-        const scale = 1.5;
+        const scale = this.cameraScale || 1.5;
         const ownShipPose = options.ownShipPose || { x: 0, z: 0, course: 0 };
         const headUp = mode === 'radial';
 
         let hitId = null;
         targets.forEach((t) => {
             if (t.state !== TrackState.TRACKED) return;
-
-            const local = this.toLocalFrame(t.x, t.z, ownShipPose, headUp);
-            const dx = centerX + local.x * scale;
-            const dy = centerY + local.z * scale;
+            const screen = this.getTargetScreenPosition(t, centerX, centerY, ownShipPose, headUp, scale);
+            const dx = screen.x;
+            const dy = screen.y;
 
             const dist = Math.sqrt((x - dx) ** 2 + (y - dy) ** 2);
             if (dist < 25) hitId = t.id;
@@ -101,205 +129,566 @@ export class Tactical2DRenderer {
     }
 
     renderRadial(targets, options = {}) {
-        const w = this.container.clientWidth;
-        const h = this.container.clientHeight;
-        const ctx = this.ctx;
-        const centerX = w / 2;
-        const centerY = h / 2;
-        const scale = 1.5;
-        const pulse = options.pulse || 0;
-        const selectedTargetId = options.selectedTargetId || null;
-        const ownShipPose = options.ownShipPose || { x: 0, z: 0, course: 0 };
-
-        ctx.fillStyle = '#000000';
-        ctx.fillRect(0, 0, w, h);
-
-        ctx.strokeStyle = '#00ffff';
-        ctx.lineWidth = 1;
-        for (let r = 50; r <= 200; r += 50) {
-            ctx.beginPath();
-            ctx.arc(centerX, centerY, r * scale, 0, Math.PI * 2);
-            ctx.stroke();
-            ctx.fillStyle = '#004444';
-            ctx.fillText(`${r}m`, centerX + 5, centerY - r * scale - 5);
-        }
-
-        // Bearing Lines (Relative to Ship Heading)
-        ctx.strokeStyle = '#002222';
-        const angleOffset = -Math.PI / 2; // Up on screen
-        [0, 90, 180, 270].forEach((deg) => {
-            const rad = (deg * Math.PI / 180) + angleOffset;
-            ctx.beginPath();
-            ctx.moveTo(centerX, centerY);
-            ctx.lineTo(centerX + Math.cos(rad) * 300, centerY + Math.sin(rad) * 300);
-            ctx.stroke();
-        });
-
-        // Contours in Head-Up Mode
-        this.drawTerrainContours(ctx, w, h, scale, true, ownShipPose, true);
-
-        ctx.font = '10px monospace';
-        if (Array.isArray(targets)) {
-            targets.forEach((t) => {
-                if (t.state !== TrackState.TRACKED) return;
-
-                const local = this.toLocalFrame(t.x, t.z, ownShipPose, true);
-                const dx = centerX + local.x * scale;
-                const dy = centerY + local.z * scale;
-
-                const isSelected = selectedTargetId === t.id;
-
-                ctx.globalAlpha = isSelected ? 1.0 : 0.7;
-                this.drawTrackUncertainty(ctx, dx, dy, t.snr, this.getTypeColor(t.type));
-
-                if (isSelected) {
-                    this.drawSelectionHUD(ctx, dx, dy, 12, pulse);
-                }
-
-                this.drawTargetGlyph(ctx, t.type, dx, dy, true);
-                this.drawDepthCue(ctx, t, dx, dy);
-
-                ctx.fillStyle = '#ffffff';
-                ctx.globalAlpha = 1.0;
-                ctx.fillText(t.id.replace('target-', 'T'), dx + 10, dy);
-            });
-        }
-
-        if (this.scanActive) {
-            const outerRadius = Math.max(0, this.scanRadius * scale);
-            const innerRadius = Math.max(0, (this.scanRadius - 5) * scale);
-
-            ctx.strokeStyle = '#00ffff';
-            ctx.lineWidth = 2;
-            if (outerRadius > 0) {
-                ctx.beginPath();
-                ctx.arc(centerX, centerY, outerRadius, 0, Math.PI * 2);
-                ctx.stroke();
-            }
-
-            if (innerRadius > 0) {
-                ctx.strokeStyle = 'rgba(0, 255, 255, 0.4)';
-                ctx.beginPath();
-                ctx.arc(centerX, centerY, innerRadius, 0, Math.PI * 2);
-                ctx.stroke();
-            }
-        }
-
-        // Own Ship Glyph (Center, Pointing Up)
-        ctx.save();
-        ctx.translate(centerX, centerY);
-        ctx.beginPath();
-        ctx.moveTo(0, -10);
-        ctx.lineTo(5, 5);
-        ctx.lineTo(-5, 5);
-        ctx.closePath();
-        ctx.fillStyle = '#00ff00';
-        ctx.fill();
-        ctx.restore();
-
-        this.drawCoordinateDebugVectors(ctx, centerX, centerY, ownShipPose, 'radial');
-        this.drawRadialCompass(ctx, w, h, ownShipPose);
+        this.render2DMode('radial', targets, options);
     }
 
     renderGrid(targets, options = {}) {
+        this.render2DMode('grid', targets, options);
+    }
+
+    render2DMode(mode, targets, options = {}) {
         const w = this.container.clientWidth;
         const h = this.container.clientHeight;
         const ctx = this.ctx;
         const centerX = w / 2;
         const centerY = h / 2;
-        const scale = 1.5;
+        const scale = this.cameraScale || 1.5;
         const pulse = options.pulse || 0;
         const selectedTargetId = options.selectedTargetId || null;
+        const hoveredTargetId = options.hoveredTargetId || null;
         const ownShipPose = options.ownShipPose || { x: 0, z: 0, course: 0 };
+        const pingFlashIntensity = Number.isFinite(options.pingFlashIntensity) ? Math.max(0, options.pingFlashIntensity) : 0;
+        const headUp = mode === 'radial';
+        const style = this.getModeStyle();
+        const dt = Number.isFinite(options.dt) ? Math.max(0.001, options.dt) : 0.016;
+        const renderCtx = {
+            mode,
+            headUp,
+            width: w,
+            height: h,
+            centerX,
+            centerY,
+            scale,
+            pulse,
+            selectedTargetId,
+            hoveredTargetId,
+            ownShipPose,
+            pingFlashIntensity,
+            dt,
+            style
+        };
 
-        ctx.fillStyle = '#000000';
-        ctx.fillRect(0, 0, w, h);
+        this.updateTrackHistory(targets, ownShipPose);
+        this.updateViewTransform(targets, renderCtx);
+        renderCtx.scale = this.cameraScale;
+        this.drawBackgroundLayer(ctx, renderCtx);
+        this.drawReferenceGeometryLayer(ctx, renderCtx);
+        this.drawTracksLayer(ctx, targets, renderCtx);
+        this.drawScanLayer(ctx, renderCtx);
+        this.drawOwnShipLayer(ctx, renderCtx);
+        this.drawFxLayer(ctx, renderCtx);
+        this.drawHudLayer(ctx, renderCtx);
+    }
 
-        ctx.strokeStyle = '#004444';
-        ctx.lineWidth = 1;
-        ctx.fillStyle = '#00ffff';
-        for (let i = -5; i <= 5; i++) {
-            ctx.beginPath();
-            ctx.moveTo(0, centerY + i * 50);
-            ctx.lineTo(w, centerY + i * 50);
-            ctx.stroke();
+    getModeStyle() {
+        const base = RENDER_STYLE_TOKENS.tactical2d;
+        const modeKey = resolveVisualMode(this.visualMode);
+        return base.modes[modeKey] || base.modes[VISUAL_MODES.STEALTH];
+    }
 
-            ctx.beginPath();
-            ctx.moveTo(centerX + i * 50, 0);
-            ctx.lineTo(centerX + i * 50, h);
-            ctx.stroke();
+    drawBackgroundLayer(ctx, renderCtx) {
+        const { width, height, style } = renderCtx;
+        if (this.enhancedVisualsEnabled) {
+            const gradient = ctx.createLinearGradient(0, 0, 0, height);
+            gradient.addColorStop(0, style.backgroundTop);
+            gradient.addColorStop(1, style.backgroundBottom);
+            ctx.fillStyle = gradient;
+        } else {
+            ctx.fillStyle = '#000000';
         }
+        ctx.fillRect(0, 0, width, height);
+    }
 
-        ctx.strokeStyle = '#006666';
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.moveTo(0, centerY);
-        ctx.lineTo(w, centerY);
-        ctx.stroke();
+    drawReferenceGeometryLayer(ctx, renderCtx) {
+        const {
+            mode,
+            width,
+            height,
+            centerX,
+            centerY,
+            scale,
+            ownShipPose,
+            headUp,
+            style
+        } = renderCtx;
+        const labelsColor = this.enhancedVisualsEnabled ? style.labels : '#00ffff';
+        const majorGridColor = this.enhancedVisualsEnabled ? style.gridMajor : '#006666';
+        const minorGridColor = this.enhancedVisualsEnabled ? style.gridMinor : '#004444';
 
-        ctx.beginPath();
-        ctx.moveTo(centerX, 0);
-        ctx.lineTo(centerX, h);
-        ctx.stroke();
+        if (mode === 'radial') {
+            ctx.strokeStyle = labelsColor;
+            ctx.fillStyle = labelsColor;
+            ctx.font = `10px ${RENDER_STYLE_TOKENS.tactical2d.fontFamily}`;
+            ctx.lineWidth = 1;
+            for (let r = 50; r <= 200; r += 50) {
+                ctx.beginPath();
+                ctx.arc(centerX, centerY, r * scale, 0, Math.PI * 2);
+                ctx.stroke();
+                ctx.globalAlpha = 0.55;
+                ctx.fillText(`${r}m`, centerX + 6, centerY - r * scale - 5);
+                ctx.globalAlpha = 1;
+            }
 
-        this.drawTerrainContours(ctx, w, h, scale, false, ownShipPose, false);
-
-        if (Array.isArray(targets)) {
-            targets.forEach((t) => {
-                if (t.state !== TrackState.TRACKED) return;
-
-                const local = this.toLocalFrame(t.x, t.z, ownShipPose, false);
-                const dx = centerX + local.x * scale;
-                const dy = centerY + local.z * scale;
-
-                const isSelected = selectedTargetId === t.id;
-
-                ctx.globalAlpha = isSelected ? 1.0 : 0.7;
-                this.drawTrackUncertainty(ctx, dx, dy, t.snr, this.getTypeColor(t.type));
-
-                if (isSelected) {
-                    this.drawSelectionHUD(ctx, dx, dy, 10, pulse);
-                }
-
-                this.drawTargetGlyph(ctx, t.type, dx, dy, false);
-                this.drawDepthCue(ctx, t, dx, dy);
-
-                ctx.fillStyle = '#ffffff';
-                ctx.font = '8px monospace';
-                ctx.globalAlpha = 1.0;
-                ctx.fillText(t.id.replace('target-', 'T'), dx + 8, dy);
+            ctx.strokeStyle = minorGridColor;
+            const angleOffset = -Math.PI / 2;
+            [0, 90, 180, 270].forEach((deg) => {
+                const rad = (deg * Math.PI) / 180 + angleOffset;
+                ctx.beginPath();
+                ctx.moveTo(centerX, centerY);
+                ctx.lineTo(centerX + Math.cos(rad) * 320, centerY + Math.sin(rad) * 320);
+                ctx.stroke();
             });
-        }
+        } else {
+            ctx.strokeStyle = minorGridColor;
+            ctx.lineWidth = 1;
+            for (let i = -5; i <= 5; i++) {
+                ctx.beginPath();
+                ctx.moveTo(0, centerY + i * 50);
+                ctx.lineTo(width, centerY + i * 50);
+                ctx.stroke();
 
-        if (this.scanActive) {
-            ctx.strokeStyle = '#00ffff';
+                ctx.beginPath();
+                ctx.moveTo(centerX + i * 50, 0);
+                ctx.lineTo(centerX + i * 50, height);
+                ctx.stroke();
+            }
+
+            ctx.strokeStyle = majorGridColor;
             ctx.lineWidth = 2;
             ctx.beginPath();
-            ctx.arc(centerX, centerY, this.scanRadius * scale, 0, Math.PI * 2);
+            ctx.moveTo(0, centerY);
+            ctx.lineTo(width, centerY);
+            ctx.stroke();
+
+            ctx.beginPath();
+            ctx.moveTo(centerX, 0);
+            ctx.lineTo(centerX, height);
             ctx.stroke();
         }
 
-        // Own Ship Glyph (Center, Rotating)
+        this.drawTerrainContours(ctx, width, height, scale, mode === 'radial', ownShipPose, headUp);
+    }
+
+    drawTracksLayer(ctx, targets, renderCtx) {
+        if (!Array.isArray(targets)) return;
+        const { mode, centerX, centerY, scale, ownShipPose, selectedTargetId, hoveredTargetId, pulse } = renderCtx;
+        const labelBoxes = [];
+
+        ctx.font = `10px ${RENDER_STYLE_TOKENS.tactical2d.fontFamily}`;
+        targets.forEach((t) => {
+            const track = this.trackHistory.get(t.id);
+            if (this.enhancedVisualsEnabled) {
+                this.drawTrackTrail(ctx, track, renderCtx);
+                this.drawLastKnownGhost(ctx, t, track, renderCtx);
+            }
+
+            if (t.state !== TrackState.TRACKED) return;
+            const screen = this.getTargetScreenPosition(t, centerX, centerY, ownShipPose, mode === 'radial', scale);
+            const dx = screen.x;
+            const dy = screen.y;
+            const isSelected = selectedTargetId === t.id;
+            const isHovered = hoveredTargetId === t.id;
+
+            ctx.globalAlpha = isSelected ? 1.0 : 0.72;
+            this.drawTrackUncertainty(ctx, dx, dy, t.snr, this.getTypeColor(t.type));
+
+            if (this.enhancedVisualsEnabled) {
+                this.drawThreatRing(ctx, t, dx, dy, isSelected);
+                this.drawPredictedVector(ctx, t, dx, dy, ownShipPose, mode === 'radial', scale);
+                if (this.predictionCompareEnabled) {
+                    this.drawCourseOnlyVector(ctx, t, dx, dy, ownShipPose, mode === 'radial', scale);
+                }
+                if (isHovered && !isSelected) {
+                    this.drawHoverRing(ctx, dx, dy);
+                }
+            }
+
+            if (isSelected) {
+                this.drawSelectionHUD(ctx, dx, dy, mode === 'radial' ? 12 : 10, pulse);
+            }
+
+            this.drawTargetGlyph(ctx, t.type, dx, dy, mode === 'radial');
+            this.drawDepthCue(ctx, t, dx, dy);
+
+            ctx.fillStyle = '#ffffff';
+            ctx.globalAlpha = 1.0;
+            const offset = mode === 'radial' ? 10 : 8;
+            const label = t.id.replace('target-', 'T');
+            const labelPos = this.resolveLabelPosition(ctx, dx + offset, dy, label, labelBoxes);
+            ctx.fillText(label, labelPos.x, labelPos.y);
+        });
+        ctx.globalAlpha = 1.0;
+    }
+
+    drawScanLayer(ctx, renderCtx) {
+        if (!this.scanActive) return;
+        const { centerX, centerY, scale, style, mode } = renderCtx;
+        const ownCenter = this.getOwnShipScreenCenter(centerX, centerY, scale);
+        const scanColor = this.enhancedVisualsEnabled ? style.scan : '#00ffff';
+        if (mode === 'radial') {
+            const outerRadius = Math.max(0, this.scanRadius * scale);
+            const innerRadius = Math.max(0, (this.scanRadius - 5) * scale);
+            ctx.strokeStyle = scanColor;
+            ctx.lineWidth = 2;
+            if (outerRadius > 0) {
+                ctx.beginPath();
+                ctx.arc(ownCenter.x, ownCenter.y, outerRadius, 0, Math.PI * 2);
+                ctx.stroke();
+            }
+            if (innerRadius > 0) {
+                ctx.strokeStyle = this.enhancedVisualsEnabled ? `${scanColor}66` : 'rgba(0, 255, 255, 0.4)';
+                ctx.beginPath();
+                ctx.arc(ownCenter.x, ownCenter.y, innerRadius, 0, Math.PI * 2);
+                ctx.stroke();
+            }
+            return;
+        }
+
+        ctx.strokeStyle = scanColor;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(ownCenter.x, ownCenter.y, this.scanRadius * scale, 0, Math.PI * 2);
+        ctx.stroke();
+    }
+
+    drawOwnShipLayer(ctx, renderCtx) {
+        const { mode, centerX, centerY, ownShipPose, style } = renderCtx;
+        const ownShipColor = this.enhancedVisualsEnabled ? style.ownShip : '#00ff00';
+        const ownCenter = this.getOwnShipScreenCenter(centerX, centerY, renderCtx.scale);
         ctx.save();
-        ctx.translate(centerX, centerY);
-        // Heading 0 (North) should point Up (Screen -Y).
-        // Standard canvas rotation 0 is Right (+X).
-        // So we need rotation = Course - 90deg (in radians)
-        // Course 0 -> -PI/2 (Up).
-        // Course 90 -> 0 (Right).
+        ctx.translate(ownCenter.x, ownCenter.y);
+        if (mode === 'radial') {
+            ctx.beginPath();
+            ctx.moveTo(0, -10);
+            ctx.lineTo(5, 5);
+            ctx.lineTo(-5, 5);
+            ctx.closePath();
+            ctx.fillStyle = ownShipColor;
+            ctx.fill();
+            ctx.restore();
+            return;
+        }
+
         const rotation = ownShipPose.course - Math.PI / 2;
         ctx.rotate(rotation);
-
-        ctx.fillStyle = '#00ff00';
+        ctx.fillStyle = ownShipColor;
         ctx.beginPath();
-        ctx.moveTo(8, 0); // Tip points local +X (which is rot 0)
+        ctx.moveTo(8, 0);
         ctx.lineTo(-6, -6);
         ctx.lineTo(-6, 6);
         ctx.closePath();
         ctx.fill();
         ctx.restore();
+    }
 
-        this.drawCoordinateDebugVectors(ctx, centerX, centerY, ownShipPose, 'grid');
+    drawFxLayer(ctx, renderCtx) {
+        if (!this.enhancedVisualsEnabled) return;
+        const { width, height, pingFlashIntensity, style } = renderCtx;
+        if (pingFlashIntensity <= 0.0001) return;
+
+        const alpha = Math.min(0.35, pingFlashIntensity * 0.42);
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        ctx.fillStyle = style.pingFlash;
+        ctx.fillRect(0, 0, width, height);
+        ctx.restore();
+    }
+
+    drawHudLayer(ctx, renderCtx) {
+        const { mode, centerX, centerY, ownShipPose, width, height, scale } = renderCtx;
+        const ownShipLocal = { x: -this.cameraOffsetLocal.x, z: -this.cameraOffsetLocal.z };
+        const adjustedCenterX = centerX + ownShipLocal.x * scale;
+        const adjustedCenterY = centerY + ownShipLocal.z * scale;
+        this.drawCoordinateDebugVectors(ctx, adjustedCenterX, adjustedCenterY, ownShipPose, mode);
+        if (mode === 'radial') {
+            this.drawRadialCompass(ctx, width, height, ownShipPose);
+        }
+    }
+
+    updateViewTransform(targets, renderCtx) {
+        const { mode, ownShipPose, selectedTargetId, dt } = renderCtx;
+        const defaultScale = 1.5;
+
+        let targetOffsetX = 0;
+        let targetOffsetZ = 0;
+        let desiredScale = defaultScale;
+
+        if (mode === 'grid' && this.snapToContactEnabled && selectedTargetId && Array.isArray(targets)) {
+            const selected = targets.find((t) => t.id === selectedTargetId && t.state === TrackState.TRACKED);
+            if (selected) {
+                const local = this.toLocalFrame(selected.x, selected.z, ownShipPose, false);
+                targetOffsetX = local.x;
+                targetOffsetZ = local.z;
+                const range = Math.hypot(local.x, local.z);
+                desiredScale = 1.2 + (1 - Math.min(220, range) / 220) * 1.0;
+                desiredScale = Math.max(1.2, Math.min(2.2, desiredScale));
+            }
+        }
+
+        if (mode !== 'grid') {
+            this.cameraOffsetLocal.x = 0;
+            this.cameraOffsetLocal.z = 0;
+            this.cameraScale = defaultScale;
+            return;
+        }
+
+        const easing = Math.max(0.03, Math.min(0.25, dt * 6.5));
+        this.cameraOffsetLocal.x += (targetOffsetX - this.cameraOffsetLocal.x) * easing;
+        this.cameraOffsetLocal.z += (targetOffsetZ - this.cameraOffsetLocal.z) * easing;
+        this.cameraScale += (desiredScale - this.cameraScale) * easing;
+    }
+
+    getOwnShipScreenCenter(centerX, centerY, scale) {
+        return {
+            x: centerX - this.cameraOffsetLocal.x * scale,
+            y: centerY - this.cameraOffsetLocal.z * scale
+        };
+    }
+
+    getTargetScreenPosition(target, centerX, centerY, ownShipPose, headUp, scale) {
+        const local = this.toLocalFrame(target.x, target.z, ownShipPose, headUp);
+        return {
+            x: centerX + (local.x - this.cameraOffsetLocal.x) * scale,
+            y: centerY + (local.z - this.cameraOffsetLocal.z) * scale
+        };
+    }
+
+    resolveLabelPosition(ctx, x, y, text, usedBoxes) {
+        const width = ctx.measureText(text).width;
+        const height = 10;
+        const candidates = [
+            { x, y },
+            { x, y: y - 12 },
+            { x: x + 10, y: y + 10 },
+            { x: x - width - 8, y: y - 3 },
+            { x: x + 12, y: y - 12 }
+        ];
+
+        for (const pos of candidates) {
+            const box = { x: pos.x - 1, y: pos.y - height + 1, w: width + 2, h: height + 2 };
+            const overlaps = usedBoxes.some((u) => this.boxesOverlap(box, u));
+            if (!overlaps) {
+                usedBoxes.push(box);
+                return pos;
+            }
+        }
+
+        const fallback = candidates[0];
+        usedBoxes.push({ x: fallback.x - 1, y: fallback.y - height + 1, w: width + 2, h: height + 2 });
+        return fallback;
+    }
+
+    boxesOverlap(a, b) {
+        return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+    }
+
+    drawHoverRing(ctx, x, y) {
+        ctx.save();
+        ctx.strokeStyle = 'rgba(220, 245, 255, 0.75)';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.arc(x, y, 11, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.restore();
+    }
+
+    updateTrackHistory(targets, ownShipPose) {
+        const now = performance.now();
+        const ttlMs = RENDER_STYLE_TOKENS.tactical2d.track.trailMs;
+        const maxPoints = RENDER_STYLE_TOKENS.tactical2d.track.maxTrailPoints;
+
+        for (const [id, history] of this.trackHistory.entries()) {
+            const filtered = history.filter((p) => now - p.ts <= ttlMs);
+            if (filtered.length === 0) {
+                this.trackHistory.delete(id);
+                continue;
+            }
+            this.trackHistory.set(id, filtered);
+        }
+
+        if (!Array.isArray(targets)) return;
+        targets.forEach((t) => {
+            const local = this.toLocalFrame(t.x, t.z, ownShipPose, false);
+            if (t.state === TrackState.TRACKED) {
+                const history = this.trackHistory.get(t.id) || [];
+                history.push({ x: t.x, z: t.z, localX: local.x, localZ: local.z, ts: now, snr: t.snr || 0 });
+                while (history.length > maxPoints) history.shift();
+                this.trackHistory.set(t.id, history);
+                this.trackGhosts.set(t.id, { x: t.x, z: t.z, ts: now });
+            } else if (!this.trackGhosts.has(t.id)) {
+                this.trackGhosts.set(t.id, { x: t.x, z: t.z, ts: now });
+            }
+        });
+    }
+
+    drawTrackTrail(ctx, history, renderCtx) {
+        if (!history || history.length < 2) return;
+        const now = performance.now();
+        const ttlMs = RENDER_STYLE_TOKENS.tactical2d.track.trailMs;
+        const { centerX, centerY, scale, ownShipPose, mode } = renderCtx;
+        const headUp = mode === 'radial';
+        const color = this.getModeStyle().labels;
+
+        ctx.save();
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        let moved = false;
+        history.forEach((pt) => {
+            const age = now - pt.ts;
+            if (age > ttlMs) return;
+            const alpha = Math.max(0.08, 1 - age / ttlMs);
+            const local = this.toLocalFrame(pt.x, pt.z, ownShipPose, headUp);
+            const x = centerX + local.x * scale;
+            const y = centerY + local.z * scale;
+            if (!moved) {
+                ctx.moveTo(x, y);
+                moved = true;
+            } else {
+                ctx.globalAlpha = alpha * 0.5;
+                ctx.lineTo(x, y);
+            }
+        });
+        ctx.stroke();
+        ctx.restore();
+    }
+
+    drawLastKnownGhost(ctx, target, history, renderCtx) {
+        if (!target || target.state === TrackState.TRACKED) return;
+        const ghost = this.trackGhosts.get(target.id);
+        if (!ghost) return;
+        const ageMs = performance.now() - ghost.ts;
+        if (ageMs > 30000) return;
+
+        const { centerX, centerY, scale, ownShipPose, mode } = renderCtx;
+        const local = this.toLocalFrame(ghost.x, ghost.z, ownShipPose, mode === 'radial');
+        const x = centerX + local.x * scale;
+        const y = centerY + local.z * scale;
+
+        ctx.save();
+        ctx.strokeStyle = 'rgba(255, 218, 120, 0.5)';
+        ctx.setLineDash([3, 3]);
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.arc(x, y, 8, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.restore();
+
+        if (history?.length) {
+            const last = history[history.length - 1];
+            const bearing = Math.atan2(last.localX, -last.localZ);
+            const label = `${Math.round((ageMs / 1000) * 10) / 10}s`;
+            ctx.save();
+            ctx.fillStyle = 'rgba(255, 220, 160, 0.8)';
+            ctx.font = `9px ${RENDER_STYLE_TOKENS.tactical2d.fontFamily}`;
+            ctx.fillText(label, x + Math.cos(bearing) * 10, y + Math.sin(bearing) * 10);
+            ctx.restore();
+        }
+    }
+
+    drawPredictedVector(ctx, target, dx, dy, ownShipPose, headUp, scale) {
+        if (!Number.isFinite(target.speed) || target.speed < 0.001) return;
+
+        const predictionMeters = Math.max(
+            RENDER_STYLE_TOKENS.tactical2d.track.minPredictionMeters,
+            Math.min(RENDER_STYLE_TOKENS.tactical2d.track.maxPredictionMeters, target.speed * 70)
+        );
+        let dirX = 0;
+        let dirZ = 0;
+
+        // Use observed motion first so prediction aligns with actual movement on screen.
+        const history = this.trackHistory.get(target.id);
+        if (history && history.length >= 2) {
+            const a = history[history.length - 2];
+            const b = history[history.length - 1];
+            const dxHist = b.x - a.x;
+            const dzHist = b.z - a.z;
+            const magHist = Math.hypot(dxHist, dzHist);
+            if (magHist > 1e-6) {
+                dirX = dxHist / magHist;
+                dirZ = dzHist / magHist;
+            }
+        }
+
+        // Fallback to simulation course convention when motion history is not yet available.
+        if (Math.hypot(dirX, dirZ) < 1e-6) {
+            if (Number.isFinite(target.course)) {
+                dirX = Math.cos(target.course);
+                dirZ = Math.sin(target.course);
+            } else if (Number.isFinite(target.bearing)) {
+                const bearingRad = (target.bearing * Math.PI) / 180;
+                dirX = Math.sin(bearingRad);
+                dirZ = Math.cos(bearingRad);
+            }
+        }
+
+        const dirMag = Math.hypot(dirX, dirZ);
+        if (dirMag < 1e-6) return;
+        dirX /= dirMag;
+        dirZ /= dirMag;
+
+        const targetLocal = this.toLocalFrame(target.x, target.z, ownShipPose, headUp);
+        const predWorldX = target.x + dirX * predictionMeters;
+        const predWorldZ = target.z + dirZ * predictionMeters;
+        const predLocal = this.toLocalFrame(predWorldX, predWorldZ, ownShipPose, headUp);
+        const px = dx + (predLocal.x - targetLocal.x) * scale;
+        const py = dy + (predLocal.z - targetLocal.z) * scale;
+
+        ctx.save();
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.38)';
+        ctx.setLineDash([4, 4]);
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(dx, dy);
+        ctx.lineTo(px, py);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.restore();
+    }
+
+    drawCourseOnlyVector(ctx, target, dx, dy, ownShipPose, headUp, scale) {
+        if (!Number.isFinite(target.course) || !Number.isFinite(target.speed) || target.speed < 0.001) return;
+
+        const predictionMeters = Math.max(
+            RENDER_STYLE_TOKENS.tactical2d.track.minPredictionMeters,
+            Math.min(RENDER_STYLE_TOKENS.tactical2d.track.maxPredictionMeters, target.speed * 70)
+        );
+        const dirX = Math.cos(target.course);
+        const dirZ = Math.sin(target.course);
+        const predWorldX = target.x + dirX * predictionMeters;
+        const predWorldZ = target.z + dirZ * predictionMeters;
+        const targetLocal = this.toLocalFrame(target.x, target.z, ownShipPose, headUp);
+        const predLocal = this.toLocalFrame(predWorldX, predWorldZ, ownShipPose, headUp);
+        const px = dx + (predLocal.x - targetLocal.x) * scale;
+        const py = dy + (predLocal.z - targetLocal.z) * scale;
+
+        ctx.save();
+        ctx.strokeStyle = 'rgba(255, 170, 90, 0.78)';
+        ctx.setLineDash([2, 3]);
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(dx, dy);
+        ctx.lineTo(px, py);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.restore();
+    }
+
+    drawThreatRing(ctx, target, dx, dy, isSelected) {
+        const isThreat = target.type === 'TORPEDO' || (target.type === 'SUBMARINE' && (target.snr || 0) > 2.6);
+        if (!isThreat) return;
+
+        const base = target.type === 'TORPEDO' ? '255, 90, 90' : '255, 182, 94';
+        const alpha = isSelected ? 0.4 : RENDER_STYLE_TOKENS.tactical2d.track.threatRingAlpha;
+        const radius = target.type === 'TORPEDO' ? 20 : 14;
+        ctx.save();
+        ctx.strokeStyle = `rgba(${base}, ${alpha})`;
+        ctx.lineWidth = isSelected ? 2 : 1;
+        ctx.beginPath();
+        ctx.arc(dx, dy, radius, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.restore();
     }
 
     drawCoordinateDebugVectors(ctx, centerX, centerY, ownShipPose, mode) {
@@ -425,11 +814,14 @@ export class Tactical2DRenderer {
         const radius = 15 / Math.log(safeSnr + 1.1);
         const rx = Math.max(8, Math.min(80, radius));
         const ry = rx * 0.65;
+        const confidence = Math.max(0, Math.min(1, safeSnr / 3.5));
+        const alpha = this.enhancedVisualsEnabled ? 0.15 + (1 - confidence) * 0.6 : 1;
 
         ctx.save();
         ctx.strokeStyle = color || '#00ffff';
         ctx.lineWidth = 1;
-        ctx.setLineDash([5, 4]);
+        ctx.globalAlpha = alpha;
+        ctx.setLineDash(this.enhancedVisualsEnabled ? [3 + (1 - confidence) * 5, 3] : [5, 4]);
         ctx.beginPath();
         ctx.ellipse(x, y, rx, ry, 0, 0, Math.PI * 2);
         ctx.stroke();
@@ -524,7 +916,9 @@ export class Tactical2DRenderer {
         const px = Math.round((ownShipPose.x || 0) * 2) / 2;
         const pz = Math.round((ownShipPose.z || 0) * 2) / 2;
         const pc = Math.round((ownShipPose.course || 0) * 20) / 20;
-        const key = `${radialMode ? 'radial' : 'grid'}:${width}:${height}:${scale}:${px}:${pz}:${pc}:${headUp ? 1 : 0}`;
+        const ox = Math.round((this.cameraOffsetLocal.x || 0) / 4) * 4;
+        const oz = Math.round((this.cameraOffsetLocal.z || 0) / 4) * 4;
+        const key = `${radialMode ? 'radial' : 'grid'}:${width}:${height}:${scale}:${px}:${pz}:${pc}:${headUp ? 1 : 0}:${ox}:${oz}`;
         const cached = this.contourCache.get(key);
         if (cached) return cached;
 
@@ -577,12 +971,16 @@ export class Tactical2DRenderer {
 
             layers.push({
                 path,
-                strokeStyle: major ? 'rgba(0, 180, 190, 0.7)' : 'rgba(0, 150, 160, 0.5)',
+                strokeStyle: major ? this.getModeStyle().contourMajor : this.getModeStyle().contourMinor,
                 lineWidth: major ? 1 : 0.6
             });
         });
 
         this.contourCache.set(key, layers);
+        if (this.contourCache.size > 28) {
+            const oldestKey = this.contourCache.keys().next().value;
+            if (oldestKey) this.contourCache.delete(oldestKey);
+        }
         return layers;
     }
 
@@ -628,16 +1026,18 @@ export class Tactical2DRenderer {
     }
 
     mapWorldToScreen(wx, wz, centerX, centerY, scale, radialMode, headUp) {
+        const offsetX = this.cameraOffsetLocal.x;
+        const offsetZ = this.cameraOffsetLocal.z;
         if (radialMode || headUp) {
             return {
-                x: centerX + wx * scale,
-                y: centerY + wz * scale
+                x: centerX + (wx - offsetX) * scale,
+                y: centerY + (wz - offsetZ) * scale
             };
         }
 
         return {
-            x: centerX + wx * scale,
-            y: centerY + wz * scale
+            x: centerX + (wx - offsetX) * scale,
+            y: centerY + (wz - offsetZ) * scale
         };
     }
 

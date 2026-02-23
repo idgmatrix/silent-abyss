@@ -1,6 +1,7 @@
 import { Tactical3DRenderer } from './tactical-renderer-3d.js';
 import { Tactical2DRenderer } from './tactical-renderer-2d.js';
 import { bearingDegFromDelta, forwardFromCourse, normalizeCourseRadians } from './coordinate-system.js';
+import { resolveVisualMode, VISUAL_MODES } from './render-style-tokens.js';
 
 export class TacticalView {
     constructor() {
@@ -21,12 +22,20 @@ export class TacticalView {
         this._ownShipDisplayCourse = 0;
         this._resizeHandler = null;
         this._clickHandler = null;
+        this._pointerMoveHandler = null;
+        this._pointerLeaveHandler = null;
         this._targetSelectedHandler = null;
         this._lastRenderTime = 0;
+        this._hoveredTargetId = null;
 
         this.debugCoordinatesEnabled = this.readCoordinateDebugFlag();
         this.atmospherePreset = this.readAtmospherePreset();
+        this.enhanced2DVisuals = this.readEnhanced2DVisualsFlag();
+        this.visualMode = this.readVisualModePreset();
+        this.snapToContactEnabled = this.readSnapToContactFlag();
+        this.predictionCompareEnabled = this.readPredictionCompareFlag();
         this._debugHudEl = null;
+        this._hoverTooltipEl = null;
     }
 
     // --- Terrain Noise Functions (Static) ---
@@ -88,6 +97,10 @@ export class TacticalView {
         this.renderer3D.setTerrainRenderStyle(this.terrainRenderStyle);
         this.renderer3D.setAtmospherePreset(this.atmospherePreset);
         this.renderer2D.setDebugCoordinatesEnabled(this.debugCoordinatesEnabled);
+        this.renderer2D.setEnhancedVisualsEnabled(this.enhanced2DVisuals);
+        this.renderer2D.setVisualMode(this.visualMode);
+        this.renderer2D.setSnapToContactEnabled(this.snapToContactEnabled);
+        this.renderer2D.setPredictionCompareEnabled(this.predictionCompareEnabled);
 
         if (this.debugCoordinatesEnabled) {
             this.createDebugHud();
@@ -95,14 +108,19 @@ export class TacticalView {
 
         this._resizeHandler = () => this.resize();
         this._clickHandler = (e) => this.handleCanvasClick(e);
+        this._pointerMoveHandler = (e) => this.handlePointerMove(e);
+        this._pointerLeaveHandler = () => this.handlePointerLeave();
         this._targetSelectedHandler = (e) => {
             this.selectedTargetId = e?.detail?.id ?? null;
         };
 
         this.container.addEventListener('click', this._clickHandler);
+        this.container.addEventListener('mousemove', this._pointerMoveHandler);
+        this.container.addEventListener('mouseleave', this._pointerLeaveHandler);
         this.container.addEventListener('targetSelected', this._targetSelectedHandler);
         window.addEventListener('resize', this._resizeHandler);
 
+        this.createHoverTooltip();
         this.resize();
     }
 
@@ -114,6 +132,12 @@ export class TacticalView {
         if (this.container && this._clickHandler) {
             this.container.removeEventListener('click', this._clickHandler);
         }
+        if (this.container && this._pointerMoveHandler) {
+            this.container.removeEventListener('mousemove', this._pointerMoveHandler);
+        }
+        if (this.container && this._pointerLeaveHandler) {
+            this.container.removeEventListener('mouseleave', this._pointerLeaveHandler);
+        }
         if (this.container && this._targetSelectedHandler) {
             this.container.removeEventListener('targetSelected', this._targetSelectedHandler);
         }
@@ -121,13 +145,17 @@ export class TacticalView {
         this.renderer3D.dispose();
         this.renderer2D.dispose();
         this.removeDebugHud();
+        this.removeHoverTooltip();
 
         this.container = null;
         this._lastTargets = [];
         this._resizeHandler = null;
         this._clickHandler = null;
+        this._pointerMoveHandler = null;
+        this._pointerLeaveHandler = null;
         this._targetSelectedHandler = null;
         this._lastRenderTime = 0;
+        this._hoveredTargetId = null;
     }
 
     readCoordinateDebugFlag() {
@@ -164,6 +192,68 @@ export class TacticalView {
         return 'balanced';
     }
 
+    readEnhanced2DVisualsFlag() {
+        if (typeof window === 'undefined') return true;
+        try {
+            const params = new URLSearchParams(window.location.search || '');
+            const fromQuery = params.get('enhanced2d');
+            if (fromQuery === '0') return false;
+            if (fromQuery === '1') return true;
+
+            const fromStorage = window.localStorage.getItem('silentAbyss.enhanced2DVisuals');
+            if (fromStorage === '0') return false;
+            if (fromStorage === '1') return true;
+        } catch {
+            // Ignore query/storage access failures.
+        }
+        return true;
+    }
+
+    readVisualModePreset() {
+        if (typeof window === 'undefined') return VISUAL_MODES.STEALTH;
+        try {
+            const params = new URLSearchParams(window.location.search || '');
+            const queryValue = params.get('visualMode');
+            if (queryValue === VISUAL_MODES.STEALTH || queryValue === VISUAL_MODES.ENGAGEMENT || queryValue === VISUAL_MODES.ALARM) {
+                return resolveVisualMode(queryValue);
+            }
+
+            const storageValue = window.localStorage.getItem('silentAbyss.visualMode');
+            if (storageValue === VISUAL_MODES.STEALTH || storageValue === VISUAL_MODES.ENGAGEMENT || storageValue === VISUAL_MODES.ALARM) {
+                return resolveVisualMode(storageValue);
+            }
+        } catch {
+            // Ignore query/storage access failures.
+        }
+        return VISUAL_MODES.STEALTH;
+    }
+
+    readSnapToContactFlag() {
+        if (typeof window === 'undefined') return false;
+        try {
+            const params = new URLSearchParams(window.location.search || '');
+            const fromQuery = params.get('snap2d');
+            if (fromQuery === '1') return true;
+            if (fromQuery === '0') return false;
+            return window.localStorage.getItem('silentAbyss.snapToContact2d') === '1';
+        } catch {
+            return false;
+        }
+    }
+
+    readPredictionCompareFlag() {
+        if (typeof window === 'undefined') return false;
+        try {
+            const params = new URLSearchParams(window.location.search || '');
+            const fromQuery = params.get('comparePred');
+            if (fromQuery === '1') return true;
+            if (fromQuery === '0') return false;
+            return window.localStorage.getItem('silentAbyss.comparePrediction2d') === '1';
+        } catch {
+            return false;
+        }
+    }
+
     createDebugHud() {
         if (!this.container || this._debugHudEl) return;
 
@@ -190,6 +280,31 @@ export class TacticalView {
         this._debugHudEl = null;
     }
 
+    createHoverTooltip() {
+        if (!this.container || this._hoverTooltipEl) return;
+        const el = document.createElement('div');
+        el.style.position = 'absolute';
+        el.style.minWidth = '160px';
+        el.style.padding = '7px 9px';
+        el.style.border = '1px solid rgba(170, 235, 255, 0.5)';
+        el.style.background = 'rgba(4, 10, 16, 0.85)';
+        el.style.color = '#d9f6ff';
+        el.style.font = '11px/1.35 "Share Tech Mono", monospace';
+        el.style.whiteSpace = 'pre';
+        el.style.pointerEvents = 'none';
+        el.style.zIndex = '22';
+        el.style.display = 'none';
+        this.container.appendChild(el);
+        this._hoverTooltipEl = el;
+    }
+
+    removeHoverTooltip() {
+        if (this._hoverTooltipEl && this._hoverTooltipEl.parentElement) {
+            this._hoverTooltipEl.parentElement.removeChild(this._hoverTooltipEl);
+        }
+        this._hoverTooltipEl = null;
+    }
+
     addTarget(target) {
         this.renderer3D.addTarget(target);
     }
@@ -210,7 +325,7 @@ export class TacticalView {
         this.renderer2D.setScanState(radius, active);
     }
 
-    render(targets, ownShipCourse, ownShipForwardSpeed = 0, ownShipPosition = null) {
+    render(targets, ownShipCourse, ownShipForwardSpeed = 0, ownShipPosition = null, pingFlashIntensity = 0) {
         if (!this.container) return;
 
         const now = performance.now();
@@ -234,8 +349,11 @@ export class TacticalView {
         this.renderer3D.render(this._ownShipPose, this.selectedTargetId, this.pulse, this._lastTargets, dt);
         this.renderer2D.render(this.viewMode, targets, {
             selectedTargetId: this.selectedTargetId,
+            hoveredTargetId: this._hoveredTargetId,
             pulse: this.pulse,
-            ownShipPose: this._ownShipPose
+            ownShipPose: this._ownShipPose,
+            pingFlashIntensity,
+            dt
         });
     }
 
@@ -269,6 +387,9 @@ export class TacticalView {
 
     setViewMode(mode) {
         this.viewMode = mode;
+        if (mode !== 'radial' && mode !== 'grid') {
+            this.handlePointerLeave();
+        }
     }
 
     setTerrainRenderStyle(style) {
@@ -291,6 +412,54 @@ export class TacticalView {
 
     getAtmospherePreset() {
         return this.atmospherePreset;
+    }
+
+    setEnhanced2DVisualsEnabled(enabled) {
+        this.enhanced2DVisuals = !!enabled;
+        this.renderer2D.setEnhancedVisualsEnabled(this.enhanced2DVisuals);
+        if (typeof window !== 'undefined') {
+            try {
+                window.localStorage.setItem('silentAbyss.enhanced2DVisuals', this.enhanced2DVisuals ? '1' : '0');
+            } catch {
+                // Ignore local storage failures.
+            }
+        }
+    }
+
+    setVisualMode(mode) {
+        this.visualMode = resolveVisualMode(mode);
+        this.renderer2D.setVisualMode(this.visualMode);
+        if (typeof window !== 'undefined') {
+            try {
+                window.localStorage.setItem('silentAbyss.visualMode', this.visualMode);
+            } catch {
+                // Ignore local storage failures.
+            }
+        }
+    }
+
+    setSnapToContactEnabled(enabled) {
+        this.snapToContactEnabled = !!enabled;
+        this.renderer2D.setSnapToContactEnabled(this.snapToContactEnabled);
+        if (typeof window !== 'undefined') {
+            try {
+                window.localStorage.setItem('silentAbyss.snapToContact2d', this.snapToContactEnabled ? '1' : '0');
+            } catch {
+                // Ignore local storage failures.
+            }
+        }
+    }
+
+    setPredictionCompareEnabled(enabled) {
+        this.predictionCompareEnabled = !!enabled;
+        this.renderer2D.setPredictionCompareEnabled(this.predictionCompareEnabled);
+        if (typeof window !== 'undefined') {
+            try {
+                window.localStorage.setItem('silentAbyss.comparePrediction2d', this.predictionCompareEnabled ? '1' : '0');
+            } catch {
+                // Ignore local storage failures.
+            }
+        }
     }
 
     handleCanvasClick(e) {
@@ -317,6 +486,79 @@ export class TacticalView {
 
         this.selectedTargetId = hitId;
         this.container.dispatchEvent(new CustomEvent('targetSelected', { detail: { id: hitId } }));
+    }
+
+    handlePointerMove(e) {
+        if (!this.container) return;
+        if (this.viewMode !== 'radial' && this.viewMode !== 'grid') {
+            this.handlePointerLeave();
+            return;
+        }
+
+        const rect = this.container.getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        const y = e.clientY - rect.top;
+        const hoveredId = this.renderer2D.pickTargetAtPoint(
+            this.viewMode,
+            x,
+            y,
+            rect,
+            this._lastTargets,
+            { ownShipPose: this._ownShipPose }
+        );
+        this._hoveredTargetId = hoveredId;
+
+        if (!hoveredId) {
+            this.hideHoverTooltip();
+            return;
+        }
+
+        const target = this._lastTargets.find((t) => t.id === hoveredId) || null;
+        if (!target) {
+            this.hideHoverTooltip();
+            return;
+        }
+        this.showHoverTooltip(target, x, y, rect.width, rect.height);
+    }
+
+    handlePointerLeave() {
+        this._hoveredTargetId = null;
+        this.hideHoverTooltip();
+    }
+
+    showHoverTooltip(target, x, y, width, height) {
+        if (!this._hoverTooltipEl) return;
+
+        const dx = target.x - this._ownShipPose.x;
+        const dz = target.z - this._ownShipPose.z;
+        const bearing = Number.isFinite(target.bearing) ? target.bearing : bearingDegFromDelta(dx, dz);
+        const range = Math.hypot(dx, dz) * 50;
+        const speed = Number.isFinite(target.speed) ? target.speed : 0;
+        const terrainY = this.getTerrainHeight(target.x, target.z);
+        const depthMeters = Math.max(1, -terrainY - 2);
+        const confidence = Math.max(0, Math.min(100, ((target.snr || 0) / 3.5) * 100));
+
+        this._hoverTooltipEl.textContent = [
+            `${target.id.replace('target-', 'T')}  ${target.type || 'UNKNOWN'}`,
+            `BRG  ${bearing.toFixed(1)} deg`,
+            `RNG  ${range.toFixed(0)} m`,
+            `SPD  ${speed.toFixed(1)} kts`,
+            `DPT  ${depthMeters.toFixed(0)} m`,
+            `CFN  ${confidence.toFixed(0)}%`
+        ].join('\n');
+
+        const margin = 12;
+        const left = Math.min(width - 170, x + margin);
+        const top = Math.min(height - 104, y + margin);
+        this._hoverTooltipEl.style.left = `${Math.max(8, left)}px`;
+        this._hoverTooltipEl.style.top = `${Math.max(8, top)}px`;
+        this._hoverTooltipEl.style.display = 'block';
+    }
+
+    hideHoverTooltip() {
+        if (this._hoverTooltipEl) {
+            this._hoverTooltipEl.style.display = 'none';
+        }
     }
 
     resize() {
