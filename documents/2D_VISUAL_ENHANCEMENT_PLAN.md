@@ -138,3 +138,13 @@ Work:
 - `npm run build` passes
 - Feature flag fallback path verified
 - Visual diffs reviewed and accepted
+
+## Implementation Status
+- Completed:
+  - Shared token system and visual mode presets.
+  - Tactical and sonar layered rendering pipelines.
+  - Enhanced tactical cues (trail/ghost/prediction/threat/hover/tooltip).
+  - Feature fallback and runtime UI controls (`SNAP2D`, `CMP-PRED`, `ENH-2D`, `V-MODE`).
+  - Validation runs (`lint`, `test`, `build`) during implementation passes.
+- Pending:
+  - Capture and archive before/after visual screenshots for docs.
