@@ -74,7 +74,8 @@ export class UIManager {
             'rudder-center-btn', 'heading-display', 'throttle-slider', 'throttle-display',
             'throttle-astern-btn', 'throttle-ahead-btn', 'throttle-stop-btn', 'rpm-slider',
             'btr-bearing-reference-select', 'terrain-point-cloud-toggle', 'atmosphere-preset-select',
-            'snap-to-contact-2d-toggle', 'compare-prediction-2d-toggle'
+            'snap-to-contact-2d-toggle', 'compare-prediction-2d-toggle',
+            'enhanced-2d-visuals-toggle', 'visual-mode-select'
         ];
 
         ids.forEach(id => {
@@ -159,6 +160,26 @@ export class UIManager {
             comparePredToggle.checked = !!this.orch.tacticalView.predictionCompareEnabled;
             comparePredToggle.onchange = (e) => {
                 this.orch.tacticalView.setPredictionCompareEnabled(!!e.target.checked);
+            };
+        }
+
+        const enhanced2dToggle = this.getEl('enhanced-2d-visuals-toggle');
+        if (enhanced2dToggle) {
+            enhanced2dToggle.checked = !!this.orch.tacticalView.enhanced2DVisuals;
+            enhanced2dToggle.onchange = (e) => {
+                const enabled = !!e.target.checked;
+                this.orch.tacticalView.setEnhanced2DVisualsEnabled(enabled);
+                this.orch.sonarVisuals.setEnhancedVisualsEnabled(enabled);
+            };
+        }
+
+        const visualModeSelect = this.getEl('visual-mode-select');
+        if (visualModeSelect) {
+            visualModeSelect.value = this.orch.tacticalView.visualMode || 'stealth';
+            visualModeSelect.onchange = (e) => {
+                const mode = e.target.value;
+                this.orch.tacticalView.setVisualMode(mode);
+                this.orch.sonarVisuals.setVisualMode(mode);
             };
         }
     }
