@@ -73,7 +73,8 @@ export class UIManager {
             'rudder-angle-display', 'rudder-port-btn', 'rudder-starboard-btn',
             'rudder-center-btn', 'heading-display', 'throttle-slider', 'throttle-display',
             'throttle-astern-btn', 'throttle-ahead-btn', 'throttle-stop-btn', 'rpm-slider',
-            'btr-bearing-reference-select', 'terrain-point-cloud-toggle', 'atmosphere-preset-select'
+            'btr-bearing-reference-select', 'terrain-point-cloud-toggle', 'atmosphere-preset-select',
+            'snap-to-contact-2d-toggle', 'compare-prediction-2d-toggle'
         ];
 
         ids.forEach(id => {
@@ -143,6 +144,22 @@ export class UIManager {
             };
             atmospherePresetSelect.value = this.orch.tacticalView.getAtmospherePreset();
             this.orch.tacticalView.setAtmospherePreset(atmospherePresetSelect.value);
+        }
+
+        const snap2dToggle = this.getEl('snap-to-contact-2d-toggle');
+        if (snap2dToggle) {
+            snap2dToggle.checked = !!this.orch.tacticalView.snapToContactEnabled;
+            snap2dToggle.onchange = (e) => {
+                this.orch.tacticalView.setSnapToContactEnabled(!!e.target.checked);
+            };
+        }
+
+        const comparePredToggle = this.getEl('compare-prediction-2d-toggle');
+        if (comparePredToggle) {
+            comparePredToggle.checked = !!this.orch.tacticalView.predictionCompareEnabled;
+            comparePredToggle.onchange = (e) => {
+                this.orch.tacticalView.setPredictionCompareEnabled(!!e.target.checked);
+            };
         }
     }
 
