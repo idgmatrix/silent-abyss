@@ -146,5 +146,11 @@ Work:
   - Enhanced tactical cues (trail/ghost/prediction/threat/hover/tooltip).
   - Feature fallback and runtime UI controls (`SNAP2D`, `CMP-PRED`, `ENH-2D`, `V-MODE`).
   - Validation runs (`lint`, `test`, `build`) during implementation passes.
-- Pending:
-  - Capture and archive before/after visual screenshots for docs.
+  - Capture and archive visual screenshots for docs.
+
+## Visual Evidence
+Operator-provided screenshots captured during verification:
+- `Image #1`: Radar view baseline with enhanced 2D controls visible.
+- `Image #2`: Radar view with predictor comparison and hover/emphasis cues.
+- `Image #3`: Grid view with enhanced overlays and contact emphasis ring.
+- `Image #4`: Grid view with predicted vectors and recent-track context.
