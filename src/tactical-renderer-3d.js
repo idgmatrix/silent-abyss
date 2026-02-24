@@ -92,6 +92,8 @@ export class Tactical3DRenderer {
         this._terrainSize = 300;
         this._terrainSegments = 60;
         this._terrainPointSegments = 120;
+        this._terrainRecenterCount = 0;
+        this._pendingTerrainDecorUpdate = null;
         this._contourLevels = [-18, -14, -10, -6, -2, 2, 6];
 
         this.followCameraOffsetLocal = new THREE.Vector3(0, 16, -42);
@@ -392,6 +394,8 @@ export class Tactical3DRenderer {
         this._ownWakeParticleState = null;
         this._terrainPointInstanceLocalXZ = null;
         this._terrainPointInstanceCount = 0;
+        this._terrainRecenterCount = 0;
+        this._pendingTerrainDecorUpdate = null;
 
         this.targetMeshes.clear();
 
@@ -424,6 +428,10 @@ export class Tactical3DRenderer {
 
     setTerrainRenderStyle(style) {
         this.terrainRenderStyle = style === 'point-cloud' ? 'point-cloud' : 'default';
+        // Force a full terrain recook next frame when style changes.
+        this._lastTerrainGridCenter.x = Number.NaN;
+        this._lastTerrainGridCenter.z = Number.NaN;
+        this._pendingTerrainDecorUpdate = null;
         this.applyTerrainRenderStyle();
     }
 
@@ -1135,12 +1143,13 @@ export class Tactical3DRenderer {
             while (sceneOwnPos.z - gridZ < -snap) gridZ -= snap;
         }
 
+        const usePointCloud = this.terrainRenderStyle === 'point-cloud';
         const moved = gridX !== this._lastTerrainGridCenter.x || gridZ !== this._lastTerrainGridCenter.z;
         if (moved) {
             this._lastTerrainGridCenter.x = gridX;
             this._lastTerrainGridCenter.z = gridZ;
 
-            if (this.terrain) {
+            if (this.terrain && !usePointCloud) {
                 this.terrain.position.set(gridX, 0, gridZ);
                 const pos = this.terrain.geometry.attributes.position;
 
@@ -1151,10 +1160,11 @@ export class Tactical3DRenderer {
                 }
 
                 pos.needsUpdate = true;
+                this._terrainRecenterCount++;
                 this.terrain.geometry.computeVertexNormals();
             }
 
-            if (this.terrainPointCloud) {
+            if (usePointCloud && this.terrainPointCloud) {
                 if (this.terrainPointCloud.isInstancedMesh) {
                     this.updateTerrainPointCloudInstances(gridX, gridZ);
                 } else {
@@ -1181,13 +1191,23 @@ export class Tactical3DRenderer {
                 }
             }
 
-            this.updateTerrainGridLines(gridX, gridZ);
-
-            if (this.waterSurface) {
+            if (this.waterSurface && !usePointCloud) {
                 this.waterSurface.position.set(gridX, 0, gridZ);
             }
 
-            this.updateTerrainContours(gridX, gridZ);
+            if (!usePointCloud) {
+                this.updateTerrainGridLines(gridX, gridZ);
+            }
+
+            if (!usePointCloud && this._terrainRecenterCount % 3 === 0) {
+                this._pendingTerrainDecorUpdate = { x: gridX, z: gridZ };
+            }
+        }
+
+        if (!usePointCloud && this._pendingTerrainDecorUpdate) {
+            const pending = this._pendingTerrainDecorUpdate;
+            this.updateTerrainContours(pending.x, pending.z);
+            this._pendingTerrainDecorUpdate = null;
         }
 
         if (this.scanRingFx) {
@@ -1489,7 +1509,6 @@ export class Tactical3DRenderer {
         const pos = this._tmpInstancePos;
         const quat = this._tmpInstanceQuat;
         const scale = this._tmpInstanceScale;
-        const color = this._tmpInstanceColor;
 
         quat.identity();
 
@@ -1506,16 +1525,9 @@ export class Tactical3DRenderer {
             scale.set(spriteScale, spriteScale, spriteScale);
             matrix.compose(pos, quat, scale);
             this.terrainPointCloud.setMatrixAt(i, matrix);
-
-            color.setRGB(0.18 + (0.82 * t), 0.85 + (0.15 * t), 0.88 + (0.12 * t));
-            this.terrainPointCloud.setColorAt(i, color);
         }
 
         this.terrainPointCloud.instanceMatrix.needsUpdate = true;
-        if (this.terrainPointCloud.instanceColor) {
-            this.terrainPointCloud.instanceColor.setUsage(THREE.DynamicDrawUsage);
-            this.terrainPointCloud.instanceColor.needsUpdate = true;
-        }
     }
 
     setupTerrain() {
