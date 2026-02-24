@@ -58,6 +58,8 @@ export class Tactical3DRenderer {
         this.webgpuWaterMaterial = null;
         this.webgpuTerrainNodes = null;
         this.webgpuWaterNodes = null;
+        this.webgpuPointCloudMaterial = null;
+        this.webgpuPointCloudNodes = null;
         this.causticTexture = null;
         this.causticCanvas = null;
         this.causticCtx = null;
@@ -89,6 +91,7 @@ export class Tactical3DRenderer {
         this._terrainSnapStep = 5.0;
         this._terrainSize = 300;
         this._terrainSegments = 60;
+        this._terrainPointSegments = 120;
         this._contourLevels = [-18, -14, -10, -6, -2, 2, 6];
 
         this.followCameraOffsetLocal = new THREE.Vector3(0, 16, -42);
@@ -105,7 +108,14 @@ export class Tactical3DRenderer {
         this._tmpVec3B = new THREE.Vector3();
         this._tmpWorldPos = new THREE.Vector3();
         this._tmpCamForward = new THREE.Vector3();
+        this._tmpInstanceMatrix = new THREE.Matrix4();
+        this._tmpInstancePos = new THREE.Vector3();
+        this._tmpInstanceQuat = new THREE.Quaternion();
+        this._tmpInstanceScale = new THREE.Vector3(1, 1, 1);
+        this._tmpInstanceColor = new THREE.Color();
         this._elapsedTime = 0;
+        this._terrainPointInstanceLocalXZ = null;
+        this._terrainPointInstanceCount = 0;
 
         this.baseFogDensity = 0.0052;
         this.depthFogDensityFactor = 0.00048;
@@ -359,6 +369,8 @@ export class Tactical3DRenderer {
         this.webgpuWaterMaterial = null;
         this.webgpuTerrainNodes = null;
         this.webgpuWaterNodes = null;
+        this.webgpuPointCloudMaterial = null;
+        this.webgpuPointCloudNodes = null;
         this.causticTexture = null;
         this.causticCanvas = null;
         this.causticCtx = null;
@@ -378,6 +390,8 @@ export class Tactical3DRenderer {
         this.marineSnowLayers = [];
         this.ownWakeParticles = null;
         this._ownWakeParticleState = null;
+        this._terrainPointInstanceLocalXZ = null;
+        this._terrainPointInstanceCount = 0;
 
         this.targetMeshes.clear();
 
@@ -716,6 +730,18 @@ export class Tactical3DRenderer {
         if (this.waterSurface?.material?.uniforms?.uTime) {
             this.waterSurface.material.uniforms.uTime.value = this._elapsedTime;
         }
+        if (this.terrainPointCloud?.material?.uniforms?.uTime) {
+            this.terrainPointCloud.material.uniforms.uTime.value = this._elapsedTime;
+        }
+        if (this.terrainPointCloud?.material?.uniforms?.uDesatNear) {
+            this.terrainPointCloud.material.uniforms.uDesatNear.value = this._activePolishProfile?.desatNear ?? 52;
+        }
+        if (this.terrainPointCloud?.material?.uniforms?.uDesatFar) {
+            this.terrainPointCloud.material.uniforms.uDesatFar.value = this._activePolishProfile?.desatFar ?? 230;
+        }
+        if (this.terrainPointCloud?.material?.uniforms?.uOpacity) {
+            this.terrainPointCloud.material.uniforms.uOpacity.value = 0.82 - (depthNorm * 0.15);
+        }
 
         if (this.primarySunLight) {
             // Fade top-down light with depth so deeper water feels murkier and less direct-lit.
@@ -756,6 +782,14 @@ export class Tactical3DRenderer {
                 this.webgpuWaterMaterial.color.copy(waterNear).lerp(waterDeep, depthNorm * 0.85);
                 const wave = Math.sin(this._elapsedTime * 1.12) * 0.02;
                 this.webgpuWaterMaterial.opacity = clamp(0.15 + wave - depthNorm * 0.04, 0.08, 0.2);
+            }
+            if (this.webgpuPointCloudNodes) {
+                this.webgpuPointCloudNodes.time.value = this._elapsedTime;
+                this.webgpuPointCloudNodes.opacity.value = 0.82 - (depthNorm * 0.15);
+                this.webgpuPointCloudNodes.desatNear.value = this._activePolishProfile?.desatNear ?? 52;
+                this.webgpuPointCloudNodes.desatFar.value = this._activePolishProfile?.desatFar ?? 230;
+            } else if (this.webgpuPointCloudMaterial && this.webgpuPointCloudMaterial.isPointsMaterial) {
+                this.webgpuPointCloudMaterial.opacity = 0.82 - (depthNorm * 0.15);
             }
         }
     }
@@ -826,6 +860,12 @@ export class Tactical3DRenderer {
         if (this.waterSurface?.material?.uniforms?.uDesatFar) {
             this.waterSurface.material.uniforms.uDesatFar.value = this._activePolishProfile.desatFar;
         }
+        if (this.terrainPointCloud?.material?.uniforms?.uDesatNear) {
+            this.terrainPointCloud.material.uniforms.uDesatNear.value = this._activePolishProfile.desatNear;
+        }
+        if (this.terrainPointCloud?.material?.uniforms?.uDesatFar) {
+            this.terrainPointCloud.material.uniforms.uDesatFar.value = this._activePolishProfile.desatFar;
+        }
 
         if (this.ambientUnderwaterLight) {
             this.ambientUnderwaterLight.color.setHex(profile.lighting.ambientColor);
@@ -860,6 +900,10 @@ export class Tactical3DRenderer {
         if (this.webgpuWaterNodes) {
             this.webgpuWaterNodes.desatNear.value = this._activePolishProfile.desatNear;
             this.webgpuWaterNodes.desatFar.value = this._activePolishProfile.desatFar;
+        }
+        if (this.webgpuPointCloudNodes) {
+            this.webgpuPointCloudNodes.desatNear.value = this._activePolishProfile.desatNear;
+            this.webgpuPointCloudNodes.desatFar.value = this._activePolishProfile.desatFar;
         }
     }
 
@@ -1077,8 +1121,19 @@ export class Tactical3DRenderer {
     updateTerrainAroundShip(ownX, ownZ) {
         const sceneOwnPos = this.modelToScenePosition(ownX, ownZ);
         const snap = this._terrainSnapStep;
-        const gridX = Math.round(sceneOwnPos.x / snap) * snap;
-        const gridZ = Math.round(sceneOwnPos.z / snap) * snap;
+        let gridX = this._lastTerrainGridCenter.x;
+        let gridZ = this._lastTerrainGridCenter.z;
+
+        // Hysteresis snapping prevents recenter oscillation near cell boundaries.
+        if (!Number.isFinite(gridX) || !Number.isFinite(gridZ)) {
+            gridX = Math.round(sceneOwnPos.x / snap) * snap;
+            gridZ = Math.round(sceneOwnPos.z / snap) * snap;
+        } else {
+            while (sceneOwnPos.x - gridX > snap) gridX += snap;
+            while (sceneOwnPos.x - gridX < -snap) gridX -= snap;
+            while (sceneOwnPos.z - gridZ > snap) gridZ += snap;
+            while (sceneOwnPos.z - gridZ < -snap) gridZ -= snap;
+        }
 
         const moved = gridX !== this._lastTerrainGridCenter.x || gridZ !== this._lastTerrainGridCenter.z;
         if (moved) {
@@ -1100,22 +1155,30 @@ export class Tactical3DRenderer {
             }
 
             if (this.terrainPointCloud) {
-                this.terrainPointCloud.position.set(gridX, 0, gridZ);
-                const pos = this.terrainPointCloud.geometry.attributes.position;
-                const colors = this.terrainPointCloud.geometry.attributes.color;
+                if (this.terrainPointCloud.isInstancedMesh) {
+                    this.updateTerrainPointCloudInstances(gridX, gridZ);
+                } else {
+                    this.terrainPointCloud.position.set(gridX, 0, gridZ);
+                    const pos = this.terrainPointCloud.geometry.attributes.position;
+                    const colors = this.terrainPointCloud.geometry.attributes.color;
 
-                for (let i = 0; i < pos.count; i++) {
-                    const sceneX = gridX + pos.getX(i);
-                    const sceneZ = gridZ + pos.getZ(i);
-                    const terrainHeight = this.getTerrainHeightAtScene(sceneX, sceneZ);
-                    pos.setY(i, terrainHeight);
+                    for (let i = 0; i < pos.count; i++) {
+                        const sceneX = gridX + pos.getX(i);
+                        const sceneZ = gridZ + pos.getZ(i);
+                        const terrainHeight = this.getTerrainHeightAtScene(sceneX, sceneZ);
+                        pos.setY(i, terrainHeight);
 
-                    const t = clamp((terrainHeight + 24.0) / 40.0, 0, 1);
-                    colors.setXYZ(i, 0.18 + (0.82 * t), 0.85 + (0.15 * t), 0.88 + (0.12 * t));
+                        if (colors) {
+                            const t = clamp((terrainHeight + 24.0) / 40.0, 0, 1);
+                            colors.setXYZ(i, 0.18 + (0.82 * t), 0.85 + (0.15 * t), 0.88 + (0.12 * t));
+                        }
+                    }
+
+                    pos.needsUpdate = true;
+                    if (colors) {
+                        colors.needsUpdate = true;
+                    }
                 }
-
-                pos.needsUpdate = true;
-                colors.needsUpdate = true;
             }
 
             this.updateTerrainGridLines(gridX, gridZ);
@@ -1365,6 +1428,96 @@ export class Tactical3DRenderer {
         return material;
     }
 
+    createWebGPUPointCloudNodeMaterial() {
+        const MeshBasicNodeMaterial = this.webgpuModule?.MeshBasicNodeMaterial;
+        const TSL = this.webgpuModule?.TSL;
+        if (!MeshBasicNodeMaterial || !TSL) return null;
+
+        const material = new MeshBasicNodeMaterial();
+        material.transparent = true;
+        material.depthWrite = false;
+        material.blending = THREE.AdditiveBlending;
+        material.alphaToCoverage = true;
+        const uTime = TSL.uniform(0);
+        const uDesatNear = TSL.uniform(this._activePolishProfile?.desatNear ?? 52);
+        const uDesatFar = TSL.uniform(this._activePolishProfile?.desatFar ?? 230);
+        const uNearDepth = TSL.uniform(20);
+        const uFarDepth = TSL.uniform(260);
+        const uOpacity = TSL.uniform(0.88);
+
+        const worldPos = TSL.positionWorld;
+        const viewDepth = TSL.positionView.z.negate();
+        const depthMix = TSL.smoothstep(uNearDepth, uFarDepth, viewDepth);
+        const wave = TSL.sin(worldPos.x.mul(0.08).add(worldPos.z.mul(0.05)).add(uTime.mul(0.9)));
+        const pulse = wave.mul(0.08).add(0.92);
+        const uv = TSL.uv().mul(2).sub(TSL.vec2(1));
+        const radial = uv.dot(uv);
+        const edgeMask = TSL.float(1).sub(TSL.smoothstep(0.22, 1.0, radial));
+        const heightMix = TSL.clamp(worldPos.y.add(24).div(40), 0, 1);
+        const baseColor = TSL.mix(TSL.vec3(0.18, 0.85, 0.88), TSL.vec3(1.0, 1.0, 1.0), heightMix);
+        const desat = TSL.smoothstep(uDesatNear, uDesatFar, viewDepth).mul(0.55);
+        const luma = TSL.luminance(baseColor);
+        const finalColor = TSL.mix(baseColor, TSL.vec3(luma), desat);
+        const finalOpacity = TSL.mix(TSL.float(1.0), TSL.float(0.52), depthMix)
+            .mul(uOpacity)
+            .mul(edgeMask)
+            .mul(pulse);
+
+        material.colorNode = finalColor;
+        material.opacityNode = finalOpacity;
+
+        this.webgpuPointCloudNodes = {
+            time: uTime,
+            desatNear: uDesatNear,
+            desatFar: uDesatFar,
+            nearDepth: uNearDepth,
+            farDepth: uFarDepth,
+            opacity: uOpacity
+        };
+
+        return material;
+    }
+
+    updateTerrainPointCloudInstances(gridX, gridZ) {
+        if (!this.terrainPointCloud || !this.terrainPointCloud.isInstancedMesh || !this._terrainPointInstanceLocalXZ) return;
+
+        this.terrainPointCloud.position.set(gridX, 0, gridZ);
+
+        const localXZ = this._terrainPointInstanceLocalXZ;
+        const count = this._terrainPointInstanceCount;
+        const matrix = this._tmpInstanceMatrix;
+        const pos = this._tmpInstancePos;
+        const quat = this._tmpInstanceQuat;
+        const scale = this._tmpInstanceScale;
+        const color = this._tmpInstanceColor;
+
+        quat.identity();
+
+        for (let i = 0; i < count; i++) {
+            const localX = localXZ[i * 2];
+            const localZ = localXZ[i * 2 + 1];
+            const sceneX = gridX + localX;
+            const sceneZ = gridZ + localZ;
+            const terrainHeight = this.getTerrainHeightAtScene(sceneX, sceneZ);
+            const t = clamp((terrainHeight + 24.0) / 40.0, 0, 1);
+            const spriteScale = 1.1 + (0.45 * t);
+
+            pos.set(localX, terrainHeight, localZ);
+            scale.set(spriteScale, spriteScale, spriteScale);
+            matrix.compose(pos, quat, scale);
+            this.terrainPointCloud.setMatrixAt(i, matrix);
+
+            color.setRGB(0.18 + (0.82 * t), 0.85 + (0.15 * t), 0.88 + (0.12 * t));
+            this.terrainPointCloud.setColorAt(i, color);
+        }
+
+        this.terrainPointCloud.instanceMatrix.needsUpdate = true;
+        if (this.terrainPointCloud.instanceColor) {
+            this.terrainPointCloud.instanceColor.setUsage(THREE.DynamicDrawUsage);
+            this.terrainPointCloud.instanceColor.needsUpdate = true;
+        }
+    }
+
     setupTerrain() {
         const geometry = new THREE.PlaneGeometry(300, 300, 60, 60);
         geometry.rotateX(-Math.PI / 2);
@@ -1483,34 +1636,112 @@ export class Tactical3DRenderer {
         this.terrain = new THREE.Mesh(geometry, material);
         this.scene.add(this.terrain);
 
-        const pointGeometry = new THREE.PlaneGeometry(300, 300, 60, 60);
-        pointGeometry.rotateX(-Math.PI / 2);
-        const pointPos = pointGeometry.attributes.position;
-        const pointColors = new Float32Array(pointPos.count * 3);
-        for (let i = 0; i < pointPos.count; i++) {
-            const sceneX = pointPos.getX(i);
-            const sceneZ = pointPos.getZ(i);
-            const terrainHeight = this.getTerrainHeightAtScene(sceneX, sceneZ);
-            pointPos.setY(i, terrainHeight);
+        const webgpuPointMaterial = this.rendererBackend === 'webgpu' ? this.createWebGPUPointCloudNodeMaterial() : null;
+        if (webgpuPointMaterial) {
+            const sideVertexCount = this._terrainPointSegments + 1;
+            const pointCount = sideVertexCount * sideVertexCount;
+            const billboardGeometry = new THREE.PlaneGeometry(1, 1, 1, 1);
+            billboardGeometry.rotateX(-Math.PI / 2);
+            const pointMesh = new THREE.InstancedMesh(billboardGeometry, webgpuPointMaterial, pointCount);
+            pointMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+            pointMesh.frustumCulled = false;
+            pointMesh.visible = false;
+            this.webgpuPointCloudMaterial = webgpuPointMaterial;
+            this.terrainPointCloud = pointMesh;
+            this.scene.add(this.terrainPointCloud);
 
-            const t = clamp((terrainHeight + 24.0) / 40.0, 0, 1);
-            pointColors[i * 3] = 0.18 + (0.82 * t);
-            pointColors[i * 3 + 1] = 0.85 + (0.15 * t);
-            pointColors[i * 3 + 2] = 0.88 + (0.12 * t);
+            this._terrainPointInstanceCount = pointCount;
+            this._terrainPointInstanceLocalXZ = new Float32Array(pointCount * 2);
+            const step = this._terrainSize / this._terrainPointSegments;
+            const half = this._terrainSize / 2;
+            let index = 0;
+            for (let x = 0; x <= this._terrainPointSegments; x++) {
+                const localX = -half + (x * step);
+                for (let z = 0; z <= this._terrainPointSegments; z++) {
+                    const localZ = -half + (z * step);
+                    this._terrainPointInstanceLocalXZ[index * 2] = localX;
+                    this._terrainPointInstanceLocalXZ[index * 2 + 1] = localZ;
+                    index++;
+                }
+            }
+            this.updateTerrainPointCloudInstances(0, 0);
+        } else {
+            const pointGeometry = new THREE.PlaneGeometry(300, 300, this._terrainPointSegments, this._terrainPointSegments);
+            pointGeometry.rotateX(-Math.PI / 2);
+            const pointPos = pointGeometry.attributes.position;
+            for (let i = 0; i < pointPos.count; i++) {
+                const sceneX = pointPos.getX(i);
+                const sceneZ = pointPos.getZ(i);
+                const terrainHeight = this.getTerrainHeightAtScene(sceneX, sceneZ);
+                pointPos.setY(i, terrainHeight);
+            }
+            const pointMaterial = new THREE.ShaderMaterial({
+                transparent: true,
+                depthWrite: false,
+                blending: THREE.AdditiveBlending,
+                uniforms: {
+                    uTime: { value: 0 },
+                    uDesatNear: { value: this._activePolishProfile?.desatNear ?? 52 },
+                    uDesatFar: { value: this._activePolishProfile?.desatFar ?? 230 },
+                    uNearSize: { value: 6.2 },
+                    uFarSize: { value: 2.1 },
+                    uNearDepth: { value: 20.0 },
+                    uFarDepth: { value: 260.0 },
+                    uOpacity: { value: 0.88 }
+                },
+                vertexShader: `
+                    varying float vDepth;
+                    varying float vHeightMix;
+                    varying float vDesat;
+                    uniform float uTime;
+                    uniform float uDesatNear;
+                    uniform float uDesatFar;
+                    uniform float uNearSize;
+                    uniform float uFarSize;
+                    uniform float uNearDepth;
+                    uniform float uFarDepth;
+
+                    void main() {
+                        vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+                        vDepth = -mvPosition.z;
+                        float depthMix = smoothstep(uNearDepth, uFarDepth, vDepth);
+                        float wave = sin((position.x * 0.08) + (position.z * 0.05) + (uTime * 0.9));
+                        float pulse = 0.92 + (wave * 0.08);
+                        gl_PointSize = mix(uNearSize, uFarSize, depthMix) * pulse;
+                        gl_Position = projectionMatrix * mvPosition;
+
+                        vHeightMix = clamp((position.y + 24.0) / 40.0, 0.0, 1.0);
+                        vDesat = smoothstep(uDesatNear, uDesatFar, vDepth) * 0.55;
+                    }`,
+                fragmentShader: `
+                    varying float vDepth;
+                    varying float vHeightMix;
+                    varying float vDesat;
+                    uniform float uNearDepth;
+                    uniform float uFarDepth;
+                    uniform float uOpacity;
+
+                    void main() {
+                        vec2 uv = (gl_PointCoord * 2.0) - 1.0;
+                        float radial = dot(uv, uv);
+                        if (radial > 1.0) discard;
+
+                        float depthMix = smoothstep(uNearDepth, uFarDepth, vDepth);
+                        float soft = 1.0 - smoothstep(0.15, 1.0, radial);
+                        vec3 baseColor = mix(vec3(0.18, 0.85, 0.88), vec3(1.0), vHeightMix);
+                        float luma = dot(baseColor, vec3(0.2126, 0.7152, 0.0722));
+                        vec3 finalColor = mix(baseColor, vec3(luma), vDesat);
+                        float alpha = soft * mix(1.0, 0.52, depthMix) * uOpacity;
+
+                        gl_FragColor = vec4(finalColor, alpha);
+                    }`
+            });
+            this.terrainPointCloud = new THREE.Points(pointGeometry, pointMaterial);
+            this.terrainPointCloud.visible = false;
+            this.scene.add(this.terrainPointCloud);
+            this._terrainPointInstanceLocalXZ = null;
+            this._terrainPointInstanceCount = 0;
         }
-        pointGeometry.setAttribute('color', new THREE.Float32BufferAttribute(pointColors, 3));
-        const pointMaterial = new THREE.PointsMaterial({
-            size: 0.95,
-            sizeAttenuation: true,
-            vertexColors: true,
-            transparent: true,
-            opacity: 0.9,
-            blending: THREE.AdditiveBlending,
-            depthWrite: false
-        });
-        this.terrainPointCloud = new THREE.Points(pointGeometry, pointMaterial);
-        this.terrainPointCloud.visible = false;
-        this.scene.add(this.terrainPointCloud);
 
         const gridMaterial = new THREE.LineBasicMaterial({
             color: 0x0f5f5f,
