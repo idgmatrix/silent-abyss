@@ -76,7 +76,7 @@ export class UIManager {
             'throttle-astern-btn', 'throttle-ahead-btn', 'throttle-stop-btn', 'rpm-slider',
             'btr-bearing-reference-select', 'terrain-point-cloud-toggle', 'atmosphere-preset-select',
             'snap-to-contact-2d-toggle', 'compare-prediction-2d-toggle',
-            'enhanced-2d-visuals-toggle', 'visual-mode-select'
+            'enhanced-2d-visuals-toggle', 'visual-mode-select', 'terrain-3d-contour-select'
         ];
 
         ids.forEach(id => {
@@ -182,6 +182,15 @@ export class UIManager {
                 this.orch.tacticalView.setVisualMode(mode);
                 this.orch.sonarVisuals.setVisualMode(mode);
             };
+        }
+
+        const terrain3DContourSelect = this.getEl('terrain-3d-contour-select');
+        if (terrain3DContourSelect) {
+            terrain3DContourSelect.value = this.orch.tacticalView.terrain3DContourStyle || 'shader-bands';
+            terrain3DContourSelect.onchange = (e) => {
+                this.orch.tacticalView.setTerrain3DContourStyle(e.target.value);
+            };
+            this.orch.tacticalView.setTerrain3DContourStyle(terrain3DContourSelect.value);
         }
     }
 

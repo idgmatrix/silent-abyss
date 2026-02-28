@@ -33,6 +33,7 @@ export class TacticalView {
         this.atmospherePreset = this.readAtmospherePreset();
         this.enhanced2DVisuals = this.readEnhanced2DVisualsFlag();
         this.terrain2DVisualization = this.readTerrain2DVisualizationMode();
+        this.terrain3DContourStyle = this.readTerrain3DContourStyle();
         this.visualMode = this.readVisualModePreset();
         this.snapToContactEnabled = this.readSnapToContactFlag();
         this.predictionCompareEnabled = this.readPredictionCompareFlag();
@@ -97,7 +98,9 @@ export class TacticalView {
         this.renderer2D.setScanState(this.scanRadius, this.scanActive);
         this.renderer3D.setDebugCoordinatesEnabled(this.debugCoordinatesEnabled);
         this.renderer3D.setTerrainRenderStyle(this.terrainRenderStyle);
+        this.renderer3D.setTerrainContourStyle(this.terrain3DContourStyle);
         this.renderer3D.setAtmospherePreset(this.atmospherePreset);
+        this.renderer3D.setVisualMode(this.visualMode);
         this.renderer2D.setDebugCoordinatesEnabled(this.debugCoordinatesEnabled);
         this.renderer2D.setEnhancedVisualsEnabled(this.enhanced2DVisuals);
         this.renderer2D.setTerrainVisualizationMode(this.terrain2DVisualization);
@@ -214,7 +217,7 @@ export class TacticalView {
     }
 
     readTerrain2DVisualizationMode() {
-        if (typeof window === 'undefined') return 'legacy-contours';
+        if (typeof window === 'undefined') return 'shader-bands';
         try {
             const params = new URLSearchParams(window.location.search || '');
             const fromQuery = params.get('terrain2d');
@@ -224,7 +227,21 @@ export class TacticalView {
         } catch {
             // Ignore query/storage access failures.
         }
-        return 'legacy-contours';
+        return 'shader-bands';
+    }
+
+    readTerrain3DContourStyle() {
+        if (typeof window === 'undefined') return 'shader-bands';
+        try {
+            const params = new URLSearchParams(window.location.search || '');
+            const fromQuery = params.get('terrain3dContours');
+            if (fromQuery === 'legacy-lines' || fromQuery === 'shader-bands') return fromQuery;
+            const fromStorage = window.localStorage.getItem('silentAbyss.terrain3DContours');
+            if (fromStorage === 'legacy-lines' || fromStorage === 'shader-bands') return fromStorage;
+        } catch {
+            // Ignore query/storage access failures.
+        }
+        return 'shader-bands';
     }
 
     readVisualModePreset() {
@@ -470,7 +487,7 @@ export class TacticalView {
     }
 
     setTerrain2DVisualizationMode(mode) {
-        this.terrain2DVisualization = mode === 'shader-bands' ? 'shader-bands' : 'legacy-contours';
+        this.terrain2DVisualization = mode === 'legacy-contours' ? 'legacy-contours' : 'shader-bands';
         this.renderer2D.setTerrainVisualizationMode(this.terrain2DVisualization);
         if (typeof window !== 'undefined') {
             try {
@@ -481,9 +498,22 @@ export class TacticalView {
         }
     }
 
+    setTerrain3DContourStyle(style) {
+        this.terrain3DContourStyle = style === 'legacy-lines' ? 'legacy-lines' : 'shader-bands';
+        this.renderer3D.setTerrainContourStyle(this.terrain3DContourStyle);
+        if (typeof window !== 'undefined') {
+            try {
+                window.localStorage.setItem('silentAbyss.terrain3DContours', this.terrain3DContourStyle);
+            } catch {
+                // Ignore local storage failures.
+            }
+        }
+    }
+
     setVisualMode(mode) {
         this.visualMode = resolveVisualMode(mode);
         this.renderer2D.setVisualMode(this.visualMode);
+        this.renderer3D.setVisualMode(this.visualMode);
         if (typeof window !== 'undefined') {
             try {
                 window.localStorage.setItem('silentAbyss.visualMode', this.visualMode);

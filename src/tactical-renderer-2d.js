@@ -4,7 +4,7 @@ import { shipLocalToWorld, worldToShipLocal } from './coordinate-system.js';
 import { RENDER_STYLE_TOKENS, resolveVisualMode, VISUAL_MODES } from './render-style-tokens.js';
 
 const TERRAIN_ISOLINE_GENERATION_ENABLED = true;
-const TERRAIN_ISOLINE_DRAWING_ENABLED = false;
+const TERRAIN_ISOLINE_DRAWING_ENABLED = true;
 const TERRAIN_VISUALIZATION_MODES = {
     LEGACY: 'legacy-contours',
     SHADER_BANDS: 'shader-bands'
@@ -24,13 +24,12 @@ function readContourProfilingFlag() {
 }
 
 function resolveTerrainVisualizationMode(mode) {
-    return mode === TERRAIN_VISUALIZATION_MODES.SHADER_BANDS
-        ? TERRAIN_VISUALIZATION_MODES.SHADER_BANDS
-        : TERRAIN_VISUALIZATION_MODES.LEGACY;
+    if (mode === TERRAIN_VISUALIZATION_MODES.LEGACY) return TERRAIN_VISUALIZATION_MODES.LEGACY;
+    return TERRAIN_VISUALIZATION_MODES.SHADER_BANDS;
 }
 
 function readTerrainVisualizationMode() {
-    if (typeof window === 'undefined') return TERRAIN_VISUALIZATION_MODES.LEGACY;
+    if (typeof window === 'undefined') return TERRAIN_VISUALIZATION_MODES.SHADER_BANDS;
     try {
         const params = new URLSearchParams(window.location.search || '');
         const fromQuery = params.get('terrain2d');
@@ -40,7 +39,7 @@ function readTerrainVisualizationMode() {
         const fromStorage = window.localStorage.getItem('silentAbyss.terrain2dVisualization');
         return resolveTerrainVisualizationMode(fromStorage);
     } catch {
-        return TERRAIN_VISUALIZATION_MODES.LEGACY;
+        return TERRAIN_VISUALIZATION_MODES.SHADER_BANDS;
     }
 }
 
@@ -653,6 +652,10 @@ export class Tactical2DRenderer {
         const uTileCenterX = TSL.uniform(0);
         const uTileCenterZ = TSL.uniform(0);
         const uTileSpan = TSL.uniform(256);
+        const uBgTop = TSL.uniform(new THREE.Color(0x04131a));
+        const uBgBottom = TSL.uniform(new THREE.Color(0x01080d));
+        const uContourMajor = TSL.uniform(new THREE.Color(0x00b6c2));
+        const uContourMinor = TSL.uniform(new THREE.Color(0x0096a0));
         const uMatchDebug = TSL.uniform(0);
 
         const uv = TSL.uv();
@@ -684,9 +687,7 @@ export class Tactical2DRenderer {
         const depth = TSL.max(TSL.float(1), height.negate().sub(2));
         const depthNorm = TSL.clamp(depth.div(220), 0, 1);
 
-        const shallow = TSL.vec3(0.06, 0.28, 0.34);
-        const deep = TSL.vec3(0.01, 0.05, 0.1);
-        let color = TSL.mix(shallow, deep, depthNorm);
+        let color = TSL.mix(uBgTop, uBgBottom, depthNorm.mul(0.88).add(0.08));
 
         const minorPhase = TSL.fract(height.add(80).div(4));
         const majorPhase = TSL.fract(height.add(80).div(8));
@@ -694,18 +695,22 @@ export class Tactical2DRenderer {
         const majorDist = TSL.min(majorPhase, TSL.float(1).sub(majorPhase));
         const minorLine = TSL.float(1).sub(TSL.smoothstep(0.0, 0.018, minorDist));
         const majorLine = TSL.float(1).sub(TSL.smoothstep(0.0, 0.026, majorDist));
-        color = TSL.mix(color, TSL.vec3(0.12, 0.5, 0.56), minorLine.mul(0.28));
-        color = TSL.mix(color, TSL.vec3(0.2, 0.72, 0.79), majorLine.mul(0.6));
+        color = TSL.mix(color, uContourMinor, minorLine.mul(0.34));
+        color = TSL.mix(color, uContourMajor, majorLine.mul(0.52));
 
         // High-contrast terrain matching mode for visual verification.
         const band8 = TSL.fract(height.add(80).div(8));
         const band4 = TSL.fract(height.add(80).div(4));
         const parity = TSL.smoothstep(0.48, 0.52, band8);
-        let debugColor = TSL.mix(TSL.vec3(0.08, 0.24, 0.36), TSL.vec3(0.42, 0.68, 0.84), parity);
+        let debugColor = TSL.mix(
+            TSL.mix(uBgTop, uContourMinor, 0.36),
+            TSL.mix(uBgBottom, uContourMajor, 0.44),
+            parity
+        );
         const debugMinor = TSL.float(1).sub(TSL.smoothstep(0.0, 0.03, TSL.min(band4, TSL.float(1).sub(band4))));
         const debugMajor = TSL.float(1).sub(TSL.smoothstep(0.0, 0.045, TSL.min(band8, TSL.float(1).sub(band8))));
-        debugColor = TSL.mix(debugColor, TSL.vec3(0.92, 0.98, 1.0), debugMinor.mul(0.45));
-        debugColor = TSL.mix(debugColor, TSL.vec3(1.0, 1.0, 0.86), debugMajor.mul(0.92));
+        debugColor = TSL.mix(debugColor, uContourMinor, debugMinor.mul(0.62));
+        debugColor = TSL.mix(debugColor, uContourMajor, debugMajor.mul(0.84));
         color = TSL.mix(color, debugColor, uMatchDebug);
 
         material.colorNode = color;
@@ -721,6 +726,10 @@ export class Tactical2DRenderer {
             tileCenterX: uTileCenterX,
             tileCenterZ: uTileCenterZ,
             tileSpan: uTileSpan,
+            bgTop: uBgTop,
+            bgBottom: uBgBottom,
+            contourMajor: uContourMajor,
+            contourMinor: uContourMinor,
             matchDebug: uMatchDebug
         };
         return material;
@@ -754,8 +763,17 @@ export class Tactical2DRenderer {
         uniforms.tileCenterX.value = Number.isFinite(this.terrainHeightTileCenter.x) ? this.terrainHeightTileCenter.x : 0;
         uniforms.tileCenterZ.value = Number.isFinite(this.terrainHeightTileCenter.z) ? this.terrainHeightTileCenter.z : 0;
         uniforms.tileSpan.value = Number.isFinite(this.terrainHeightTileSpan) ? Math.max(1, this.terrainHeightTileSpan) : 1;
+        this.applyTerrainStyleUniforms(uniforms, renderCtx.style);
         uniforms.matchDebug.value = this.debugCoordinatesEnabled ? 1 : 0;
         this.renderTerrainLayer();
+    }
+
+    applyTerrainStyleUniforms(uniforms, style) {
+        if (!uniforms || !style) return;
+        if (uniforms.bgTop?.value && style.backgroundTop) uniforms.bgTop.value.set(style.backgroundTop);
+        if (uniforms.bgBottom?.value && style.backgroundBottom) uniforms.bgBottom.value.set(style.backgroundBottom);
+        if (uniforms.contourMajor?.value && style.contourMajor) uniforms.contourMajor.value.setStyle(style.contourMajor);
+        if (uniforms.contourMinor?.value && style.contourMinor) uniforms.contourMinor.value.setStyle(style.contourMinor);
     }
 
     ensureTerrainHeightTexture() {

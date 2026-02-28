@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { CavitationParticles } from './effects/cavitation-particles.js';
 import { shipLocalToWorld } from './coordinate-system.js';
+import { RENDER_STYLE_TOKENS, resolveVisualMode, VISUAL_MODES } from './render-style-tokens.js';
 
 function clamp(value, min, max) {
     return Math.max(min, Math.min(max, value));
@@ -42,6 +43,11 @@ function readTerrainProfilingFlag() {
         return false;
     }
 }
+
+const TERRAIN_CONTOUR_STYLES = {
+    SHADER_BANDS: 'shader-bands',
+    LEGACY_LINES: 'legacy-lines'
+};
 
 export class Tactical3DRenderer {
     constructor(getTerrainHeight) {
@@ -266,6 +272,8 @@ export class Tactical3DRenderer {
 
         this.debugCoordinatesEnabled = false;
         this.terrainRenderStyle = 'default';
+        this.terrainContourStyle = TERRAIN_CONTOUR_STYLES.SHADER_BANDS;
+        this.visualMode = VISUAL_MODES.STEALTH;
         this._scanRadius = 0;
         this._scanActive = false;
     }
@@ -472,6 +480,27 @@ export class Tactical3DRenderer {
         this.applyTerrainRenderStyle();
     }
 
+    setTerrainContourStyle(style) {
+        this.terrainContourStyle = style === TERRAIN_CONTOUR_STYLES.LEGACY_LINES
+            ? TERRAIN_CONTOUR_STYLES.LEGACY_LINES
+            : TERRAIN_CONTOUR_STYLES.SHADER_BANDS;
+        if (this.terrainContourStyle === TERRAIN_CONTOUR_STYLES.LEGACY_LINES) {
+            if (Number.isFinite(this._lastTerrainGridCenter.x) && Number.isFinite(this._lastTerrainGridCenter.z)) {
+                this._pendingTerrainDecorUpdate = { x: this._lastTerrainGridCenter.x, z: this._lastTerrainGridCenter.z };
+            } else {
+                this._lastTerrainGridCenter.x = Number.NaN;
+                this._lastTerrainGridCenter.z = Number.NaN;
+            }
+        }
+        this.applyTerrainRenderStyle();
+        this.applyTerrainTheme();
+    }
+
+    setVisualMode(mode) {
+        this.visualMode = resolveVisualMode(mode);
+        this.applyTerrainTheme();
+    }
+
     setAtmospherePreset(presetName) {
         const preset = typeof presetName === 'string' ? presetName.toLowerCase() : '';
         this.atmospherePreset = this._atmosphereProfiles[preset] ? preset : 'balanced';
@@ -484,14 +513,47 @@ export class Tactical3DRenderer {
 
     applyTerrainRenderStyle() {
         const usePointCloud = this.terrainRenderStyle === 'point-cloud';
+        const useLegacyLines = this.terrainContourStyle === TERRAIN_CONTOUR_STYLES.LEGACY_LINES;
 
         if (this.terrain) this.terrain.visible = !usePointCloud;
         if (this.terrainGridLines) this.terrainGridLines.visible = !usePointCloud;
-        if (this.terrainContours) this.terrainContours.visible = !usePointCloud;
+        if (this.terrainContours) this.terrainContours.visible = !usePointCloud && useLegacyLines;
         if (this.waterSurface) this.waterSurface.visible = !usePointCloud;
         if (this.terrainPointCloud) this.terrainPointCloud.visible = usePointCloud;
         if (this.scanRingFx) {
             this.scanRingFx.visible = this._scanActive && !usePointCloud;
+        }
+    }
+
+    applyTerrainTheme() {
+        const style = RENDER_STYLE_TOKENS.tactical2d.modes[resolveVisualMode(this.visualMode)]
+            || RENDER_STYLE_TOKENS.tactical2d.modes[VISUAL_MODES.STEALTH];
+
+        if (this.terrainContoursMajor?.material?.color && style.contourMajor) {
+            this.terrainContoursMajor.material.color.setStyle(style.contourMajor);
+        }
+        if (this.terrainContoursMinor?.material?.color && style.contourMinor) {
+            this.terrainContoursMinor.material.color.setStyle(style.contourMinor);
+        }
+
+        if (this.webgpuTerrainNodes) {
+            this.webgpuTerrainNodes.themeTop.value.set(style.backgroundTop);
+            this.webgpuTerrainNodes.themeBottom.value.set(style.backgroundBottom);
+            this.webgpuTerrainNodes.contourMajor.value.setStyle(style.contourMajor);
+            this.webgpuTerrainNodes.contourMinor.value.setStyle(style.contourMinor);
+            this.webgpuTerrainNodes.contourStyle.value =
+                this.terrainContourStyle === TERRAIN_CONTOUR_STYLES.SHADER_BANDS ? 1 : 0;
+        }
+        if (this.terrain?.material?.uniforms) {
+            const uniforms = this.terrain.material.uniforms;
+            if (uniforms.uThemeTop) uniforms.uThemeTop.value.set(style.backgroundTop);
+            if (uniforms.uThemeBottom) uniforms.uThemeBottom.value.set(style.backgroundBottom);
+            if (uniforms.uContourMajor) uniforms.uContourMajor.value.setStyle(style.contourMajor);
+            if (uniforms.uContourMinor) uniforms.uContourMinor.value.setStyle(style.contourMinor);
+            if (uniforms.uContourStyle) {
+                uniforms.uContourStyle.value =
+                    this.terrainContourStyle === TERRAIN_CONTOUR_STYLES.SHADER_BANDS ? 1 : 0;
+            }
         }
     }
 
@@ -857,6 +919,8 @@ export class Tactical3DRenderer {
                 this.webgpuTerrainNodes.time.value = this._elapsedTime;
                 this.webgpuTerrainNodes.opacity.value = 0.52 - (depthNorm * 0.12);
                 this.webgpuTerrainNodes.matchDebug.value = this.debugCoordinatesEnabled ? 1 : 0;
+                this.webgpuTerrainNodes.contourStyle.value =
+                    this.terrainContourStyle === TERRAIN_CONTOUR_STYLES.SHADER_BANDS ? 1 : 0;
             } else {
                 this.updateCausticTexture(this._elapsedTime * (this._activePolishProfile?.causticSpeed ?? 1));
                 if (this.webgpuTerrainMaterial && this.webgpuTerrainMaterial.isMeshStandardMaterial) {
@@ -892,6 +956,10 @@ export class Tactical3DRenderer {
         }
         if (this.terrain?.material?.uniforms?.uMatchDebug) {
             this.terrain.material.uniforms.uMatchDebug.value = this.debugCoordinatesEnabled ? 1 : 0;
+        }
+        if (this.terrain?.material?.uniforms?.uContourStyle) {
+            this.terrain.material.uniforms.uContourStyle.value =
+                this.terrainContourStyle === TERRAIN_CONTOUR_STYLES.SHADER_BANDS ? 1 : 0;
         }
     }
 
@@ -1292,12 +1360,16 @@ export class Tactical3DRenderer {
                 this.updateTerrainGridLines(gridX, gridZ);
             }
 
-            if (!usePointCloud && this._terrainRecenterCount % 3 === 0) {
+            if (!usePointCloud
+                && this.terrainContourStyle === TERRAIN_CONTOUR_STYLES.LEGACY_LINES
+                && this._terrainRecenterCount % 3 === 0) {
                 this._pendingTerrainDecorUpdate = { x: gridX, z: gridZ };
             }
         }
 
-        if (!usePointCloud && this._pendingTerrainDecorUpdate) {
+        if (!usePointCloud
+            && this.terrainContourStyle === TERRAIN_CONTOUR_STYLES.LEGACY_LINES
+            && this._pendingTerrainDecorUpdate) {
             const pending = this._pendingTerrainDecorUpdate;
             this.updateTerrainContours(pending.x, pending.z);
             this._pendingTerrainDecorUpdate = null;
@@ -1466,6 +1538,11 @@ export class Tactical3DRenderer {
         const uDesatNear = TSL.uniform(this._activePolishProfile?.desatNear ?? 52);
         const uDesatFar = TSL.uniform(this._activePolishProfile?.desatFar ?? 230);
         const uOpacity = TSL.uniform(0.44);
+        const uThemeTop = TSL.uniform(new THREE.Color(0x04131a));
+        const uThemeBottom = TSL.uniform(new THREE.Color(0x01080d));
+        const uContourMajor = TSL.uniform(new THREE.Color(0x00b6c2));
+        const uContourMinor = TSL.uniform(new THREE.Color(0x0096a0));
+        const uContourStyle = TSL.uniform(1);
         const uMatchDebug = TSL.uniform(0);
 
         const worldPos = TSL.positionWorld;
@@ -1477,20 +1554,34 @@ export class Tactical3DRenderer {
         const causticPattern = TSL.max(TSL.float(0), cA.add(cB).add(cC).mul(1 / 3));
         const caustic = TSL.pow(causticPattern, 2.2).mul(uCausticIntensity);
 
-        const baseColor = TSL.color(0x1c656d);
+        const heightNorm = TSL.clamp(worldPos.y.add(24).div(40), 0, 1);
+        const baseColor = TSL.mix(uThemeTop, uThemeBottom, heightNorm.mul(0.88).add(0.08));
         const depthDesat = TSL.smoothstep(uDesatNear, uDesatFar, viewDepth).mul(0.58);
         const baseLuma = TSL.luminance(baseColor);
         const depthColor = TSL.mix(baseColor, TSL.vec3(baseLuma), depthDesat);
         const causticColor = TSL.vec3(0.16, 0.4, 0.45).mul(caustic);
+        const minorPhase = TSL.fract(worldPos.y.add(80).div(4));
+        const majorPhase = TSL.fract(worldPos.y.add(80).div(8));
+        const minorDist = TSL.min(minorPhase, TSL.float(1).sub(minorPhase));
+        const majorDist = TSL.min(majorPhase, TSL.float(1).sub(majorPhase));
+        const minorLine = TSL.float(1).sub(TSL.smoothstep(0.0, 0.018, minorDist));
+        const majorLine = TSL.float(1).sub(TSL.smoothstep(0.0, 0.026, majorDist));
+        let contourColor = TSL.mix(depthColor, uContourMinor, minorLine.mul(0.34));
+        contourColor = TSL.mix(contourColor, uContourMajor, majorLine.mul(0.52));
+        const themedColor = TSL.mix(depthColor, contourColor, uContourStyle);
         const band8 = TSL.fract(worldPos.y.add(80).div(8));
         const band4 = TSL.fract(worldPos.y.add(80).div(4));
         const parity = TSL.smoothstep(0.48, 0.52, band8);
-        let debugColor = TSL.mix(TSL.vec3(0.08, 0.24, 0.36), TSL.vec3(0.42, 0.68, 0.84), parity);
+        let debugColor = TSL.mix(
+            TSL.mix(uThemeTop, uContourMinor, 0.36),
+            TSL.mix(uThemeBottom, uContourMajor, 0.44),
+            parity
+        );
         const debugMinor = TSL.float(1).sub(TSL.smoothstep(0.0, 0.03, TSL.min(band4, TSL.float(1).sub(band4))));
         const debugMajor = TSL.float(1).sub(TSL.smoothstep(0.0, 0.045, TSL.min(band8, TSL.float(1).sub(band8))));
-        debugColor = TSL.mix(debugColor, TSL.vec3(0.92, 0.98, 1.0), debugMinor.mul(0.45));
-        debugColor = TSL.mix(debugColor, TSL.vec3(1.0, 1.0, 0.86), debugMajor.mul(0.92));
-        const finalColor = TSL.mix(depthColor, debugColor, uMatchDebug);
+        debugColor = TSL.mix(debugColor, uContourMinor, debugMinor.mul(0.62));
+        debugColor = TSL.mix(debugColor, uContourMajor, debugMajor.mul(0.84));
+        const finalColor = TSL.mix(themedColor, debugColor, uMatchDebug);
 
         material.colorNode = finalColor;
         material.emissiveNode = TSL.mix(causticColor, TSL.vec3(0.0), uMatchDebug.mul(0.95));
@@ -1504,6 +1595,11 @@ export class Tactical3DRenderer {
             desatNear: uDesatNear,
             desatFar: uDesatFar,
             opacity: uOpacity,
+            themeTop: uThemeTop,
+            themeBottom: uThemeBottom,
+            contourMajor: uContourMajor,
+            contourMinor: uContourMinor,
+            contourStyle: uContourStyle,
             matchDebug: uMatchDebug
         };
 
@@ -1654,7 +1750,12 @@ export class Tactical3DRenderer {
                     uColor: { value: new THREE.Color(0x0d5f66) },
                     uActive: { value: 0.0 },
                     uTime: { value: 0 },
+                    uContourStyle: { value: 1.0 },
                     uMatchDebug: { value: 0.0 },
+                    uThemeTop: { value: new THREE.Color(0x04131a) },
+                    uThemeBottom: { value: new THREE.Color(0x01080d) },
+                    uContourMajor: { value: new THREE.Color(0x00b6c2) },
+                    uContourMinor: { value: new THREE.Color(0x0096a0) },
                     uFogColor: { value: this.fogColorShallow.clone() },
                     uFogDensity: { value: this.baseFogDensity },
                     uLightDirection: { value: new THREE.Vector3(-0.34, -1.0, 0.28).normalize() },
@@ -1687,7 +1788,12 @@ export class Tactical3DRenderer {
                 uniform vec3 uColor;
                 uniform float uActive;
                 uniform float uTime;
+                uniform float uContourStyle;
                 uniform float uMatchDebug;
+                uniform vec3 uThemeTop;
+                uniform vec3 uThemeBottom;
+                uniform vec3 uContourMajor;
+                uniform vec3 uContourMinor;
                 uniform vec3 uFogColor;
                 uniform float uFogDensity;
                 uniform vec3 uLightDirection;
@@ -1705,7 +1811,8 @@ export class Tactical3DRenderer {
                 varying vec2 vWorldXZ;
                 void main() {
                     float ring = smoothstep(uScanRadius - 12.0, uScanRadius, vDist) * (1.0 - smoothstep(uScanRadius, uScanRadius + 1.0, vDist));
-                    vec3 baseColor = uColor * (0.2 + (vHeight + 15.0) / 30.0);
+                    float heightNorm = clamp((vHeight + 24.0) / 40.0, 0.0, 1.0);
+                    vec3 baseColor = mix(uThemeTop, uThemeBottom, (heightNorm * 0.88) + 0.08);
                     float lambert = clamp(dot(normalize(vNormalVS), normalize(-uLightDirection)), 0.0, 1.0);
                     vec3 litColor = baseColor * (uAmbientColor + (uLightColor * (0.25 + lambert * 0.75)));
                     float cA = sin((vWorldXZ.x * uCausticScale) + (uTime * uCausticSpeed));
@@ -1714,14 +1821,25 @@ export class Tactical3DRenderer {
                     float causticPattern = max(0.0, (cA + cB + cC) / 3.0);
                     float caustic = pow(causticPattern, 2.2) * uCausticIntensity;
                     litColor += vec3(0.16, 0.40, 0.45) * caustic;
+                    float minorPhase = fract((vHeight + 80.0) / 4.0);
+                    float majorPhase = fract((vHeight + 80.0) / 8.0);
+                    float minorLine = 1.0 - smoothstep(0.0, 0.018, min(minorPhase, 1.0 - minorPhase));
+                    float majorLine = 1.0 - smoothstep(0.0, 0.026, min(majorPhase, 1.0 - majorPhase));
+                    vec3 contourColor = mix(litColor, uContourMinor, minorLine * 0.34);
+                    contourColor = mix(contourColor, uContourMajor, majorLine * 0.52);
+                    litColor = mix(litColor, contourColor, uContourStyle);
                     float band8 = fract((vHeight + 80.0) / 8.0);
                     float band4 = fract((vHeight + 80.0) / 4.0);
                     float parity = smoothstep(0.48, 0.52, band8);
-                    vec3 debugColor = mix(vec3(0.08, 0.24, 0.36), vec3(0.42, 0.68, 0.84), parity);
+                    vec3 debugColor = mix(
+                        mix(uThemeTop, uContourMinor, 0.36),
+                        mix(uThemeBottom, uContourMajor, 0.44),
+                        parity
+                    );
                     float debugMinor = 1.0 - smoothstep(0.0, 0.03, min(band4, 1.0 - band4));
                     float debugMajor = 1.0 - smoothstep(0.0, 0.045, min(band8, 1.0 - band8));
-                    debugColor = mix(debugColor, vec3(0.92, 0.98, 1.0), debugMinor * 0.45);
-                    debugColor = mix(debugColor, vec3(1.0, 1.0, 0.86), debugMajor * 0.92);
+                    debugColor = mix(debugColor, uContourMinor, debugMinor * 0.62);
+                    debugColor = mix(debugColor, uContourMajor, debugMajor * 0.84);
                     litColor = mix(litColor, debugColor, uMatchDebug);
                     vec4 terrainColor;
                     if (uActive > 0.5) {
@@ -1916,6 +2034,7 @@ export class Tactical3DRenderer {
             this.scene.add(this.scanRingFx);
         }
 
+        this.applyTerrainTheme();
         this.applyTerrainRenderStyle();
     }
 
