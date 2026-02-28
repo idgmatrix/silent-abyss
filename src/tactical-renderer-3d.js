@@ -30,6 +30,19 @@ function readRendererPreference() {
     return 'webgpu';
 }
 
+function readTerrainProfilingFlag() {
+    if (typeof window === 'undefined') return false;
+    try {
+        const params = new URLSearchParams(window.location.search || '');
+        const fromQuery = params.get('profileTerrain');
+        if (fromQuery === '1' || fromQuery === 'true') return true;
+        if (fromQuery === '0' || fromQuery === 'false') return false;
+        return window.localStorage.getItem('silentAbyss.profileTerrain') === '1';
+    } catch {
+        return false;
+    }
+}
+
 export class Tactical3DRenderer {
     constructor(getTerrainHeight) {
         this.getTerrainHeight = typeof getTerrainHeight === 'function' ? getTerrainHeight : () => 0;
@@ -75,6 +88,8 @@ export class Tactical3DRenderer {
         this.worldAxisGizmos = null;
         this.worldNorthArrow = null;
         this.worldEastArrow = null;
+        this.terrainProbeGizmos = null;
+        this.terrainProbeMeshes = new Map();
 
         this.selectionRing = null;
         this.marineSnow = null;
@@ -95,6 +110,17 @@ export class Tactical3DRenderer {
         this._terrainRecenterCount = 0;
         this._pendingTerrainDecorUpdate = null;
         this._contourLevels = [-18, -14, -10, -6, -2, 2, 6];
+        this.profileTerrainEnabled = readTerrainProfilingFlag();
+        this._terrainProfileStats = {
+            frameCount: 0,
+            skippedTerrainFrames: 0,
+            terrainUpdateMs: 0,
+            renderMs: 0,
+            maxTerrainUpdateMs: 0,
+            maxRenderMs: 0,
+            recenterBaseline: 0,
+            lastLogAt: 0
+        };
 
         this.followCameraOffsetLocal = new THREE.Vector3(0, 16, -42);
         this.followLookAtOffsetLocal = new THREE.Vector3(0, 6, 45);
@@ -387,6 +413,8 @@ export class Tactical3DRenderer {
         this.worldAxisGizmos = null;
         this.worldNorthArrow = null;
         this.worldEastArrow = null;
+        this.terrainProbeGizmos = null;
+        this.terrainProbeMeshes.clear();
         this.selectionRing = null;
         this.marineSnow = null;
         this.marineSnowLayers = [];
@@ -423,6 +451,15 @@ export class Tactical3DRenderer {
         }
         if (this.worldAxisGizmos) {
             this.worldAxisGizmos.visible = this.debugCoordinatesEnabled;
+        }
+        if (this.terrainProbeGizmos) {
+            this.terrainProbeGizmos.visible = this.debugCoordinatesEnabled;
+        }
+        if (this.webgpuTerrainNodes?.matchDebug) {
+            this.webgpuTerrainNodes.matchDebug.value = this.debugCoordinatesEnabled ? 1 : 0;
+        }
+        if (this.terrain?.material?.uniforms?.uMatchDebug) {
+            this.terrain.material.uniforms.uMatchDebug.value = this.debugCoordinatesEnabled ? 1 : 0;
         }
     }
 
@@ -568,19 +605,25 @@ export class Tactical3DRenderer {
         }
     }
 
-    render(ownShipPose, selectedTargetId, pulse, targets = [], dt = 0.016) {
+    render(ownShipPose, selectedTargetId, pulse, targets = [], dt = 0.016, terrainProbes = []) {
         if (!this.renderer || !this.scene || !this.camera) return;
         this._elapsedTime += Math.max(0, Number.isFinite(dt) ? dt : 0.016);
+        const profileEnabled = this.profileTerrainEnabled && typeof performance !== 'undefined';
+        const frameStart = profileEnabled ? performance.now() : 0;
+        let terrainUpdateMs = 0;
 
         const ownX = Number.isFinite(ownShipPose?.x) ? ownShipPose.x : 0;
         const ownZ = Number.isFinite(ownShipPose?.z) ? ownShipPose.z : 0;
         const ownCourse = Number.isFinite(ownShipPose?.course) ? ownShipPose.course : 0;
         const ownSpeed = Number.isFinite(ownShipPose?.speed) ? ownShipPose.speed : 0;
 
+        const terrainStart = profileEnabled ? performance.now() : 0;
         this.updateTerrainAroundShip(ownX, ownZ);
+        if (profileEnabled) terrainUpdateMs = performance.now() - terrainStart;
         this.updateOwnShipAndCamera(ownX, ownZ, ownCourse, ownSpeed, dt);
         this.updateUnderwaterEffects();
         this.updateCompassHeading();
+        this.updateTerrainProbeGizmos(terrainProbes);
 
         if (this.selectionRing) {
             if (selectedTargetId && this.targetMeshes.has(selectedTargetId)) {
@@ -601,6 +644,7 @@ export class Tactical3DRenderer {
         if (typeof this.renderer.renderAsync === 'function') {
             if (this._renderPending) return;
             this._renderPending = true;
+            this.recordTerrainProfile(frameStart, terrainUpdateMs, false);
             this.renderer.renderAsync(this.scene, this.camera)
                 .catch((error) => {
                     console.warn('WebGPU render failed:', error);
@@ -612,6 +656,51 @@ export class Tactical3DRenderer {
         }
 
         this.renderer.render(this.scene, this.camera);
+        this.recordTerrainProfile(frameStart, terrainUpdateMs, false);
+    }
+
+    recordTerrainProfile(frameStart, terrainUpdateMs = 0, skippedTerrainUpdate = false) {
+        if (!this.profileTerrainEnabled || typeof performance === 'undefined') return;
+
+        const stats = this._terrainProfileStats;
+        const now = performance.now();
+        if (stats.lastLogAt === 0) {
+            stats.lastLogAt = now;
+            stats.recenterBaseline = this._terrainRecenterCount;
+        }
+
+        stats.frameCount += 1;
+        if (skippedTerrainUpdate) {
+            stats.skippedTerrainFrames += 1;
+        } else {
+            stats.terrainUpdateMs += terrainUpdateMs;
+            stats.maxTerrainUpdateMs = Math.max(stats.maxTerrainUpdateMs, terrainUpdateMs);
+        }
+
+        const renderMs = Math.max(0, now - frameStart);
+        stats.renderMs += renderMs;
+        stats.maxRenderMs = Math.max(stats.maxRenderMs, renderMs);
+
+        if (now - stats.lastLogAt < 2000 || stats.frameCount < 30) return;
+
+        const activeTerrainFrames = Math.max(1, stats.frameCount - stats.skippedTerrainFrames);
+        const recenterDelta = this._terrainRecenterCount - stats.recenterBaseline;
+        const avgTerrainMs = stats.terrainUpdateMs / activeTerrainFrames;
+        const avgRenderMs = stats.renderMs / stats.frameCount;
+        console.info(
+            `[perf][3d-terrain] frames=${stats.frameCount} skipped=${stats.skippedTerrainFrames} recenter=${recenterDelta} ` +
+            `avgTerrain=${avgTerrainMs.toFixed(2)}ms maxTerrain=${stats.maxTerrainUpdateMs.toFixed(2)}ms ` +
+            `avgRender=${avgRenderMs.toFixed(2)}ms maxRender=${stats.maxRenderMs.toFixed(2)}ms`
+        );
+
+        stats.frameCount = 0;
+        stats.skippedTerrainFrames = 0;
+        stats.terrainUpdateMs = 0;
+        stats.renderMs = 0;
+        stats.maxTerrainUpdateMs = 0;
+        stats.maxRenderMs = 0;
+        stats.recenterBaseline = this._terrainRecenterCount;
+        stats.lastLogAt = now;
     }
 
     updateOwnShipAndCamera(ownX, ownZ, ownCourse, ownSpeed, dt) {
@@ -767,6 +856,7 @@ export class Tactical3DRenderer {
             if (this.webgpuTerrainNodes) {
                 this.webgpuTerrainNodes.time.value = this._elapsedTime;
                 this.webgpuTerrainNodes.opacity.value = 0.52 - (depthNorm * 0.12);
+                this.webgpuTerrainNodes.matchDebug.value = this.debugCoordinatesEnabled ? 1 : 0;
             } else {
                 this.updateCausticTexture(this._elapsedTime * (this._activePolishProfile?.causticSpeed ?? 1));
                 if (this.webgpuTerrainMaterial && this.webgpuTerrainMaterial.isMeshStandardMaterial) {
@@ -799,6 +889,9 @@ export class Tactical3DRenderer {
             } else if (this.webgpuPointCloudMaterial && this.webgpuPointCloudMaterial.isPointsMaterial) {
                 this.webgpuPointCloudMaterial.opacity = 0.82 - (depthNorm * 0.15);
             }
+        }
+        if (this.terrain?.material?.uniforms?.uMatchDebug) {
+            this.terrain.material.uniforms.uMatchDebug.value = this.debugCoordinatesEnabled ? 1 : 0;
         }
     }
 
@@ -1373,6 +1466,7 @@ export class Tactical3DRenderer {
         const uDesatNear = TSL.uniform(this._activePolishProfile?.desatNear ?? 52);
         const uDesatFar = TSL.uniform(this._activePolishProfile?.desatFar ?? 230);
         const uOpacity = TSL.uniform(0.44);
+        const uMatchDebug = TSL.uniform(0);
 
         const worldPos = TSL.positionWorld;
         const viewDepth = TSL.positionView.z.negate();
@@ -1388,10 +1482,19 @@ export class Tactical3DRenderer {
         const baseLuma = TSL.luminance(baseColor);
         const depthColor = TSL.mix(baseColor, TSL.vec3(baseLuma), depthDesat);
         const causticColor = TSL.vec3(0.16, 0.4, 0.45).mul(caustic);
+        const band8 = TSL.fract(worldPos.y.add(80).div(8));
+        const band4 = TSL.fract(worldPos.y.add(80).div(4));
+        const parity = TSL.smoothstep(0.48, 0.52, band8);
+        let debugColor = TSL.mix(TSL.vec3(0.08, 0.24, 0.36), TSL.vec3(0.42, 0.68, 0.84), parity);
+        const debugMinor = TSL.float(1).sub(TSL.smoothstep(0.0, 0.03, TSL.min(band4, TSL.float(1).sub(band4))));
+        const debugMajor = TSL.float(1).sub(TSL.smoothstep(0.0, 0.045, TSL.min(band8, TSL.float(1).sub(band8))));
+        debugColor = TSL.mix(debugColor, TSL.vec3(0.92, 0.98, 1.0), debugMinor.mul(0.45));
+        debugColor = TSL.mix(debugColor, TSL.vec3(1.0, 1.0, 0.86), debugMajor.mul(0.92));
+        const finalColor = TSL.mix(depthColor, debugColor, uMatchDebug);
 
-        material.colorNode = depthColor;
-        material.emissiveNode = causticColor;
-        material.opacityNode = uOpacity;
+        material.colorNode = finalColor;
+        material.emissiveNode = TSL.mix(causticColor, TSL.vec3(0.0), uMatchDebug.mul(0.95));
+        material.opacityNode = TSL.mix(uOpacity, TSL.float(0.66), uMatchDebug);
 
         this.webgpuTerrainNodes = {
             time: uTime,
@@ -1400,7 +1503,8 @@ export class Tactical3DRenderer {
             causticSpeed: uCausticSpeed,
             desatNear: uDesatNear,
             desatFar: uDesatFar,
-            opacity: uOpacity
+            opacity: uOpacity,
+            matchDebug: uMatchDebug
         };
 
         return material;
@@ -1550,6 +1654,7 @@ export class Tactical3DRenderer {
                     uColor: { value: new THREE.Color(0x0d5f66) },
                     uActive: { value: 0.0 },
                     uTime: { value: 0 },
+                    uMatchDebug: { value: 0.0 },
                     uFogColor: { value: this.fogColorShallow.clone() },
                     uFogDensity: { value: this.baseFogDensity },
                     uLightDirection: { value: new THREE.Vector3(-0.34, -1.0, 0.28).normalize() },
@@ -1582,6 +1687,7 @@ export class Tactical3DRenderer {
                 uniform vec3 uColor;
                 uniform float uActive;
                 uniform float uTime;
+                uniform float uMatchDebug;
                 uniform vec3 uFogColor;
                 uniform float uFogDensity;
                 uniform vec3 uLightDirection;
@@ -1608,12 +1714,22 @@ export class Tactical3DRenderer {
                     float causticPattern = max(0.0, (cA + cB + cC) / 3.0);
                     float caustic = pow(causticPattern, 2.2) * uCausticIntensity;
                     litColor += vec3(0.16, 0.40, 0.45) * caustic;
+                    float band8 = fract((vHeight + 80.0) / 8.0);
+                    float band4 = fract((vHeight + 80.0) / 4.0);
+                    float parity = smoothstep(0.48, 0.52, band8);
+                    vec3 debugColor = mix(vec3(0.08, 0.24, 0.36), vec3(0.42, 0.68, 0.84), parity);
+                    float debugMinor = 1.0 - smoothstep(0.0, 0.03, min(band4, 1.0 - band4));
+                    float debugMajor = 1.0 - smoothstep(0.0, 0.045, min(band8, 1.0 - band8));
+                    debugColor = mix(debugColor, vec3(0.92, 0.98, 1.0), debugMinor * 0.45);
+                    debugColor = mix(debugColor, vec3(1.0, 1.0, 0.86), debugMajor * 0.92);
+                    litColor = mix(litColor, debugColor, uMatchDebug);
                     vec4 terrainColor;
                     if (uActive > 0.5) {
                         terrainColor = vec4(litColor + vec3(0.2, 0.9, 1.0) * ring * 0.48, 0.62 + ring * 0.28);
                     } else {
                         terrainColor = vec4(litColor, 0.44);
                     }
+                    terrainColor.a = mix(terrainColor.a, 0.66, uMatchDebug);
                     float desat = smoothstep(uDesatNear, uDesatFar, vViewDepth);
                     float luma = dot(terrainColor.rgb, vec3(0.2126, 0.7152, 0.0722));
                     terrainColor.rgb = mix(terrainColor.rgb, vec3(luma), desat * 0.58);
@@ -2038,6 +2154,54 @@ export class Tactical3DRenderer {
         this.worldAxisGizmos.add(this.worldNorthArrow);
         this.worldAxisGizmos.add(this.worldEastArrow);
         this.scene.add(this.worldAxisGizmos);
+
+        this.terrainProbeGizmos = new THREE.Group();
+        this.terrainProbeGizmos.visible = this.debugCoordinatesEnabled;
+        const colorById = {
+            C: 0xf5ff8a,
+            N: 0x8affff,
+            E: 0xffb37d,
+            S: 0x8dff9c,
+            W: 0xd2b6ff
+        };
+        const ids = ['C', 'N', 'E', 'S', 'W'];
+        ids.forEach((id) => {
+            const radius = id === 'C' ? 0.95 : 0.72;
+            const mesh = new THREE.Mesh(
+                new THREE.SphereGeometry(radius, 10, 8),
+                new THREE.MeshBasicMaterial({
+                    color: colorById[id] || 0xd9ffff,
+                    transparent: true,
+                    opacity: id === 'C' ? 0.95 : 0.82
+                })
+            );
+            mesh.visible = false;
+            this.terrainProbeMeshes.set(id, mesh);
+            this.terrainProbeGizmos.add(mesh);
+        });
+        this.scene.add(this.terrainProbeGizmos);
+    }
+
+    updateTerrainProbeGizmos(terrainProbes = []) {
+        if (!this.terrainProbeGizmos || !this.debugCoordinatesEnabled) return;
+        const probes = Array.isArray(terrainProbes) ? terrainProbes : [];
+        const byId = new Map();
+        probes.forEach((probe) => {
+            if (!probe || !probe.id) return;
+            byId.set(probe.id, probe);
+        });
+
+        this.terrainProbeMeshes.forEach((mesh, id) => {
+            const probe = byId.get(id);
+            if (!probe || !Number.isFinite(probe.x) || !Number.isFinite(probe.z)) {
+                mesh.visible = false;
+                return;
+            }
+            const scenePos = this.modelToScenePosition(probe.x, probe.z);
+            const y = Number.isFinite(probe.terrainY) ? probe.terrainY : this.getTerrainHeight(probe.x, probe.z);
+            mesh.position.set(scenePos.x, y + 0.7, scenePos.z);
+            mesh.visible = true;
+        });
     }
 
     setupSelectionRing() {

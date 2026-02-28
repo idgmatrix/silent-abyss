@@ -1,6 +1,48 @@
+import * as THREE from 'three';
 import { TrackState } from './simulation.js';
 import { shipLocalToWorld, worldToShipLocal } from './coordinate-system.js';
 import { RENDER_STYLE_TOKENS, resolveVisualMode, VISUAL_MODES } from './render-style-tokens.js';
+
+const TERRAIN_ISOLINE_GENERATION_ENABLED = true;
+const TERRAIN_ISOLINE_DRAWING_ENABLED = false;
+const TERRAIN_VISUALIZATION_MODES = {
+    LEGACY: 'legacy-contours',
+    SHADER_BANDS: 'shader-bands'
+};
+
+function readContourProfilingFlag() {
+    if (typeof window === 'undefined') return false;
+    try {
+        const params = new URLSearchParams(window.location.search || '');
+        const fromQuery = params.get('profile2dTerrain');
+        if (fromQuery === '1' || fromQuery === 'true') return true;
+        if (fromQuery === '0' || fromQuery === 'false') return false;
+        return window.localStorage.getItem('silentAbyss.profile2dTerrain') === '1';
+    } catch {
+        return false;
+    }
+}
+
+function resolveTerrainVisualizationMode(mode) {
+    return mode === TERRAIN_VISUALIZATION_MODES.SHADER_BANDS
+        ? TERRAIN_VISUALIZATION_MODES.SHADER_BANDS
+        : TERRAIN_VISUALIZATION_MODES.LEGACY;
+}
+
+function readTerrainVisualizationMode() {
+    if (typeof window === 'undefined') return TERRAIN_VISUALIZATION_MODES.LEGACY;
+    try {
+        const params = new URLSearchParams(window.location.search || '');
+        const fromQuery = params.get('terrain2d');
+        if (fromQuery === TERRAIN_VISUALIZATION_MODES.LEGACY || fromQuery === TERRAIN_VISUALIZATION_MODES.SHADER_BANDS) {
+            return fromQuery;
+        }
+        const fromStorage = window.localStorage.getItem('silentAbyss.terrain2dVisualization');
+        return resolveTerrainVisualizationMode(fromStorage);
+    } catch {
+        return TERRAIN_VISUALIZATION_MODES.LEGACY;
+    }
+}
 
 export class Tactical2DRenderer {
     constructor(getTerrainHeight) {
@@ -20,6 +62,33 @@ export class Tactical2DRenderer {
         this.predictionCompareEnabled = false;
         this.cameraOffsetLocal = { x: 0, z: 0 };
         this.cameraScale = 1.5;
+        this.terrainVisualizationMode = readTerrainVisualizationMode();
+        this.profileContoursEnabled = readContourProfilingFlag();
+        this._contourProfileStats = {
+            frameCount: 0,
+            cacheHits: 0,
+            cacheMisses: 0,
+            lookupMs: 0,
+            generationMs: 0,
+            strokeMs: 0,
+            lastLogAt: 0
+        };
+        this.webgpuModule = null;
+        this.terrainLayerScene = null;
+        this.terrainLayerCamera = null;
+        this.terrainLayerRenderer = null;
+        this.terrainLayerMaterial = null;
+        this.terrainLayerMesh = null;
+        this.terrainLayerUniforms = null;
+        this.terrainLayerInitStarted = false;
+        this.terrainLayerReady = false;
+        this.terrainLayerRenderPending = false;
+        this.terrainHeightTexture = null;
+        this.terrainHeightTextureData = null;
+        this.terrainHeightTextureSize = 192;
+        this.terrainHeightTileCenter = { x: Number.NaN, z: Number.NaN };
+        this.terrainHeightTileSpan = 0;
+        this.terrainHeightTileSnap = 0;
     }
 
     init(container) {
@@ -35,6 +104,7 @@ export class Tactical2DRenderer {
         this.canvas.style.display = 'none';
         container.appendChild(this.canvas);
         this.ctx = this.canvas.getContext('2d');
+        this.ensureTerrainLayerInitialized();
     }
 
     dispose() {
@@ -47,11 +117,15 @@ export class Tactical2DRenderer {
         this.contourCache.clear();
         this.trackHistory.clear();
         this.trackGhosts.clear();
+        this.disposeTerrainLayer();
     }
 
     setVisible(visible) {
         if (!this.canvas) return;
         this.canvas.style.display = visible ? 'block' : 'none';
+        if (this.terrainLayerRenderer?.domElement) {
+            this.terrainLayerRenderer.domElement.style.display = visible && this.isShaderTerrainModeActive() ? 'block' : 'none';
+        }
     }
 
     resize(width, height) {
@@ -63,6 +137,10 @@ export class Tactical2DRenderer {
         this.canvas.height = safeHeight * dpr;
         this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
         this.contourCache.clear();
+        if (this.terrainLayerRenderer) {
+            this.terrainLayerRenderer.setPixelRatio(dpr);
+            this.terrainLayerRenderer.setSize(safeWidth, safeHeight, false);
+        }
     }
 
     setScanState(radius, active) {
@@ -90,6 +168,25 @@ export class Tactical2DRenderer {
 
     setPredictionCompareEnabled(enabled) {
         this.predictionCompareEnabled = !!enabled;
+    }
+
+    setTerrainVisualizationMode(mode) {
+        this.terrainVisualizationMode = resolveTerrainVisualizationMode(mode);
+        this.contourCache.clear();
+        if (this.terrainVisualizationMode === TERRAIN_VISUALIZATION_MODES.SHADER_BANDS) {
+            this.ensureTerrainLayerInitialized();
+        }
+        if (this.terrainLayerRenderer?.domElement) {
+            this.terrainLayerRenderer.domElement.style.display = this.isShaderTerrainModeActive() ? 'block' : 'none';
+        }
+    }
+
+    getTerrainVisualizationMode() {
+        return this.terrainVisualizationMode;
+    }
+
+    isShaderTerrainModeActive() {
+        return this.terrainVisualizationMode === TERRAIN_VISUALIZATION_MODES.SHADER_BANDS && this.terrainLayerReady;
     }
 
     render(mode, targets, options = {}) {
@@ -148,6 +245,7 @@ export class Tactical2DRenderer {
         const hoveredTargetId = options.hoveredTargetId || null;
         const ownShipPose = options.ownShipPose || { x: 0, z: 0, course: 0 };
         const pingFlashIntensity = Number.isFinite(options.pingFlashIntensity) ? Math.max(0, options.pingFlashIntensity) : 0;
+        const terrainProbes = Array.isArray(options.terrainProbes) ? options.terrainProbes : [];
         const headUp = mode === 'radial';
         const style = this.getModeStyle();
         const dt = Number.isFinite(options.dt) ? Math.max(0.001, options.dt) : 0.016;
@@ -163,6 +261,7 @@ export class Tactical2DRenderer {
             selectedTargetId,
             hoveredTargetId,
             ownShipPose,
+            terrainProbes,
             pingFlashIntensity,
             dt,
             style
@@ -171,6 +270,7 @@ export class Tactical2DRenderer {
         this.updateTrackHistory(targets, ownShipPose);
         this.updateViewTransform(targets, renderCtx);
         renderCtx.scale = this.cameraScale;
+        this.updateTerrainLayer(renderCtx);
         this.drawBackgroundLayer(ctx, renderCtx);
         this.drawReferenceGeometryLayer(ctx, renderCtx);
         this.drawTracksLayer(ctx, targets, renderCtx);
@@ -187,6 +287,10 @@ export class Tactical2DRenderer {
     }
 
     drawBackgroundLayer(ctx, renderCtx) {
+        if (this.isShaderTerrainModeActive()) {
+            ctx.clearRect(0, 0, renderCtx.width, renderCtx.height);
+            return;
+        }
         const { width, height, style } = renderCtx;
         if (this.enhancedVisualsEnabled) {
             const gradient = ctx.createLinearGradient(0, 0, 0, height);
@@ -266,7 +370,9 @@ export class Tactical2DRenderer {
             ctx.stroke();
         }
 
-        this.drawTerrainContours(ctx, width, height, scale, mode === 'radial', ownShipPose, headUp);
+        if (!this.isShaderTerrainModeActive()) {
+            this.drawTerrainContours(ctx, width, height, scale, mode === 'radial', ownShipPose, headUp);
+        }
     }
 
     drawTracksLayer(ctx, targets, renderCtx) {
@@ -400,9 +506,390 @@ export class Tactical2DRenderer {
         const adjustedCenterX = centerX + ownShipLocal.x * scale;
         const adjustedCenterY = centerY + ownShipLocal.z * scale;
         this.drawCoordinateDebugVectors(ctx, adjustedCenterX, adjustedCenterY, ownShipPose, mode);
+        this.drawTerrainProbeAnchors(ctx, renderCtx);
         if (mode === 'radial') {
             this.drawRadialCompass(ctx, width, height, ownShipPose);
         }
+    }
+
+    drawTerrainProbeAnchors(ctx, renderCtx) {
+        if (!this.debugCoordinatesEnabled) return;
+        const { centerX, centerY, scale, ownShipPose, headUp, terrainProbes } = renderCtx;
+        if (!Array.isArray(terrainProbes) || terrainProbes.length === 0) return;
+
+        const colorById = {
+            C: '#f5ff8a',
+            N: '#8affff',
+            E: '#ffb37d',
+            S: '#8dff9c',
+            W: '#d2b6ff'
+        };
+
+        ctx.save();
+        ctx.font = '10px monospace';
+        ctx.textBaseline = 'top';
+        for (const probe of terrainProbes) {
+            if (!probe || !Number.isFinite(probe.x) || !Number.isFinite(probe.z)) continue;
+            const local = this.toLocalFrame(probe.x, probe.z, ownShipPose, headUp);
+            const px = centerX + (local.x - this.cameraOffsetLocal.x) * scale;
+            const py = centerY + (local.z - this.cameraOffsetLocal.z) * scale;
+            const color = colorById[probe.id] || '#d9ffff';
+
+            ctx.strokeStyle = color;
+            ctx.fillStyle = color;
+            ctx.lineWidth = probe.id === 'C' ? 2 : 1.2;
+            ctx.beginPath();
+            ctx.arc(px, py, probe.id === 'C' ? 6 : 4, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.moveTo(px - 3, py);
+            ctx.lineTo(px + 3, py);
+            ctx.moveTo(px, py - 3);
+            ctx.lineTo(px, py + 3);
+            ctx.stroke();
+
+            if (Number.isFinite(probe.depth)) {
+                ctx.fillText(`${probe.id}:${probe.depth.toFixed(1)}`, px + 6, py + 4);
+            } else {
+                ctx.fillText(`${probe.id}:--`, px + 6, py + 4);
+            }
+        }
+        ctx.restore();
+    }
+
+    ensureTerrainLayerInitialized() {
+        if (this.terrainLayerReady || this.terrainLayerInitStarted) return;
+        if (this.terrainVisualizationMode !== TERRAIN_VISUALIZATION_MODES.SHADER_BANDS) return;
+        if (!this.container || typeof navigator === 'undefined' || !navigator.gpu) return;
+
+        this.terrainLayerInitStarted = true;
+        this.initTerrainLayer().catch((error) => {
+            console.warn('2D terrain shader layer init failed; falling back to legacy contours:', error);
+            this.terrainLayerInitStarted = false;
+            this.terrainLayerReady = false;
+            this.terrainVisualizationMode = TERRAIN_VISUALIZATION_MODES.LEGACY;
+        });
+    }
+
+    async initTerrainLayer() {
+        const webgpuModule = await import('three/webgpu');
+        const WebGPURenderer = webgpuModule.WebGPURenderer || webgpuModule.default;
+        if (!WebGPURenderer) {
+            this.terrainLayerInitStarted = false;
+            this.terrainVisualizationMode = TERRAIN_VISUALIZATION_MODES.LEGACY;
+            return;
+        }
+        this.ensureTerrainHeightTexture();
+
+        const renderer = new WebGPURenderer({ antialias: false, alpha: false });
+        await renderer.init();
+        renderer.autoClear = true;
+        renderer.autoClearColor = true;
+        renderer.setClearColor(0x000000, 1);
+        const dpr = typeof window !== 'undefined' ? (window.devicePixelRatio || 1) : 1;
+        const width = Math.max(1, Math.floor(this.container?.clientWidth || 1));
+        const height = Math.max(1, Math.floor(this.container?.clientHeight || 1));
+        renderer.setPixelRatio(dpr);
+        renderer.setSize(width, height, false);
+
+        const dom = renderer.domElement;
+        dom.style.position = 'absolute';
+        dom.style.top = '0';
+        dom.style.left = '0';
+        dom.style.width = '100%';
+        dom.style.height = '100%';
+        dom.style.pointerEvents = 'none';
+        dom.style.display = 'none';
+
+        if (this.container && this.canvas && this.canvas.parentElement === this.container) {
+            this.container.insertBefore(dom, this.canvas);
+        } else if (this.container) {
+            this.container.appendChild(dom);
+        }
+
+        const scene = new THREE.Scene();
+        const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+        camera.position.z = 0.5;
+
+        const material = this.createTerrainBandsMaterial(webgpuModule);
+        if (!material) {
+            renderer.dispose();
+            if (dom.parentElement) dom.parentElement.removeChild(dom);
+            this.terrainLayerInitStarted = false;
+            this.terrainVisualizationMode = TERRAIN_VISUALIZATION_MODES.LEGACY;
+            return;
+        }
+
+        const mesh = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), material);
+        scene.add(mesh);
+
+        this.webgpuModule = webgpuModule;
+        this.terrainLayerScene = scene;
+        this.terrainLayerCamera = camera;
+        this.terrainLayerRenderer = renderer;
+        this.terrainLayerMaterial = material;
+        this.terrainLayerMesh = mesh;
+        this.terrainLayerReady = true;
+        this.terrainLayerInitStarted = false;
+        dom.style.display = this.canvas?.style.display !== 'none' && this.isShaderTerrainModeActive() ? 'block' : 'none';
+    }
+
+    createTerrainBandsMaterial(webgpuModule) {
+        const MeshBasicNodeMaterial = webgpuModule?.MeshBasicNodeMaterial;
+        const TSL = webgpuModule?.TSL;
+        if (!MeshBasicNodeMaterial || !TSL) return null;
+        this.ensureTerrainHeightTexture();
+        if (!this.terrainHeightTexture) return null;
+
+        const material = new MeshBasicNodeMaterial();
+        const uOwnX = TSL.uniform(0);
+        const uOwnZ = TSL.uniform(0);
+        const uCourse = TSL.uniform(0);
+        const uHeadUp = TSL.uniform(0);
+        const uOffsetX = TSL.uniform(0);
+        const uOffsetZ = TSL.uniform(0);
+        const uViewWorldWidth = TSL.uniform(1);
+        const uViewWorldHeight = TSL.uniform(1);
+        const uTileCenterX = TSL.uniform(0);
+        const uTileCenterZ = TSL.uniform(0);
+        const uTileSpan = TSL.uniform(256);
+        const uMatchDebug = TSL.uniform(0);
+
+        const uv = TSL.uv();
+        const centeredX = uv.x.mul(2).sub(1);
+        const centeredY = TSL.float(1).sub(uv.y.mul(2));
+        const localX = centeredX.mul(uViewWorldWidth.mul(0.5)).add(uOffsetX);
+        const localY = centeredY.mul(uViewWorldHeight.mul(0.5)).add(uOffsetZ);
+
+        const sinCourse = TSL.sin(uCourse);
+        const cosCourse = TSL.cos(uCourse);
+        const rightX = cosCourse;
+        const rightZ = sinCourse.negate();
+        const forwardX = sinCourse;
+        const forwardZ = cosCourse;
+
+        const worldXNorth = uOwnX.add(localX);
+        const worldZNorth = uOwnZ.sub(localY);
+        const worldXHeadUp = uOwnX.add(rightX.mul(localX)).add(forwardX.mul(localY.negate()));
+        const worldZHeadUp = uOwnZ.add(rightZ.mul(localX)).add(forwardZ.mul(localY.negate()));
+        const worldX = TSL.mix(worldXNorth, worldXHeadUp, uHeadUp);
+        const worldZ = TSL.mix(worldZNorth, worldZHeadUp, uHeadUp);
+
+        const texU = worldX.sub(uTileCenterX).div(uTileSpan).add(0.5);
+        const texV = uTileCenterZ.sub(worldZ).div(uTileSpan).add(0.5);
+        const texUV = TSL.clamp(TSL.vec2(texU, texV), TSL.vec2(0), TSL.vec2(1));
+
+        const heightSample = TSL.texture(this.terrainHeightTexture, texUV);
+        const height = heightSample.r;
+        const depth = TSL.max(TSL.float(1), height.negate().sub(2));
+        const depthNorm = TSL.clamp(depth.div(220), 0, 1);
+
+        const shallow = TSL.vec3(0.06, 0.28, 0.34);
+        const deep = TSL.vec3(0.01, 0.05, 0.1);
+        let color = TSL.mix(shallow, deep, depthNorm);
+
+        const minorPhase = TSL.fract(height.add(80).div(4));
+        const majorPhase = TSL.fract(height.add(80).div(8));
+        const minorDist = TSL.min(minorPhase, TSL.float(1).sub(minorPhase));
+        const majorDist = TSL.min(majorPhase, TSL.float(1).sub(majorPhase));
+        const minorLine = TSL.float(1).sub(TSL.smoothstep(0.0, 0.018, minorDist));
+        const majorLine = TSL.float(1).sub(TSL.smoothstep(0.0, 0.026, majorDist));
+        color = TSL.mix(color, TSL.vec3(0.12, 0.5, 0.56), minorLine.mul(0.28));
+        color = TSL.mix(color, TSL.vec3(0.2, 0.72, 0.79), majorLine.mul(0.6));
+
+        // High-contrast terrain matching mode for visual verification.
+        const band8 = TSL.fract(height.add(80).div(8));
+        const band4 = TSL.fract(height.add(80).div(4));
+        const parity = TSL.smoothstep(0.48, 0.52, band8);
+        let debugColor = TSL.mix(TSL.vec3(0.08, 0.24, 0.36), TSL.vec3(0.42, 0.68, 0.84), parity);
+        const debugMinor = TSL.float(1).sub(TSL.smoothstep(0.0, 0.03, TSL.min(band4, TSL.float(1).sub(band4))));
+        const debugMajor = TSL.float(1).sub(TSL.smoothstep(0.0, 0.045, TSL.min(band8, TSL.float(1).sub(band8))));
+        debugColor = TSL.mix(debugColor, TSL.vec3(0.92, 0.98, 1.0), debugMinor.mul(0.45));
+        debugColor = TSL.mix(debugColor, TSL.vec3(1.0, 1.0, 0.86), debugMajor.mul(0.92));
+        color = TSL.mix(color, debugColor, uMatchDebug);
+
+        material.colorNode = color;
+        this.terrainLayerUniforms = {
+            ownX: uOwnX,
+            ownZ: uOwnZ,
+            course: uCourse,
+            headUp: uHeadUp,
+            offsetX: uOffsetX,
+            offsetZ: uOffsetZ,
+            viewWorldWidth: uViewWorldWidth,
+            viewWorldHeight: uViewWorldHeight,
+            tileCenterX: uTileCenterX,
+            tileCenterZ: uTileCenterZ,
+            tileSpan: uTileSpan,
+            matchDebug: uMatchDebug
+        };
+        return material;
+    }
+
+    updateTerrainLayer(renderCtx) {
+        if (this.terrainVisualizationMode === TERRAIN_VISUALIZATION_MODES.SHADER_BANDS && !this.terrainLayerReady) {
+            this.ensureTerrainLayerInitialized();
+        }
+
+        if (!this.terrainLayerRenderer?.domElement) return;
+
+        if (!this.isShaderTerrainModeActive()) {
+            this.terrainLayerRenderer.domElement.style.display = 'none';
+            return;
+        }
+
+        this.terrainLayerRenderer.domElement.style.display = this.canvas?.style.display === 'none' ? 'none' : 'block';
+        const uniforms = this.terrainLayerUniforms;
+        if (!uniforms) return;
+        this.updateTerrainHeightTexture(renderCtx);
+        const safeScale = Math.max(0.01, Number.isFinite(renderCtx.scale) ? renderCtx.scale : 1.5);
+        uniforms.ownX.value = Number.isFinite(renderCtx.ownShipPose?.x) ? renderCtx.ownShipPose.x : 0;
+        uniforms.ownZ.value = Number.isFinite(renderCtx.ownShipPose?.z) ? renderCtx.ownShipPose.z : 0;
+        uniforms.course.value = Number.isFinite(renderCtx.ownShipPose?.course) ? renderCtx.ownShipPose.course : 0;
+        uniforms.headUp.value = renderCtx.headUp ? 1 : 0;
+        uniforms.offsetX.value = Number.isFinite(this.cameraOffsetLocal.x) ? this.cameraOffsetLocal.x : 0;
+        uniforms.offsetZ.value = Number.isFinite(this.cameraOffsetLocal.z) ? this.cameraOffsetLocal.z : 0;
+        uniforms.viewWorldWidth.value = renderCtx.width / safeScale;
+        uniforms.viewWorldHeight.value = renderCtx.height / safeScale;
+        uniforms.tileCenterX.value = Number.isFinite(this.terrainHeightTileCenter.x) ? this.terrainHeightTileCenter.x : 0;
+        uniforms.tileCenterZ.value = Number.isFinite(this.terrainHeightTileCenter.z) ? this.terrainHeightTileCenter.z : 0;
+        uniforms.tileSpan.value = Number.isFinite(this.terrainHeightTileSpan) ? Math.max(1, this.terrainHeightTileSpan) : 1;
+        uniforms.matchDebug.value = this.debugCoordinatesEnabled ? 1 : 0;
+        this.renderTerrainLayer();
+    }
+
+    ensureTerrainHeightTexture() {
+        if (this.terrainHeightTexture && this.terrainHeightTextureData) return;
+        const side = this.terrainHeightTextureSize;
+        this.terrainHeightTextureData = new Float32Array(side * side * 4);
+        const texture = new THREE.DataTexture(
+            this.terrainHeightTextureData,
+            side,
+            side,
+            THREE.RGBAFormat,
+            THREE.FloatType
+        );
+        texture.generateMipmaps = false;
+        texture.minFilter = THREE.LinearFilter;
+        texture.magFilter = THREE.LinearFilter;
+        texture.wrapS = THREE.ClampToEdgeWrapping;
+        texture.wrapT = THREE.ClampToEdgeWrapping;
+        texture.needsUpdate = true;
+        this.terrainHeightTexture = texture;
+    }
+
+    updateTerrainHeightTexture(renderCtx) {
+        if (!this.terrainHeightTexture || !this.terrainHeightTextureData) return;
+        const { ownShipPose } = renderCtx;
+        const ownX = Number.isFinite(ownShipPose?.x) ? ownShipPose.x : 0;
+        const ownZ = Number.isFinite(ownShipPose?.z) ? ownShipPose.z : 0;
+
+        const safeScale = Math.max(0.01, Number.isFinite(renderCtx.scale) ? renderCtx.scale : 1.5);
+        const viewWorldWidth = renderCtx.width / safeScale;
+        const viewWorldHeight = renderCtx.height / safeScale;
+        const desiredSpan = Math.max(viewWorldWidth, viewWorldHeight) * 1.35;
+        const quantizedSpan = Math.max(192, Math.ceil(desiredSpan / 32) * 32);
+        const snap = Math.max(8, quantizedSpan / 14);
+
+        let nextCenterX = this.terrainHeightTileCenter.x;
+        let nextCenterZ = this.terrainHeightTileCenter.z;
+        let rebuild = false;
+
+        if (!Number.isFinite(nextCenterX) || !Number.isFinite(nextCenterZ) || this.terrainHeightTileSpan !== quantizedSpan) {
+            nextCenterX = Math.round(ownX / snap) * snap;
+            nextCenterZ = Math.round(ownZ / snap) * snap;
+            rebuild = true;
+        } else {
+            while (ownX - nextCenterX > snap) {
+                nextCenterX += snap;
+                rebuild = true;
+            }
+            while (ownX - nextCenterX < -snap) {
+                nextCenterX -= snap;
+                rebuild = true;
+            }
+            while (ownZ - nextCenterZ > snap) {
+                nextCenterZ += snap;
+                rebuild = true;
+            }
+            while (ownZ - nextCenterZ < -snap) {
+                nextCenterZ -= snap;
+                rebuild = true;
+            }
+        }
+
+        if (!rebuild) return;
+        this.rebuildTerrainHeightTexture(nextCenterX, nextCenterZ, quantizedSpan, snap);
+    }
+
+    rebuildTerrainHeightTexture(centerX, centerZ, span, snap) {
+        if (!this.terrainHeightTexture || !this.terrainHeightTextureData) return;
+        const side = this.terrainHeightTextureSize;
+        const data = this.terrainHeightTextureData;
+
+        for (let y = 0; y < side; y++) {
+            const v = side > 1 ? y / (side - 1) : 0;
+            const worldZ = centerZ + ((0.5 - v) * span);
+            for (let x = 0; x < side; x++) {
+                const u = side > 1 ? x / (side - 1) : 0;
+                const worldX = centerX + ((u - 0.5) * span);
+                const height = this.getTerrainHeight(worldX, worldZ);
+                const idx = (y * side + x) * 4;
+                data[idx] = height;
+                data[idx + 1] = 0;
+                data[idx + 2] = 0;
+                data[idx + 3] = 1;
+            }
+        }
+
+        this.terrainHeightTileCenter.x = centerX;
+        this.terrainHeightTileCenter.z = centerZ;
+        this.terrainHeightTileSpan = span;
+        this.terrainHeightTileSnap = snap;
+        this.terrainHeightTexture.needsUpdate = true;
+    }
+
+    renderTerrainLayer() {
+        if (!this.terrainLayerRenderer || !this.terrainLayerScene || !this.terrainLayerCamera) return;
+        if (typeof this.terrainLayerRenderer.renderAsync === 'function') {
+            if (this.terrainLayerRenderPending) return;
+            this.terrainLayerRenderPending = true;
+            this.terrainLayerRenderer.renderAsync(this.terrainLayerScene, this.terrainLayerCamera)
+                .catch((error) => {
+                    console.warn('2D terrain shader render failed:', error);
+                })
+                .finally(() => {
+                    this.terrainLayerRenderPending = false;
+                });
+            return;
+        }
+        this.terrainLayerRenderer.render(this.terrainLayerScene, this.terrainLayerCamera);
+    }
+
+    disposeTerrainLayer() {
+        if (this.terrainLayerMesh?.geometry) this.terrainLayerMesh.geometry.dispose();
+        if (this.terrainLayerMaterial?.dispose) this.terrainLayerMaterial.dispose();
+        if (this.terrainLayerRenderer?.domElement?.parentElement) {
+            this.terrainLayerRenderer.domElement.parentElement.removeChild(this.terrainLayerRenderer.domElement);
+        }
+        if (this.terrainLayerRenderer) this.terrainLayerRenderer.dispose();
+        this.webgpuModule = null;
+        this.terrainLayerScene = null;
+        this.terrainLayerCamera = null;
+        this.terrainLayerRenderer = null;
+        this.terrainLayerMaterial = null;
+        this.terrainLayerMesh = null;
+        this.terrainLayerUniforms = null;
+        this.terrainLayerInitStarted = false;
+        this.terrainLayerReady = false;
+        this.terrainLayerRenderPending = false;
+        if (this.terrainHeightTexture) this.terrainHeightTexture.dispose();
+        this.terrainHeightTexture = null;
+        this.terrainHeightTextureData = null;
+        this.terrainHeightTileCenter.x = Number.NaN;
+        this.terrainHeightTileCenter.z = Number.NaN;
+        this.terrainHeightTileSpan = 0;
+        this.terrainHeightTileSnap = 0;
     }
 
     updateViewTransform(targets, renderCtx) {
@@ -904,15 +1391,59 @@ export class Tactical2DRenderer {
     }
 
     drawTerrainContours(ctx, width, height, scale, radialMode, ownShipPose, headUp) {
+        if (!TERRAIN_ISOLINE_GENERATION_ENABLED && !TERRAIN_ISOLINE_DRAWING_ENABLED) return;
+        const profileEnabled = this.profileContoursEnabled && typeof performance !== 'undefined';
+        const lookupStart = profileEnabled ? performance.now() : 0;
         const layers = this.getContourLayers(width, height, scale, radialMode, ownShipPose, headUp);
-        for (const layer of layers) {
-            ctx.strokeStyle = layer.strokeStyle;
-            ctx.lineWidth = layer.lineWidth;
-            ctx.stroke(layer.path);
+        const lookupEnd = profileEnabled ? performance.now() : 0;
+        if (profileEnabled) {
+            this._contourProfileStats.frameCount += 1;
+            this._contourProfileStats.lookupMs += (lookupEnd - lookupStart);
         }
+
+        const strokeStart = profileEnabled ? performance.now() : 0;
+        if (TERRAIN_ISOLINE_DRAWING_ENABLED) {
+            for (const layer of layers) {
+                ctx.strokeStyle = layer.strokeStyle;
+                ctx.lineWidth = layer.lineWidth;
+                ctx.stroke(layer.path);
+            }
+        }
+        if (!profileEnabled) return;
+
+        const now = performance.now();
+        this._contourProfileStats.strokeMs += (now - strokeStart);
+        if (this._contourProfileStats.lastLogAt === 0) {
+            this._contourProfileStats.lastLogAt = now;
+            return;
+        }
+
+        if (now - this._contourProfileStats.lastLogAt < 2000 || this._contourProfileStats.frameCount < 30) return;
+
+        const stats = this._contourProfileStats;
+        const totalLookups = stats.cacheHits + stats.cacheMisses;
+        const missRate = totalLookups > 0 ? (stats.cacheMisses / totalLookups) * 100 : 0;
+        const avgLookupMs = stats.frameCount > 0 ? stats.lookupMs / stats.frameCount : 0;
+        const avgStrokeMs = stats.frameCount > 0 ? stats.strokeMs / stats.frameCount : 0;
+        const avgGenerationMs = stats.cacheMisses > 0 ? stats.generationMs / stats.cacheMisses : 0;
+        console.info(
+            `[perf][2d-contours] frames=${stats.frameCount} misses=${stats.cacheMisses}/${totalLookups} (${missRate.toFixed(1)}%) ` +
+            `avgLookup=${avgLookupMs.toFixed(2)}ms avgGenMiss=${avgGenerationMs.toFixed(2)}ms avgStroke=${avgStrokeMs.toFixed(2)}ms ` +
+            `cacheSize=${this.contourCache.size}`
+        );
+
+        stats.frameCount = 0;
+        stats.cacheHits = 0;
+        stats.cacheMisses = 0;
+        stats.lookupMs = 0;
+        stats.generationMs = 0;
+        stats.strokeMs = 0;
+        stats.lastLogAt = now;
     }
 
     getContourLayers(width, height, scale, radialMode, ownShipPose = { x: 0, z: 0, course: 0 }, headUp = false) {
+        if (!TERRAIN_ISOLINE_GENERATION_ENABLED) return [];
+        const profileEnabled = this.profileContoursEnabled && typeof performance !== 'undefined';
         const px = Math.round((ownShipPose.x || 0) * 2) / 2;
         const pz = Math.round((ownShipPose.z || 0) * 2) / 2;
         const pc = Math.round((ownShipPose.course || 0) * 20) / 20;
@@ -920,7 +1451,12 @@ export class Tactical2DRenderer {
         const oz = Math.round((this.cameraOffsetLocal.z || 0) / 4) * 4;
         const key = `${radialMode ? 'radial' : 'grid'}:${width}:${height}:${scale}:${px}:${pz}:${pc}:${headUp ? 1 : 0}:${ox}:${oz}`;
         const cached = this.contourCache.get(key);
-        if (cached) return cached;
+        if (cached) {
+            if (profileEnabled) this._contourProfileStats.cacheHits += 1;
+            return cached;
+        }
+        if (profileEnabled) this._contourProfileStats.cacheMisses += 1;
+        const generationStart = profileEnabled ? performance.now() : 0;
 
         const centerX = width / 2;
         const centerY = height / 2;
@@ -980,6 +1516,9 @@ export class Tactical2DRenderer {
         if (this.contourCache.size > 28) {
             const oldestKey = this.contourCache.keys().next().value;
             if (oldestKey) this.contourCache.delete(oldestKey);
+        }
+        if (profileEnabled) {
+            this._contourProfileStats.generationMs += (performance.now() - generationStart);
         }
         return layers;
     }

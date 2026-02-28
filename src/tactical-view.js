@@ -27,10 +27,12 @@ export class TacticalView {
         this._targetSelectedHandler = null;
         this._lastRenderTime = 0;
         this._hoveredTargetId = null;
+        this._terrainProbes = [];
 
         this.debugCoordinatesEnabled = this.readCoordinateDebugFlag();
         this.atmospherePreset = this.readAtmospherePreset();
         this.enhanced2DVisuals = this.readEnhanced2DVisualsFlag();
+        this.terrain2DVisualization = this.readTerrain2DVisualizationMode();
         this.visualMode = this.readVisualModePreset();
         this.snapToContactEnabled = this.readSnapToContactFlag();
         this.predictionCompareEnabled = this.readPredictionCompareFlag();
@@ -98,6 +100,7 @@ export class TacticalView {
         this.renderer3D.setAtmospherePreset(this.atmospherePreset);
         this.renderer2D.setDebugCoordinatesEnabled(this.debugCoordinatesEnabled);
         this.renderer2D.setEnhancedVisualsEnabled(this.enhanced2DVisuals);
+        this.renderer2D.setTerrainVisualizationMode(this.terrain2DVisualization);
         this.renderer2D.setVisualMode(this.visualMode);
         this.renderer2D.setSnapToContactEnabled(this.snapToContactEnabled);
         this.renderer2D.setPredictionCompareEnabled(this.predictionCompareEnabled);
@@ -156,6 +159,7 @@ export class TacticalView {
         this._targetSelectedHandler = null;
         this._lastRenderTime = 0;
         this._hoveredTargetId = null;
+        this._terrainProbes = [];
     }
 
     readCoordinateDebugFlag() {
@@ -207,6 +211,20 @@ export class TacticalView {
             // Ignore query/storage access failures.
         }
         return true;
+    }
+
+    readTerrain2DVisualizationMode() {
+        if (typeof window === 'undefined') return 'legacy-contours';
+        try {
+            const params = new URLSearchParams(window.location.search || '');
+            const fromQuery = params.get('terrain2d');
+            if (fromQuery === 'legacy-contours' || fromQuery === 'shader-bands') return fromQuery;
+            const fromStorage = window.localStorage.getItem('silentAbyss.terrain2dVisualization');
+            if (fromStorage === 'legacy-contours' || fromStorage === 'shader-bands') return fromStorage;
+        } catch {
+            // Ignore query/storage access failures.
+        }
+        return 'legacy-contours';
     }
 
     readVisualModePreset() {
@@ -334,26 +352,51 @@ export class TacticalView {
         this.pulse = (Date.now() % 2000) / 2000;
         this._lastTargets = Array.isArray(targets) ? targets : [];
         this.updateOwnShipPose(ownShipCourse, ownShipForwardSpeed, dt, ownShipPosition);
+        this._terrainProbes = this.buildTerrainProbes();
         this.updateDebugHud();
 
         if (this.viewMode === '3d') {
             this.renderer3D.setVisible(true);
             this.renderer2D.setVisible(false);
-            this.renderer3D.render(this._ownShipPose, this.selectedTargetId, this.pulse, this._lastTargets, dt);
+            this.renderer3D.render(this._ownShipPose, this.selectedTargetId, this.pulse, this._lastTargets, dt, this._terrainProbes);
             return;
         }
 
         this.renderer3D.setVisible(false);
         this.renderer2D.setVisible(true);
         // Keep 3D state/camera warm while hidden so switching views does not cause jumpy catch-up.
-        this.renderer3D.render(this._ownShipPose, this.selectedTargetId, this.pulse, this._lastTargets, dt);
+        this.renderer3D.render(this._ownShipPose, this.selectedTargetId, this.pulse, this._lastTargets, dt, this._terrainProbes);
         this.renderer2D.render(this.viewMode, targets, {
             selectedTargetId: this.selectedTargetId,
             hoveredTargetId: this._hoveredTargetId,
             pulse: this.pulse,
             ownShipPose: this._ownShipPose,
+            terrainProbes: this._terrainProbes,
             pingFlashIntensity,
             dt
+        });
+    }
+
+    buildTerrainProbes() {
+        const ownX = Number.isFinite(this._ownShipPose?.x) ? this._ownShipPose.x : 0;
+        const ownZ = Number.isFinite(this._ownShipPose?.z) ? this._ownShipPose.z : 0;
+        const d = 40;
+        const points = [
+            { id: 'C', x: ownX, z: ownZ },
+            { id: 'N', x: ownX, z: ownZ + d },
+            { id: 'E', x: ownX + d, z: ownZ },
+            { id: 'S', x: ownX, z: ownZ - d },
+            { id: 'W', x: ownX - d, z: ownZ }
+        ];
+        return points.map((p) => {
+            const terrainY = this.getTerrainHeight(p.x, p.z);
+            return {
+                id: p.id,
+                x: p.x,
+                z: p.z,
+                terrainY,
+                depth: Math.max(1, -terrainY - 2)
+            };
         });
     }
 
@@ -420,6 +463,18 @@ export class TacticalView {
         if (typeof window !== 'undefined') {
             try {
                 window.localStorage.setItem('silentAbyss.enhanced2DVisuals', this.enhanced2DVisuals ? '1' : '0');
+            } catch {
+                // Ignore local storage failures.
+            }
+        }
+    }
+
+    setTerrain2DVisualizationMode(mode) {
+        this.terrain2DVisualization = mode === 'shader-bands' ? 'shader-bands' : 'legacy-contours';
+        this.renderer2D.setTerrainVisualizationMode(this.terrain2DVisualization);
+        if (typeof window !== 'undefined') {
+            try {
+                window.localStorage.setItem('silentAbyss.terrain2dVisualization', this.terrain2DVisualization);
             } catch {
                 // Ignore local storage failures.
             }
@@ -604,7 +659,18 @@ export class TacticalView {
             `own pos: (${ownX.toFixed(1)}, ${ownZ.toFixed(1)})`,
             `fwd vec: (${forward.x.toFixed(3)}, ${forward.z.toFixed(3)})`,
             bearingLine,
-            rangeLine
+            rangeLine,
+            `terrain probes: ${this.formatTerrainProbeFingerprint()}`
         ].join('\n');
+    }
+
+    formatTerrainProbeFingerprint() {
+        if (!Array.isArray(this._terrainProbes) || this._terrainProbes.length === 0) return '---';
+        const order = ['C', 'N', 'E', 'S', 'W'];
+        return order.map((id) => {
+            const probe = this._terrainProbes.find((p) => p.id === id);
+            if (!probe) return `${id}:--`;
+            return `${id}:${probe.depth.toFixed(1)}`;
+        }).join(' ');
     }
 }
