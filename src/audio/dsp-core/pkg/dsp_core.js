@@ -80,6 +80,25 @@ export class DspGraph {
 if (Symbol.dispose) DspGraph.prototype[Symbol.dispose] = DspGraph.prototype.free;
 
 /**
+ * @param {Float32Array} input
+ * @param {number} sample_rate
+ * @param {number} max_freq_hz
+ * @param {number} input_band_low_hz
+ * @param {number} input_band_high_hz
+ * @param {number} envelope_hp_hz
+ * @param {number} decimated_rate_target_hz
+ * @returns {Float32Array}
+ */
+export function compute_demon_spectrum(input, sample_rate, max_freq_hz, input_band_low_hz, input_band_high_hz, envelope_hp_hz, decimated_rate_target_hz) {
+    const ptr0 = passArrayF32ToWasm0(input, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.compute_demon_spectrum(ptr0, len0, sample_rate, max_freq_hz, input_band_low_hz, input_band_high_hz, envelope_hp_hz, decimated_rate_target_hz);
+    var v2 = getArrayF32FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
+    return v2;
+}
+
+/**
  * @returns {number}
  */
 export function param_bio_mix() {
@@ -169,6 +188,19 @@ const DspGraphFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
     : new FinalizationRegistry(ptr => wasm.__wbg_dspgraph_free(ptr >>> 0, 1));
 
+function getArrayF32FromWasm0(ptr, len) {
+    ptr = ptr >>> 0;
+    return getFloat32ArrayMemory0().subarray(ptr / 4, ptr / 4 + len);
+}
+
+let cachedFloat32ArrayMemory0 = null;
+function getFloat32ArrayMemory0() {
+    if (cachedFloat32ArrayMemory0 === null || cachedFloat32ArrayMemory0.byteLength === 0) {
+        cachedFloat32ArrayMemory0 = new Float32Array(wasm.memory.buffer);
+    }
+    return cachedFloat32ArrayMemory0;
+}
+
 function getStringFromWasm0(ptr, len) {
     ptr = ptr >>> 0;
     return decodeText(ptr, len);
@@ -180,6 +212,13 @@ function getUint8ArrayMemory0() {
         cachedUint8ArrayMemory0 = new Uint8Array(wasm.memory.buffer);
     }
     return cachedUint8ArrayMemory0;
+}
+
+function passArrayF32ToWasm0(arg, malloc) {
+    const ptr = malloc(arg.length * 4, 4) >>> 0;
+    getFloat32ArrayMemory0().set(arg, ptr / 4);
+    WASM_VECTOR_LEN = arg.length;
+    return ptr;
 }
 
 let cachedTextDecoder = new TextDecoder('utf-8', { ignoreBOM: true, fatal: true });
@@ -196,10 +235,13 @@ function decodeText(ptr, len) {
     return cachedTextDecoder.decode(getUint8ArrayMemory0().subarray(ptr, ptr + len));
 }
 
+let WASM_VECTOR_LEN = 0;
+
 let wasmModule, wasm;
 function __wbg_finalize_init(instance, module) {
     wasm = instance.exports;
     wasmModule = module;
+    cachedFloat32ArrayMemory0 = null;
     cachedUint8ArrayMemory0 = null;
     wasm.__wbindgen_start();
     return wasm;

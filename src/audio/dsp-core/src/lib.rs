@@ -33,6 +33,109 @@ fn rand_signed(state: &mut u32) -> f32 {
     (x as f32 / u32::MAX as f32) * 2.0 - 1.0
 }
 
+#[wasm_bindgen]
+pub fn compute_demon_spectrum(
+    input: &[f32],
+    sample_rate: f32,
+    max_freq_hz: u32,
+    input_band_low_hz: f32,
+    input_band_high_hz: f32,
+    envelope_hp_hz: f32,
+    decimated_rate_target_hz: f32,
+) -> Vec<f32> {
+    let max_freq = max_freq_hz as usize;
+    let mut spectrum = vec![0.0f32; max_freq + 1];
+
+    if input.len() < 64 || !sample_rate.is_finite() || sample_rate <= 0.0 {
+        return spectrum;
+    }
+
+    let band_low = if input_band_low_hz.is_finite() {
+        input_band_low_hz.max(1.0)
+    } else {
+        20.0
+    };
+    let band_high = if input_band_high_hz.is_finite() {
+        input_band_high_hz.max(band_low + 1.0)
+    } else {
+        1800.0
+    };
+    let env_hp = if envelope_hp_hz.is_finite() {
+        envelope_hp_hz.max(0.1)
+    } else {
+        1.0
+    };
+    let decim_target = if decimated_rate_target_hz.is_finite() {
+        decimated_rate_target_hz.max(100.0)
+    } else {
+        500.0
+    };
+
+    let n_raw = input.len();
+    let mean_raw = input.iter().copied().sum::<f32>() / n_raw as f32;
+
+    let hp_rc = 1.0 / (2.0 * PI * band_low);
+    let lp_rc = 1.0 / (2.0 * PI * band_high);
+    let dt = 1.0 / sample_rate;
+    let hp_alpha = hp_rc / (hp_rc + dt);
+    let lp_alpha = dt / (lp_rc + dt);
+
+    let d = ((sample_rate / decim_target).floor() as usize).max(1);
+    let decim_sr = sample_rate / d as f32;
+    let n_decim = n_raw / d;
+    if n_decim < 8 {
+        return spectrum;
+    }
+
+    let mut decim_env = vec![0.0f32; n_decim];
+    let mut hp_y = 0.0f32;
+    let mut hp_prev_x = 0.0f32;
+    let mut lp_y = 0.0f32;
+    let mut accum = 0.0f32;
+    for i in 0..n_raw {
+        let x = input[i] - mean_raw;
+        hp_y = hp_alpha * (hp_y + x - hp_prev_x);
+        hp_prev_x = x;
+        lp_y += lp_alpha * (hp_y - lp_y);
+        accum += lp_y.abs();
+        if (i + 1) % d == 0 {
+            let idx = (i + 1) / d - 1;
+            decim_env[idx] = accum / d as f32;
+            accum = 0.0;
+        }
+    }
+
+    let env_hp_rc = 1.0 / (2.0 * PI * env_hp);
+    let decim_dt = 1.0 / decim_sr;
+    let env_hp_alpha = env_hp_rc / (env_hp_rc + decim_dt);
+    let mut env_hp_y = 0.0f32;
+    let mut env_hp_prev_x = decim_env[0];
+    let mut signal = vec![0.0f32; n_decim];
+    for i in 0..n_decim {
+        let x = decim_env[i];
+        env_hp_y = env_hp_alpha * (env_hp_y + x - env_hp_prev_x);
+        env_hp_prev_x = x;
+        signal[i] = env_hp_y;
+    }
+
+    let hann_denom = (n_decim.saturating_sub(1)).max(1) as f32;
+    for f in 1..=max_freq {
+        let omega = (2.0 * PI * f as f32) / decim_sr;
+        let mut re = 0.0f32;
+        let mut im = 0.0f32;
+        for i in 0..n_decim {
+            let hann = 0.5 * (1.0 - ((2.0 * PI * i as f32) / hann_denom).cos());
+            let v = signal[i] * hann;
+            let angle = omega * i as f32;
+            re += v * angle.cos();
+            im -= v * angle.sin();
+        }
+        spectrum[f] = (re.hypot(im)) / n_decim as f32;
+    }
+
+    spectrum
+}
+
 #[derive(Clone, Copy)]
 struct EngineState {
     phase: f32,

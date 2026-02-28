@@ -2,6 +2,7 @@ import { ScrollingDisplay } from './scrolling-display.js';
 import { TrackState } from './simulation.js';
 import { float32Pool } from './utils/buffer-pool.js';
 import { RENDER_STYLE_TOKENS, resolveVisualMode, VISUAL_MODES } from './render-style-tokens.js';
+import { DemonWasmProcessor } from './audio/demon-wasm-processor.js';
 
 export const BTR_THEMES = {
     'CYAN': {
@@ -82,6 +83,10 @@ export class SonarVisuals {
         this.btrBearingReference = 'REL'; // REL (ship-relative) or TRUE (north-referenced)
 
         this.fftProcessor = options.fftProcessor || null;
+        this.demonProcessor = options.demonProcessor || new DemonWasmProcessor();
+        this._demonUseWasm = options.useWasmDemon ?? (typeof window !== 'undefined');
+        this._demonWasmInitRequested = false;
+        this._demonBackend = 'js';
         this.lofarSpectrum = null;
         this._lofarPending = null;
         this._lofarFrameCounter = 0;
@@ -142,6 +147,8 @@ export class SonarVisuals {
     init() {
         if (this.lCanvas) return; // Already initialized
 
+        this._maybeInitDemonWasm();
+
         this.lCanvas = document.getElementById('lofar-canvas');
         this.dCanvas = document.getElementById('demon-canvas');
 
@@ -166,6 +173,23 @@ export class SonarVisuals {
         this._resizeHandler = () => this.resize();
         this.resize();
         window.addEventListener('resize', this._resizeHandler);
+    }
+
+    _maybeInitDemonWasm() {
+        if (!this._demonUseWasm) return;
+        if (!this.demonProcessor || typeof this.demonProcessor.init !== 'function') return;
+        if (this._demonWasmInitRequested) return;
+
+        this._demonWasmInitRequested = true;
+        this.demonProcessor.init().then((ok) => {
+            if (ok && this.demonProcessor.ready) {
+                this._demonBackend = 'wasm';
+            } else {
+                this._demonBackend = 'js';
+            }
+        }).catch(() => {
+            this._demonBackend = 'js';
+        });
     }
 
     resize() {
@@ -544,6 +568,7 @@ export class SonarVisuals {
     _updateDemonSpectrum(timeDomainData, sampleRate, selectedTarget = null) {
         if (!(timeDomainData instanceof Float32Array)) return;
         if (!sampleRate || sampleRate <= 0) return;
+        this._maybeInitDemonWasm();
 
         this._pushDemonSamples(timeDomainData);
 
@@ -705,6 +730,30 @@ export class SonarVisuals {
         spectrum.fill(0);
 
         if (nRaw < 64) return spectrum;
+
+        if (
+            this._demonUseWasm &&
+            this.demonProcessor?.ready &&
+            typeof this.demonProcessor.computeSpectrum === 'function'
+        ) {
+            const wasmSpectrum = this.demonProcessor.computeSpectrum(
+                timeDomainData,
+                sampleRate,
+                maxFreqHz,
+                {
+                    inputBandLowHz: 20,
+                    inputBandHighHz: 1800,
+                    envelopeHpHz: 1.0,
+                    decimatedRateTargetHz: 500
+                }
+            );
+            if (wasmSpectrum instanceof Float32Array && wasmSpectrum.length === spectrum.length) {
+                spectrum.set(wasmSpectrum);
+                this._demonBackend = 'wasm';
+                return spectrum;
+            }
+        }
+        this._demonBackend = 'js';
 
         // DEMON chain:
         // 1) Band-limit raw signal to machinery band (20–1800 Hz HP+LP).
