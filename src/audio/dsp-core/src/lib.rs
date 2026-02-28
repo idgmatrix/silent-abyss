@@ -181,31 +181,37 @@ impl EngineState {
 
 #[derive(Clone, Copy)]
 struct CavState {
-    filtered_noise: f32,
+    lp_noise: f32,
+    shaped_noise: f32,
 }
 
 impl CavState {
     fn new() -> Self {
         Self {
-            filtered_noise: 0.0,
+            lp_noise: 0.0,
+            shaped_noise: 0.0,
         }
     }
 
     #[inline]
     fn tick(&mut self, rpm: f32, phase: f32, rng: &mut u32) -> f32 {
         if rpm < 1.0 {
-            self.filtered_noise = 0.0;
+            self.lp_noise = 0.0;
+            self.shaped_noise = 0.0;
             return 0.0;
         }
 
         let white = rand_signed(rng);
-        self.filtered_noise += 0.22 * (white - self.filtered_noise);
+        // Derive a brighter cavitation-like texture: white noise minus slow component.
+        self.lp_noise += 0.08 * (white - self.lp_noise);
+        let hp = white - self.lp_noise;
+        self.shaped_noise += 0.35 * (hp - self.shaped_noise);
 
         let speed_norm = clamp((rpm - 60.0) / 320.0, 0.0, 1.0);
-        let intensity = 0.01 + speed_norm * speed_norm * 0.55;
+        let intensity = 0.01 + speed_norm * speed_norm * speed_norm * 0.78;
         let blade_mod = 0.5 + 0.5 * phase.sin();
 
-        self.filtered_noise * intensity * (0.5 + 0.5 * blade_mod)
+        self.shaped_noise * intensity * (0.35 + 0.65 * blade_mod)
     }
 }
 

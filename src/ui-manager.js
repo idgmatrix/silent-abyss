@@ -68,7 +68,8 @@ export class UIManager {
             'solution-speed', 'solution-save-btn', 'solution-confidence', 'mission-select',
             'mission-reset-btn', 'mission-title', 'mission-status', 'mission-briefing',
             'mission-objectives', 'demon-focus-width-slider', 'demon-focus-width-value',
-            'demon-self-noise-toggle', 'demon-stability-slider', 'demon-stability-value',
+            'demon-self-noise-toggle', 'demon-input-band-select',
+            'demon-stability-slider', 'demon-stability-value',
             'demon-controls-toggle', 'demon-controls-content', 'rudder-slider',
             'rudder-angle-display', 'rudder-port-btn', 'rudder-starboard-btn',
             'rudder-center-btn', 'heading-display', 'throttle-slider', 'throttle-display',
@@ -512,6 +513,7 @@ export class UIManager {
         const demonFocusWidthSliderEl = this.getEl('demon-focus-width-slider');
         const demonFocusWidthValueEl = this.getEl('demon-focus-width-value');
         const demonSelfNoiseToggleEl = this.getEl('demon-self-noise-toggle');
+        const demonInputBandSelectEl = this.getEl('demon-input-band-select');
         const demonStabilitySliderEl = this.getEl('demon-stability-slider');
         const demonStabilityValueEl = this.getEl('demon-stability-value');
         const demonControlsToggleEl = this.getEl('demon-controls-toggle');
@@ -535,6 +537,14 @@ export class UIManager {
             };
             demonSelfNoiseToggleEl.onchange = applySelfNoise;
             applySelfNoise();
+        }
+
+        if (demonInputBandSelectEl) {
+            const applyInputBand = () => {
+                this.orch.sonarVisuals.setDemonInputBandPreset(demonInputBandSelectEl.value);
+            };
+            demonInputBandSelectEl.onchange = applyInputBand;
+            applyInputBand();
         }
 
         if (demonStabilitySliderEl) {

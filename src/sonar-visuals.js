@@ -67,6 +67,27 @@ export const BTR_THEMES = {
     }
 };
 
+const DEMON_INPUT_BAND_PRESETS = {
+    MACHINERY: {
+        inputBandLowHz: 20,
+        inputBandHighHz: 1800,
+        envelopeHpHz: 1.0,
+        decimatedRateTargetHz: 500
+    },
+    CAVITATION: {
+        inputBandLowHz: 1500,
+        inputBandHighHz: 12000,
+        envelopeHpHz: 1.0,
+        decimatedRateTargetHz: 500
+    },
+    HYBRID: {
+        inputBandLowHz: 20,
+        inputBandHighHz: 12000,
+        envelopeHpHz: 1.0,
+        decimatedRateTargetHz: 500
+    }
+};
+
 export class SonarVisuals {
     constructor(options = {}) {
         this.lCanvas = null;
@@ -116,6 +137,8 @@ export class SonarVisuals {
         this._pingEchoes = [];
         this._demonFocusWidthHz = 1.3;
         this._demonResponsiveness = 0.55;
+        this._demonInputBandPreset = 'MACHINERY';
+        this._demonInputBandSettings = { ...DEMON_INPUT_BAND_PRESETS.MACHINERY };
         this._demonLocks = new Map();
         this.enhancedVisualsEnabled = true;
         this.visualMode = VISUAL_MODES.STEALTH;
@@ -754,12 +777,7 @@ export class SonarVisuals {
                 timeDomainData,
                 sampleRate,
                 maxFreqHz,
-                {
-                    inputBandLowHz: 20,
-                    inputBandHighHz: 1800,
-                    envelopeHpHz: 1.0,
-                    decimatedRateTargetHz: 500
-                }
+                this._demonInputBandSettings
             );
             if (wasmSpectrum instanceof Float32Array && wasmSpectrum.length === spectrum.length) {
                 spectrum.set(wasmSpectrum);
@@ -770,7 +788,7 @@ export class SonarVisuals {
         this._demonBackend = 'js';
 
         // DEMON chain:
-        // 1) Band-limit raw signal to machinery band (20–1800 Hz HP+LP).
+        // 1) Band-limit raw signal to configured input band (HP+LP).
         // 2) Full-wave rectify to get amplitude envelope.
         // 3) Average-decimate envelope to ~500 Hz — we only need 1–120 Hz,
         //    so decimation improves low-frequency resolution while cutting cost.
@@ -780,14 +798,17 @@ export class SonarVisuals {
         for (let i = 0; i < nRaw; i++) meanRaw += timeDomainData[i];
         meanRaw /= nRaw;
 
-        const hpRc = 1 / (2 * Math.PI * 20);
-        const lpRc = 1 / (2 * Math.PI * 1800);
+        const hpLowHz = this._demonInputBandSettings.inputBandLowHz;
+        const lpHighHz = this._demonInputBandSettings.inputBandHighHz;
+        const hpRc = 1 / (2 * Math.PI * hpLowHz);
+        const lpRc = 1 / (2 * Math.PI * lpHighHz);
         const dt = 1 / sampleRate;
         const hpAlpha = hpRc / (hpRc + dt);
         const lpAlpha = dt / (lpRc + dt);
 
-        // Decimate envelope to ~500 Hz sample rate.
-        const D = Math.max(1, Math.floor(sampleRate / 500));
+        // Decimate envelope to low-rate signal for blade-rate analysis.
+        const targetDecimatedRateHz = this._demonInputBandSettings.decimatedRateTargetHz;
+        const D = Math.max(1, Math.floor(sampleRate / targetDecimatedRateHz));
         const decimSR = sampleRate / D;
         const nDecim = Math.floor(nRaw / D);
         if (nDecim < 8) return spectrum;
@@ -806,8 +827,9 @@ export class SonarVisuals {
             }
         }
 
-        // Remove slow DC drift from decimated envelope (1 Hz HP).
-        const envHpRc = 1 / (2 * Math.PI * 1.0);
+        // Remove slow DC drift from decimated envelope.
+        const envHpHz = this._demonInputBandSettings.envelopeHpHz;
+        const envHpRc = 1 / (2 * Math.PI * envHpHz);
         const decimDt = 1 / decimSR;
         const envHpAlpha = envHpRc / (envHpRc + decimDt);
         let envHpY = 0, envHpPrevX = decimEnv[0] || 0;
@@ -1407,7 +1429,7 @@ export class SonarVisuals {
 
         // Keep text readable against dense marker regions.
         ctx.fillStyle = 'rgba(0, 0, 0, 0.48)';
-        ctx.fillRect(infoPanelX, infoPanelY, infoPanelWidth, 130);
+        ctx.fillRect(infoPanelX, infoPanelY, infoPanelWidth, 142);
 
         ctx.fillStyle = selectedTarget ? '#ff3333' : '#00ffff';
         ctx.font = '9px Arial';
@@ -1439,21 +1461,23 @@ export class SonarVisuals {
             infoPanelX + 6,
             infoPanelY + 108
         );
+        ctx.fillStyle = '#ffd27a';
+        ctx.fillText(`IN BAND: ${this._getDemonInputBandLabel()}`, infoPanelX + 6, infoPanelY + 122);
 
         if (selectedTarget && selectedTarget.classification) {
             const cls = selectedTarget.classification;
             ctx.fillStyle = '#ffffff';
             ctx.font = '10px monospace';
-            ctx.fillText(`STATUS: ${cls.state}`, infoPanelX + 6, infoPanelY + 122);
+            ctx.fillText(`STATUS: ${cls.state}`, infoPanelX + 6, infoPanelY + 136);
 
             // Progress bar
             ctx.fillStyle = 'rgba(255, 255, 255, 0.2)';
-            ctx.fillRect(infoPanelX + 6, infoPanelY + 127, 100, 4);
+            ctx.fillRect(infoPanelX + 6, infoPanelY + 141, 100, 4);
             ctx.fillStyle = cls.confirmed ? '#00ff00' : '#ffffff';
-            ctx.fillRect(infoPanelX + 6, infoPanelY + 127, cls.progress * 100, 4);
+            ctx.fillRect(infoPanelX + 6, infoPanelY + 141, cls.progress * 100, 4);
 
             if (cls.identifiedClass) {
-                ctx.fillText(`CLASS: ${cls.identifiedClass.toUpperCase()}`, infoPanelX + 6, infoPanelY + 142);
+                ctx.fillText(`CLASS: ${cls.identifiedClass.toUpperCase()}`, infoPanelX + 6, infoPanelY + 156);
             }
         }
     }
@@ -1477,6 +1501,22 @@ export class SonarVisuals {
         this._demonLockConfig.lowEnergyFastRelease = 0.22 + r * 0.23;
         this._demonLockConfig.lockOn = 0.74 - r * 0.12;
         this._demonLockConfig.lockOff = 0.5 - r * 0.16;
+    }
+
+    setDemonInputBandPreset(presetName) {
+        const normalized = String(presetName || '').toUpperCase();
+        const preset = DEMON_INPUT_BAND_PRESETS[normalized] || DEMON_INPUT_BAND_PRESETS.MACHINERY;
+        this._demonInputBandPreset = DEMON_INPUT_BAND_PRESETS[normalized] ? normalized : 'MACHINERY';
+        this._demonInputBandSettings = { ...preset };
+    }
+
+    _getDemonInputBandLabel() {
+        const s = this._demonInputBandSettings;
+        const formatHz = (v) => {
+            if (!Number.isFinite(v)) return '--';
+            return v >= 1000 ? `${(v / 1000).toFixed(v % 1000 === 0 ? 0 : 1)}k` : `${Math.round(v)}`;
+        };
+        return `${this._demonInputBandPreset} ${formatHz(s.inputBandLowHz)}-${formatHz(s.inputBandHighHz)}Hz`;
     }
 
     setTheme(themeName) {

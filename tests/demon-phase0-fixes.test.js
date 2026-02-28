@@ -56,6 +56,25 @@ function createTargetSignalFrame({
 }
 
 describe('DEMON phase-0 correctness fixes', () => {
+    it('applies DEMON input-band presets for cavitation analysis', () => {
+        const visuals = createHarness();
+
+        visuals.setDemonInputBandPreset('CAVITATION');
+        expect(visuals._demonInputBandPreset).toBe('CAVITATION');
+        expect(visuals._demonInputBandSettings.inputBandLowHz).toBe(1500);
+        expect(visuals._demonInputBandSettings.inputBandHighHz).toBe(12000);
+
+        visuals.setDemonInputBandPreset('HYBRID');
+        expect(visuals._demonInputBandPreset).toBe('HYBRID');
+        expect(visuals._demonInputBandSettings.inputBandLowHz).toBe(20);
+        expect(visuals._demonInputBandSettings.inputBandHighHz).toBe(12000);
+
+        visuals.setDemonInputBandPreset('unknown-preset');
+        expect(visuals._demonInputBandPreset).toBe('MACHINERY');
+        expect(visuals._demonInputBandSettings.inputBandLowHz).toBe(20);
+        expect(visuals._demonInputBandSettings.inputBandHighHz).toBe(1800);
+    });
+
     it('resets sample history when switching selected target', () => {
         const visuals = createHarness();
         const targetA = { id: 'target-a', rpm: 200, bladeCount: 5, type: 'SHIP', classification: null };
