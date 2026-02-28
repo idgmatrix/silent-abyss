@@ -96,6 +96,8 @@ export class SonarVisuals {
         this._demonPeaksHz = [];
         this._demonHarmonicScore = 0;
         this._demonDisplayHarmonicScore = 0;
+        this._demonAutoBpfHz = 0;
+        this._demonAutoBpfConfidence = 0;
         this._demonFrameCounter = 0;
         this._demonSampleBuffer = new Float32Array(131072); // ~3 s at 44100 Hz
         this._demonSampleWriteIndex = 0;
@@ -312,6 +314,8 @@ export class SonarVisuals {
                 : [],
             harmonicScore: this._demonHarmonicScore,
             displayHarmonicScore: this._demonDisplayHarmonicScore,
+            autoBpfHz: this._demonAutoBpfHz,
+            autoBpfConfidence: this._demonAutoBpfConfidence,
             signalQuality: this._demonSignalQuality,
             trackState: this._demonTrackState,
             lockConfidence: this._demonLockConfidence,
@@ -337,12 +341,11 @@ export class SonarVisuals {
             this._demonPeaksHz = [];
             this._demonHarmonicScore = 0;
             this._demonDisplayHarmonicScore = 0;
+            this._demonAutoBpfHz = 0;
+            this._demonAutoBpfConfidence = 0;
             this._demonSignalQuality = 0;
             this._demonTrackState = 'SEARCHING';
             this._demonLockConfidence = 0;
-            this._demonSampleCount = 0;
-            this._demonSampleWriteIndex = 0;
-            this._demonSampleBuffer.fill(0);
             return;
         }
 
@@ -364,6 +367,10 @@ export class SonarVisuals {
         this._demonDisplayHarmonicScore = Number.isFinite(cached.displayHarmonicScore)
             ? cached.displayHarmonicScore
             : this._demonHarmonicScore;
+        this._demonAutoBpfHz = Number.isFinite(cached.autoBpfHz) ? cached.autoBpfHz : 0;
+        this._demonAutoBpfConfidence = Number.isFinite(cached.autoBpfConfidence)
+            ? cached.autoBpfConfidence
+            : 0;
         this._demonSignalQuality = Number.isFinite(cached.signalQuality) ? cached.signalQuality : 0;
         this._demonTrackState = cached.trackState || 'SEARCHING';
         this._demonLockConfidence = Number.isFinite(cached.lockConfidence) ? cached.lockConfidence : 0;
@@ -401,6 +408,10 @@ export class SonarVisuals {
         }
 
         this._demonSelectedTargetId = nextTargetId;
+        // Reset time-domain history on target/source context switches to prevent cross-target contamination.
+        this._demonSampleCount = 0;
+        this._demonSampleWriteIndex = 0;
+        this._demonSampleBuffer.fill(0);
         if (this._demonSelectedTargetId) {
             this._restoreDemonStateFromCache(this._demonSelectedTargetId);
         } else {
@@ -408,6 +419,8 @@ export class SonarVisuals {
             this._demonPeaksHz = [];
             this._demonHarmonicScore = 0;
             this._demonDisplayHarmonicScore = 0;
+            this._demonAutoBpfHz = 0;
+            this._demonAutoBpfConfidence = 0;
             this._demonSignalQuality = 0;
             this._demonTrackState = 'SEARCHING';
             this._demonLockConfidence = 0;
@@ -574,7 +587,8 @@ export class SonarVisuals {
 
         const pingActive = !!this._demonPingTransient?.active;
         const pingRecent = !!this._demonPingTransient?.recent;
-        if (pingActive || pingRecent) {
+        const pingSuppressionEnabled = this._demonSourceMode !== 'SELECTED';
+        if (pingSuppressionEnabled && (pingActive || pingRecent)) {
             // Reject transient-contaminated DEMON frames during/shortly after active ping.
             if (this._demonSmoothedSpectrum instanceof Float32Array) {
                 for (let i = 1; i < this._demonSmoothedSpectrum.length; i++) {
@@ -1010,11 +1024,25 @@ export class SonarVisuals {
 
     _estimateBpfFromPeaks(peaksHz, maxFreqHz) {
         if (!Array.isArray(peaksHz) || peaksHz.length < 2) return null;
+        const maxSpacing = Math.max(20, maxFreqHz * 0.35);
         const spacings = [];
         for (let i = 1; i < peaksHz.length; i++) {
             const d = peaksHz[i] - peaksHz[i - 1];
-            if (d >= 2 && d <= Math.max(20, maxFreqHz * 0.35)) {
+            if (d >= 2 && d <= maxSpacing) {
                 spacings.push(d);
+                continue;
+            }
+            // If intermediate harmonics are missing, the observed spacing can be 2x/3x the true BPF.
+            if (d > maxSpacing) {
+                const half = d * 0.5;
+                if (half >= 2 && half <= maxSpacing) {
+                    spacings.push(half);
+                    continue;
+                }
+                const third = d / 3;
+                if (third >= 2 && third <= maxSpacing) {
+                    spacings.push(third);
+                }
             }
         }
         if (spacings.length === 0) return null;
@@ -1285,7 +1313,30 @@ export class SonarVisuals {
             enhancedSpectrum,
             maxFreqHz
         );
-        const trackedBpfHz = Number.isFinite(selectedLock?.bpfEstimateHz) ? selectedLock.bpfEstimateHz : bpfHz;
+        let autoBpfHz = 0;
+        if (!hasSelectedTarget && enhancedSpectrum instanceof Float32Array) {
+            const peakBpf = this._estimateBpfFromPeaks(this._demonPeaksHz, maxFreqHz);
+            if (Number.isFinite(peakBpf) && peakBpf > 0) {
+                const scored = this._scoreDemonComb(enhancedSpectrum, peakBpf, maxFreqHz);
+                const confidence = Math.max(
+                    0,
+                    Math.min(1, scored.score * 0.78 + Math.max(0, Math.min(1, this._demonSignalQuality)) * 0.22)
+                );
+                this._demonAutoBpfHz = peakBpf;
+                this._demonAutoBpfConfidence +=
+                    (confidence - this._demonAutoBpfConfidence) * 0.12;
+                autoBpfHz = peakBpf;
+            } else {
+                this._demonAutoBpfHz = 0;
+                this._demonAutoBpfConfidence *= 0.88;
+            }
+        } else {
+            this._demonAutoBpfHz = 0;
+            this._demonAutoBpfConfidence *= 0.9;
+        }
+        const trackedBpfHz = hasSelectedTarget
+            ? (Number.isFinite(selectedLock?.bpfEstimateHz) ? selectedLock.bpfEstimateHz : bpfHz)
+            : (Number.isFinite(this._demonAutoBpfHz) ? this._demonAutoBpfHz : autoBpfHz);
         const harmonicEvalEnabled =
             hasSelectedTarget &&
             this._demonTrackState !== 'SEARCHING' &&
@@ -1293,7 +1344,9 @@ export class SonarVisuals {
             (selectedLock?.harmonicHits ?? 0) >= 1;
         const harmonicGuidesVisible = this._demonTrackState !== 'SEARCHING';
         const targetHarmonicsHz = [];
-        this._demonHarmonicScore = selectedLock ? selectedLock.confidence : 0;
+        this._demonHarmonicScore = selectedLock
+            ? selectedLock.confidence
+            : this._demonAutoBpfConfidence;
         if (hasSelectedTarget && trackedBpfHz > 0 && Number.isFinite(trackedBpfHz) && harmonicGuidesVisible) {
             ctx.save();
             const toleranceHz = Math.max(0.5, this._demonFocusWidthHz);
@@ -1376,11 +1429,10 @@ export class SonarVisuals {
         if (sampleRate > 0) {
             ctx.fillText(`BAND: 1-${maxFreqHz} Hz`, infoPanelX + 6, infoPanelY + 80);
         }
-        ctx.fillText(
-            `HARMONIC MATCH: ${harmonicEvalEnabled ? `${(this._demonDisplayHarmonicScore * 100).toFixed(0)}%` : '--'}`,
-            infoPanelX + 6,
-            infoPanelY + 94
-        );
+        const harmonicMatchText = hasSelectedTarget
+            ? (harmonicEvalEnabled ? `${(this._demonDisplayHarmonicScore * 100).toFixed(0)}%` : '--')
+            : (this._demonDisplayHarmonicScore >= 0.18 ? `${(this._demonDisplayHarmonicScore * 100).toFixed(0)}%` : '--');
+        ctx.fillText(`HARMONIC MATCH: ${harmonicMatchText}`, infoPanelX + 6, infoPanelY + 94);
         ctx.fillStyle = '#79bfff';
         ctx.fillText(
             `SELF MASK: ${this.selfNoiseSuppressionEnabled ? 'ON' : 'OFF'} | OWN BPF: ${ownBpfHz > 0 ? `${ownBpfHz.toFixed(1)}Hz` : '--'}`,
