@@ -20,7 +20,11 @@ const ACOUSTIC_DEFAULTS_BY_TYPE = {
 const ACOUSTIC_LIMITS = {
     rpm: { min: 0, max: 2000 },
     bladeCount: { min: 0, max: 12 },
-    shaftRate: { min: 0, max: 120 }
+    shaftRate: { min: 0, max: 120 },
+    load: { min: 0, max: 1 },
+    rpmJitter: { min: 0, max: 1 },
+    cavitationLevel: { min: 0, max: 1 },
+    classProfile: { min: 0, max: 4 }
 };
 
 const BIO_SOUND_TYPES = ['chirp', 'snapping_shrimp', 'whale_moan', 'dolphin_whistle', 'echolocation_click', 'humpback_song'];
@@ -76,6 +80,28 @@ function normalizeAcousticTargetConfig(target) {
 
     if (Number.isFinite(target.bioRate)) {
         normalized.bioRate = Math.max(BIO_RATE_LIMITS.min, Math.min(BIO_RATE_LIMITS.max, target.bioRate));
+    }
+
+    if (Number.isFinite(target.load)) {
+        normalized.load = Math.max(ACOUSTIC_LIMITS.load.min, Math.min(ACOUSTIC_LIMITS.load.max, target.load));
+    }
+    if (Number.isFinite(target.rpmJitter)) {
+        normalized.rpmJitter = Math.max(
+            ACOUSTIC_LIMITS.rpmJitter.min,
+            Math.min(ACOUSTIC_LIMITS.rpmJitter.max, target.rpmJitter)
+        );
+    }
+    if (Number.isFinite(target.cavitationLevel)) {
+        normalized.cavitationLevel = Math.max(
+            ACOUSTIC_LIMITS.cavitationLevel.min,
+            Math.min(ACOUSTIC_LIMITS.cavitationLevel.max, target.cavitationLevel)
+        );
+    }
+    if (Number.isFinite(target.classProfile)) {
+        normalized.classProfile = Math.max(
+            ACOUSTIC_LIMITS.classProfile.min,
+            Math.min(ACOUSTIC_LIMITS.classProfile.max, Math.round(target.classProfile))
+        );
     }
 
     if (isPropulsionTarget) {
@@ -145,6 +171,23 @@ function validateTarget(target, index, context) {
     if (target.bioRate !== undefined) {
         assert(Number.isFinite(target.bioRate), `${context}[${index}].bioRate must be numeric`);
         assert(target.bioRate >= BIO_RATE_LIMITS.min && target.bioRate <= BIO_RATE_LIMITS.max, `${context}[${index}].bioRate must be in ${BIO_RATE_LIMITS.min}-${BIO_RATE_LIMITS.max}`);
+    }
+    if (target.load !== undefined) {
+        assert(Number.isFinite(target.load), `${context}[${index}].load must be numeric`);
+        assert(target.load >= ACOUSTIC_LIMITS.load.min && target.load <= ACOUSTIC_LIMITS.load.max, `${context}[${index}].load must be in ${ACOUSTIC_LIMITS.load.min}-${ACOUSTIC_LIMITS.load.max}`);
+    }
+    if (target.rpmJitter !== undefined) {
+        assert(Number.isFinite(target.rpmJitter), `${context}[${index}].rpmJitter must be numeric`);
+        assert(target.rpmJitter >= ACOUSTIC_LIMITS.rpmJitter.min && target.rpmJitter <= ACOUSTIC_LIMITS.rpmJitter.max, `${context}[${index}].rpmJitter must be in ${ACOUSTIC_LIMITS.rpmJitter.min}-${ACOUSTIC_LIMITS.rpmJitter.max}`);
+    }
+    if (target.cavitationLevel !== undefined) {
+        assert(Number.isFinite(target.cavitationLevel), `${context}[${index}].cavitationLevel must be numeric`);
+        assert(target.cavitationLevel >= ACOUSTIC_LIMITS.cavitationLevel.min && target.cavitationLevel <= ACOUSTIC_LIMITS.cavitationLevel.max, `${context}[${index}].cavitationLevel must be in ${ACOUSTIC_LIMITS.cavitationLevel.min}-${ACOUSTIC_LIMITS.cavitationLevel.max}`);
+    }
+    if (target.classProfile !== undefined) {
+        assert(Number.isFinite(target.classProfile), `${context}[${index}].classProfile must be numeric`);
+        assert(Number.isInteger(target.classProfile), `${context}[${index}].classProfile must be an integer`);
+        assert(target.classProfile >= ACOUSTIC_LIMITS.classProfile.min && target.classProfile <= ACOUSTIC_LIMITS.classProfile.max, `${context}[${index}].classProfile must be in ${ACOUSTIC_LIMITS.classProfile.min}-${ACOUSTIC_LIMITS.classProfile.max}`);
     }
 }
 

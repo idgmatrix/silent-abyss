@@ -1,4 +1,5 @@
 import { WasmAudioManager } from './audio/wasm-audio-manager.js';
+import { getAcousticPreset } from './data/ship-signatures.js';
 
 const BIO_TYPE_TO_PARAM = {
     chirp: 0,
@@ -8,6 +9,92 @@ const BIO_TYPE_TO_PARAM = {
     echolocation_click: 4,
     humpback_song: 5
 };
+
+function clamp01(value, fallback = 0) {
+    return Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : fallback;
+}
+
+function getFallbackAcousticPreset(target, type) {
+    if (type === 'SUBMARINE') {
+        return {
+            classProfile: 1,
+            loadBase: 0.22,
+            loadScale: 0.56,
+            jitterBase: 0.05,
+            jitterScale: 0.42,
+            cavitationBase: 0.06,
+            cavitationScale: 0.24
+        };
+    }
+    if (type === 'TORPEDO') {
+        return {
+            classProfile: 4,
+            loadBase: 0.82,
+            loadScale: 0.24,
+            jitterBase: 0.20,
+            jitterScale: 0.22,
+            cavitationBase: 0.86,
+            cavitationScale: 0.18
+        };
+    }
+    return {
+        classProfile: 0,
+        loadBase: 0.28,
+        loadScale: 0.68,
+        jitterBase: 0.08,
+        jitterScale: 0.58,
+        cavitationBase: 0.20,
+        cavitationScale: 0.58
+    };
+}
+
+function getResolvedAcousticPreset(target, type) {
+    const signaturePreset = target.classId ? getAcousticPreset(target.classId) : null;
+    return signaturePreset || getFallbackAcousticPreset(target, type);
+}
+
+function getTargetPropulsionParams(target, type) {
+    const rpm = Number.isFinite(target.rpm) ? Math.max(0, target.rpm) : 0;
+    const shaftRate = Number.isFinite(target.shaftRate) ? Math.max(0, target.shaftRate) : rpm / 60;
+    const speed = Number.isFinite(target.speed) ? Math.max(0, target.speed) : 0;
+    const preset = getResolvedAcousticPreset(target, type);
+    const rpmNorm = clamp01(rpm / 320, 0);
+
+    const computedLoad = clamp01(
+        preset.loadBase + rpmNorm * preset.loadScale + speed * 0.10,
+        preset.loadBase
+    );
+    const computedRpmJitter = clamp01(
+        preset.jitterBase + speed * preset.jitterScale * 0.18 + rpmNorm * 0.04,
+        preset.jitterBase
+    );
+    const computedCavitationLevel = clamp01(
+        preset.cavitationBase + rpmNorm * preset.cavitationScale + computedLoad * 0.10,
+        preset.cavitationBase
+    );
+
+    return {
+        shaftRate,
+        load: clamp01(target.load, computedLoad),
+        rpmJitter: clamp01(target.rpmJitter, computedRpmJitter),
+        cavitationLevel: clamp01(target.cavitationLevel, computedCavitationLevel),
+        classProfile: Number.isFinite(target.classProfile)
+            ? Math.max(0, Math.min(4, Math.round(target.classProfile)))
+            : preset.classProfile
+    };
+}
+
+function getOwnShipPropulsionParams(rpm, bladeCount) {
+    const safeRpm = Number.isFinite(rpm) ? Math.max(0, rpm) : 0;
+    const safeBlades = Number.isFinite(bladeCount) ? Math.max(1, bladeCount) : 5;
+    return {
+        shaftRate: safeRpm / 60,
+        load: clamp01(0.24 + safeRpm / 360, 0.3),
+        rpmJitter: clamp01(0.06 + safeRpm / 1800, 0.08),
+        cavitationLevel: clamp01((safeRpm - 90) / 280, 0.18),
+        classProfile: safeBlades >= 7 ? 1 : 0
+    };
+}
 
 export class AudioSystem {
     constructor() {
@@ -181,11 +268,22 @@ export class AudioSystem {
             this.wasmManager.setCavMix(0.3, this.ownVoiceId);
             this.wasmManager.setBioMix(0.0, this.ownVoiceId); // Own ship shouldn't chirp like a dolphin
             this.wasmManager.setBlades(this.ownShipBladeCount, this.ownVoiceId);
+            const ownPropulsion = getOwnShipPropulsionParams(this.ownShipRpm, this.ownShipBladeCount);
+            this.wasmManager.setShaftRate(ownPropulsion.shaftRate, this.ownVoiceId);
+            this.wasmManager.setLoad(ownPropulsion.load, this.ownVoiceId);
+            this.wasmManager.setRpmJitter(ownPropulsion.rpmJitter, this.ownVoiceId);
+            this.wasmManager.setClassProfile(ownPropulsion.classProfile, this.ownVoiceId);
+            this.wasmManager.setCavitationLevel(ownPropulsion.cavitationLevel, this.ownVoiceId);
             this.analysisOwnShipWasmManager.setGain(this.currentAnalysisOwnShipGain, this.analysisOwnShipVoiceId);
             this.analysisOwnShipWasmManager.setEngineMix(1.0, this.analysisOwnShipVoiceId);
             this.analysisOwnShipWasmManager.setCavMix(0.3, this.analysisOwnShipVoiceId);
             this.analysisOwnShipWasmManager.setBioMix(0.0, this.analysisOwnShipVoiceId);
             this.analysisOwnShipWasmManager.setBlades(this.ownShipBladeCount, this.analysisOwnShipVoiceId);
+            this.analysisOwnShipWasmManager.setShaftRate(ownPropulsion.shaftRate, this.analysisOwnShipVoiceId);
+            this.analysisOwnShipWasmManager.setLoad(ownPropulsion.load, this.analysisOwnShipVoiceId);
+            this.analysisOwnShipWasmManager.setRpmJitter(ownPropulsion.rpmJitter, this.analysisOwnShipVoiceId);
+            this.analysisOwnShipWasmManager.setClassProfile(ownPropulsion.classProfile, this.analysisOwnShipVoiceId);
+            this.analysisOwnShipWasmManager.setCavitationLevel(ownPropulsion.cavitationLevel, this.analysisOwnShipVoiceId);
             this.analysisOwnShipWasmManager.setRpm(this.ownShipRpm, this.analysisOwnShipVoiceId);
 
         } catch (e) {
@@ -198,7 +296,20 @@ export class AudioSystem {
             this.wasmManager.setRpm(value, this.ownVoiceId);
         }
         this.ownShipRpm = Number.isFinite(value) ? Math.max(0, value) : 0;
+        const ownPropulsion = getOwnShipPropulsionParams(this.ownShipRpm, this.ownShipBladeCount);
+        if (this.wasmManager && this.wasmManager.ready) {
+            this.wasmManager.setShaftRate(ownPropulsion.shaftRate, this.ownVoiceId);
+            this.wasmManager.setLoad(ownPropulsion.load, this.ownVoiceId);
+            this.wasmManager.setRpmJitter(ownPropulsion.rpmJitter, this.ownVoiceId);
+            this.wasmManager.setClassProfile(ownPropulsion.classProfile, this.ownVoiceId);
+            this.wasmManager.setCavitationLevel(ownPropulsion.cavitationLevel, this.ownVoiceId);
+        }
         if (this.analysisOwnShipWasmManager && this.analysisOwnShipWasmManager.ready && this.analysisOwnShipVoiceId >= 0) {
+            this.analysisOwnShipWasmManager.setShaftRate(ownPropulsion.shaftRate, this.analysisOwnShipVoiceId);
+            this.analysisOwnShipWasmManager.setLoad(ownPropulsion.load, this.analysisOwnShipVoiceId);
+            this.analysisOwnShipWasmManager.setRpmJitter(ownPropulsion.rpmJitter, this.analysisOwnShipVoiceId);
+            this.analysisOwnShipWasmManager.setClassProfile(ownPropulsion.classProfile, this.analysisOwnShipVoiceId);
+            this.analysisOwnShipWasmManager.setCavitationLevel(ownPropulsion.cavitationLevel, this.analysisOwnShipVoiceId);
             this.analysisOwnShipWasmManager.setRpm(this.ownShipRpm, this.analysisOwnShipVoiceId);
         }
     }
@@ -282,6 +393,12 @@ export class AudioSystem {
         this.wasmManager.setBioMix(baseBioMix, speakerVoiceId);
         this.wasmManager.setBioType(baseBioType, speakerVoiceId);
         this.wasmManager.setBioRate(baseBioRate, speakerVoiceId);
+        const propulsion = getTargetPropulsionParams(target, type);
+        this.wasmManager.setShaftRate(propulsion.shaftRate, speakerVoiceId);
+        this.wasmManager.setLoad(propulsion.load, speakerVoiceId);
+        this.wasmManager.setRpmJitter(propulsion.rpmJitter, speakerVoiceId);
+        this.wasmManager.setClassProfile(propulsion.classProfile, speakerVoiceId);
+        this.wasmManager.setCavitationLevel(propulsion.cavitationLevel, speakerVoiceId);
 
         if (analysisVoiceId >= 0) {
             this.analysisWasmManager.setGain(initialGain, analysisVoiceId);
@@ -292,6 +409,11 @@ export class AudioSystem {
             this.analysisWasmManager.setBioMix(baseBioMix, analysisVoiceId);
             this.analysisWasmManager.setBioType(baseBioType, analysisVoiceId);
             this.analysisWasmManager.setBioRate(baseBioRate, analysisVoiceId);
+            this.analysisWasmManager.setShaftRate(propulsion.shaftRate, analysisVoiceId);
+            this.analysisWasmManager.setLoad(propulsion.load, analysisVoiceId);
+            this.analysisWasmManager.setRpmJitter(propulsion.rpmJitter, analysisVoiceId);
+            this.analysisWasmManager.setClassProfile(propulsion.classProfile, analysisVoiceId);
+            this.analysisWasmManager.setCavitationLevel(propulsion.cavitationLevel, analysisVoiceId);
         }
 
         this.targetNodes.set(targetId, {

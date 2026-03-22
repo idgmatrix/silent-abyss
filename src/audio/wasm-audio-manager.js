@@ -21,6 +21,11 @@ export class WasmAudioManager {
             BIO_MIX: 5,
             BIO_TYPE: 6,
             BIO_RATE: 7,
+            SHAFT_RATE: 8,
+            LOAD: 9,
+            RPM_JITTER: 10,
+            CLASS_PROFILE: 11,
+            CAVITATION_LEVEL: 12,
         };
     }
 
@@ -210,6 +215,26 @@ export class WasmAudioManager {
 
     setBioRate(value, voiceId = this.defaultVoiceId) {
         this.setParam(this.paramIds.BIO_RATE, value, voiceId);
+    }
+
+    setShaftRate(value, voiceId = this.defaultVoiceId) {
+        this.setParam(this.paramIds.SHAFT_RATE, value, voiceId);
+    }
+
+    setLoad(value, voiceId = this.defaultVoiceId) {
+        this.setParam(this.paramIds.LOAD, value, voiceId);
+    }
+
+    setRpmJitter(value, voiceId = this.defaultVoiceId) {
+        this.setParam(this.paramIds.RPM_JITTER, value, voiceId);
+    }
+
+    setClassProfile(value, voiceId = this.defaultVoiceId) {
+        this.setParam(this.paramIds.CLASS_PROFILE, value, voiceId);
+    }
+
+    setCavitationLevel(value, voiceId = this.defaultVoiceId) {
+        this.setParam(this.paramIds.CAVITATION_LEVEL, value, voiceId);
     }
 
     addVoice() {

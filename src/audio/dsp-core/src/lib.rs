@@ -11,6 +11,11 @@ pub const PARAM_CAV_MIX: u32 = 4;
 pub const PARAM_BIO_MIX: u32 = 5;
 pub const PARAM_BIO_TYPE: u32 = 6;
 pub const PARAM_BIO_RATE: u32 = 7;
+pub const PARAM_SHAFT_RATE: u32 = 8;
+pub const PARAM_LOAD: u32 = 9;
+pub const PARAM_RPM_JITTER: u32 = 10;
+pub const PARAM_CLASS_PROFILE: u32 = 11;
+pub const PARAM_CAVITATION_LEVEL: u32 = 12;
 
 #[inline]
 fn clamp(v: f32, lo: f32, hi: f32) -> f32 {
@@ -138,80 +143,222 @@ pub fn compute_demon_spectrum(
 
 #[derive(Clone, Copy)]
 struct EngineState {
-    phase: f32,
+    shaft_phase: f32,
+    blade_phase: f32,
+    machinery_phase_a: f32,
+    machinery_phase_b: f32,
+    drift_phase: f32,
+    drift_value: f32,
     current_rpm: f32,
     target_rpm: f32,
+    current_shaft_rate: f32,
+    target_shaft_rate: f32,
     blades: f32,
+    load: f32,
+    rpm_jitter: f32,
+    class_profile: u32,
 }
 
 impl EngineState {
     fn new() -> Self {
         Self {
-            phase: 0.0,
+            shaft_phase: 0.0,
+            blade_phase: 0.0,
+            machinery_phase_a: 0.0,
+            machinery_phase_b: 0.0,
+            drift_phase: 0.0,
+            drift_value: 0.0,
             current_rpm: 0.0,
             target_rpm: 0.0,
+            current_shaft_rate: 0.0,
+            target_shaft_rate: 0.0,
             blades: 5.0,
+            load: 0.45,
+            rpm_jitter: 0.12,
+            class_profile: 0,
         }
     }
 
     #[inline]
-    fn tick(&mut self, sample_rate: f32) -> f32 {
-        self.current_rpm = self.current_rpm * 0.99 + self.target_rpm * 0.01;
+    fn class_weights(&self) -> (f32, f32, f32, f32) {
+        match self.class_profile {
+            1 => (0.42, 0.90, 0.18, 0.75), // submarine
+            2 => (0.70, 0.78, 0.58, 1.00), // merchant
+            3 => (0.55, 1.05, 0.36, 1.18), // fishing vessel
+            4 => (0.35, 1.18, 0.24, 1.25), // torpedo / fast propulsor
+            _ => (0.55, 0.88, 0.34, 0.92), // generic surface contact
+        }
+    }
+
+    #[inline]
+    fn tick(&mut self, sample_rate: f32, rng: &mut u32) -> f32 {
+        self.current_rpm = self.current_rpm * 0.992 + self.target_rpm * 0.008;
+        let target_shaft_rate = if self.target_shaft_rate > 0.01 {
+            self.target_shaft_rate
+        } else {
+            self.target_rpm / 60.0
+        };
+        self.current_shaft_rate = self.current_shaft_rate * 0.992 + target_shaft_rate * 0.008;
         if self.current_rpm < 0.05 {
             return 0.0;
         }
 
-        let base_hz = (self.current_rpm / 60.0) * self.blades;
-        let delta = TWO_PI * base_hz / sample_rate;
-        self.phase += delta;
-        if self.phase >= TWO_PI {
-            self.phase -= TWO_PI;
+        let load = clamp(self.load, 0.0, 1.0);
+        let jitter = clamp(self.rpm_jitter, 0.0, 1.0);
+        let (shaft_weight, blade_weight, machinery_weight, brightness) = self.class_weights();
+
+        let drift_target = rand_signed(rng) * (0.25 + jitter * 0.75);
+        self.drift_value += 0.0009 * (drift_target - self.drift_value);
+        self.drift_phase += TWO_PI * (0.11 + 0.22 * jitter) / sample_rate;
+        if self.drift_phase >= TWO_PI {
+            self.drift_phase -= TWO_PI;
         }
 
-        let p = self.phase;
-        let harmonic_signal = p.sin() * 0.60
-            + (2.0 * p).sin() * 0.25
-            + (3.0 * p).sin() * 0.15
-            + (0.5 * p).sin() * 0.05;
+        let wander = 1.0
+            + (0.004 + 0.02 * jitter) * self.drift_phase.sin()
+            + self.drift_value * (0.002 + 0.012 * jitter);
+        let shaft_hz = (self.current_shaft_rate.max(0.05) * wander).max(0.05);
+        let bpf_hz = (shaft_hz * self.blades.max(1.0)).max(0.1);
 
-        let amplitude = (self.current_rpm / 220.0).min(0.30);
-        (harmonic_signal * 1.5).tanh() * amplitude
+        self.shaft_phase += TWO_PI * shaft_hz / sample_rate;
+        if self.shaft_phase >= TWO_PI {
+            self.shaft_phase -= TWO_PI;
+        }
+        self.blade_phase += TWO_PI * bpf_hz / sample_rate;
+        if self.blade_phase >= TWO_PI {
+            self.blade_phase -= TWO_PI;
+        }
+
+        let machinery_hz_a = 24.0 + shaft_hz * (11.0 + 5.0 * brightness) + 28.0 * load;
+        let machinery_hz_b = 70.0 + bpf_hz * 0.5 + 55.0 * brightness + 36.0 * load;
+        self.machinery_phase_a += TWO_PI * machinery_hz_a / sample_rate;
+        self.machinery_phase_b += TWO_PI * machinery_hz_b / sample_rate;
+        if self.machinery_phase_a >= TWO_PI {
+            self.machinery_phase_a -= TWO_PI;
+        }
+        if self.machinery_phase_b >= TWO_PI {
+            self.machinery_phase_b -= TWO_PI;
+        }
+
+        let shaft = self.shaft_phase.sin() * 0.65
+            + (2.0 * self.shaft_phase).sin() * 0.24
+            + (3.0 * self.shaft_phase).sin() * 0.11;
+        let blade = self.blade_phase.sin() * 0.70
+            + (2.0 * self.blade_phase).sin() * 0.18
+            + (3.0 * self.blade_phase).sin() * 0.08
+            + (4.0 * self.blade_phase).sin() * 0.05;
+        let machinery = self.machinery_phase_a.sin() * 0.75
+            + (1.11 * self.machinery_phase_b).sin() * 0.23
+            + (self.machinery_phase_a + self.blade_phase * 0.16).sin() * 0.14;
+
+        let envelope = 0.80
+            + 0.14 * self.blade_phase.sin().abs()
+            + 0.05 * self.drift_phase.sin();
+        let harmonic_signal = shaft * shaft_weight
+            + blade * blade_weight * (0.72 + 0.38 * load)
+            + machinery * machinery_weight * (0.55 + 0.55 * load);
+        let amplitude = (0.035 + (self.current_rpm / 420.0).min(0.22)) * (0.88 + 0.24 * load);
+
+        (harmonic_signal * envelope * 1.25).tanh() * amplitude
     }
 }
 
 #[derive(Clone, Copy)]
 struct CavState {
     lp_noise: f32,
+    slow_noise: f32,
     shaped_noise: f32,
+    burst_env: f32,
+    burst_drive: f32,
 }
 
 impl CavState {
     fn new() -> Self {
         Self {
             lp_noise: 0.0,
+            slow_noise: 0.0,
             shaped_noise: 0.0,
+            burst_env: 0.0,
+            burst_drive: 0.0,
         }
     }
 
     #[inline]
-    fn tick(&mut self, rpm: f32, phase: f32, rng: &mut u32) -> f32 {
+    fn tick(
+        &mut self,
+        rpm: f32,
+        blade_phase: f32,
+        load: f32,
+        cavitation_level: f32,
+        class_profile: u32,
+        rng: &mut u32,
+    ) -> f32 {
         if rpm < 1.0 {
             self.lp_noise = 0.0;
+            self.slow_noise = 0.0;
             self.shaped_noise = 0.0;
+            self.burst_env = 0.0;
+            self.burst_drive = 0.0;
             return 0.0;
         }
 
         let white = rand_signed(rng);
-        // Derive a brighter cavitation-like texture: white noise minus slow component.
-        self.lp_noise += 0.08 * (white - self.lp_noise);
-        let hp = white - self.lp_noise;
-        self.shaped_noise += 0.35 * (hp - self.shaped_noise);
-
         let speed_norm = clamp((rpm - 60.0) / 320.0, 0.0, 1.0);
-        let intensity = 0.01 + speed_norm * speed_norm * speed_norm * 0.78;
-        let blade_mod = 0.5 + 0.5 * phase.sin();
+        let load = clamp(load, 0.0, 1.0);
+        let cavitation_level = clamp(cavitation_level, 0.0, 1.0);
+        let class_bias = match class_profile {
+            1 => 0.72, // submarine
+            2 => 1.02, // merchant
+            3 => 1.18, // fishing vessel
+            4 => 1.28, // torpedo
+            _ => 1.0,
+        };
+        let regime_drive = clamp(
+            (speed_norm * 0.58 + load * 0.24 + cavitation_level * 0.75) * class_bias,
+            0.0,
+            1.0,
+        );
 
-        self.shaped_noise * intensity * (0.35 + 0.65 * blade_mod)
+        // Use two smoothed noise bands to build a regime-dependent cavitation texture.
+        self.slow_noise += 0.025 * (white - self.slow_noise);
+        self.lp_noise += (0.08 + 0.06 * regime_drive) * (white - self.lp_noise);
+        let hp = white - self.lp_noise;
+        let fizz = hp - self.slow_noise * (0.25 + 0.2 * regime_drive);
+        self.shaped_noise += (0.22 + 0.18 * regime_drive) * (fizz - self.shaped_noise);
+
+        let blade_mod = 0.5 + 0.5 * blade_phase.sin();
+        let blade_pulse = blade_phase.sin().abs();
+        self.burst_drive += 0.03 * ((blade_pulse * regime_drive) - self.burst_drive);
+        let burst_threshold = 0.76 - regime_drive * 0.26;
+        if self.burst_drive > burst_threshold {
+            self.burst_env = (self.burst_env + 0.42 * regime_drive).min(1.0);
+            self.burst_drive *= 0.65;
+        }
+        self.burst_env *= 0.90 - regime_drive * 0.08;
+
+        let regime_none = (1.0 - regime_drive * 2.5).clamp(0.0, 1.0);
+        let regime_incipient = (1.0 - ((regime_drive - 0.28) / 0.22).abs()).clamp(0.0, 1.0);
+        let regime_developed = (1.0 - ((regime_drive - 0.58) / 0.24).abs()).clamp(0.0, 1.0);
+        let regime_heavy = ((regime_drive - 0.68) / 0.32).clamp(0.0, 1.0);
+
+        let low_texture = self.slow_noise * 0.10 + self.shaped_noise * 0.26;
+        let incipient_texture = self.shaped_noise * (0.22 + 0.32 * blade_mod);
+        let developed_texture = self.shaped_noise * (0.38 + 0.58 * blade_mod) + hp * 0.12;
+        let heavy_texture = self.shaped_noise * (0.48 + 0.72 * blade_mod)
+            + hp * (0.18 + 0.12 * blade_mod)
+            + self.burst_env * rand_signed(rng) * 0.55;
+
+        let intensity = 0.008
+            + regime_none * 0.012
+            + regime_incipient * 0.05
+            + regime_developed * 0.16
+            + regime_heavy * 0.34;
+        let texture = low_texture * regime_none
+            + incipient_texture * regime_incipient
+            + developed_texture * regime_developed
+            + heavy_texture * regime_heavy;
+
+        texture * intensity * (0.55 + 0.45 * load + 0.18 * speed_norm)
     }
 }
 
@@ -748,6 +895,7 @@ struct Voice {
     engine_mix: f32,
     cav_mix: f32,
     bio_mix: f32,
+    cavitation_level: f32,
     rng: u32,
     engine: EngineState,
     cav: CavState,
@@ -762,6 +910,7 @@ impl Voice {
             engine_mix: 1.0,
             cav_mix: 0.55,
             bio_mix: 0.25,
+            cavitation_level: 0.35,
             rng: seed,
             engine: EngineState::new(),
             cav: CavState::new(),
@@ -775,10 +924,17 @@ impl Voice {
             return 0.0;
         }
 
-        let e = self.engine.tick(sample_rate);
+        let e = self.engine.tick(sample_rate, &mut self.rng);
         let c = self
             .cav
-            .tick(self.engine.current_rpm, self.engine.phase, &mut self.rng);
+            .tick(
+                self.engine.current_rpm,
+                self.engine.blade_phase,
+                self.engine.load,
+                self.cavitation_level,
+                self.engine.class_profile,
+                &mut self.rng,
+            );
         let b = self
             .bio
             .tick(sample_rate, self.engine.current_rpm, &mut self.rng);
@@ -855,6 +1011,11 @@ impl DspGraph {
             PARAM_BIO_MIX => v.bio_mix = clamp(value, 0.0, 1.5),
             PARAM_BIO_TYPE => v.bio.set_type(BioType::from_param(value)),
             PARAM_BIO_RATE => v.bio.set_rate(value),
+            PARAM_SHAFT_RATE => v.engine.target_shaft_rate = clamp(value, 0.0, 120.0),
+            PARAM_LOAD => v.engine.load = clamp(value, 0.0, 1.0),
+            PARAM_RPM_JITTER => v.engine.rpm_jitter = clamp(value, 0.0, 1.0),
+            PARAM_CLASS_PROFILE => v.engine.class_profile = clamp(value.round(), 0.0, 4.0) as u32,
+            PARAM_CAVITATION_LEVEL => v.cavitation_level = clamp(value, 0.0, 1.0),
             _ => return false,
         }
 
@@ -884,6 +1045,10 @@ impl DspGraph {
 
     pub fn output_ptr(&self) -> usize {
         self.output.as_ptr() as usize
+    }
+
+    pub fn output_copy(&self) -> Vec<f32> {
+        self.output[0..self.last_frames].to_vec()
     }
 
     pub fn max_frames(&self) -> usize {
@@ -929,4 +1094,29 @@ pub fn param_bio_type() -> u32 {
 #[wasm_bindgen]
 pub fn param_bio_rate() -> u32 {
     PARAM_BIO_RATE
+}
+
+#[wasm_bindgen]
+pub fn param_shaft_rate() -> u32 {
+    PARAM_SHAFT_RATE
+}
+
+#[wasm_bindgen]
+pub fn param_load() -> u32 {
+    PARAM_LOAD
+}
+
+#[wasm_bindgen]
+pub fn param_rpm_jitter() -> u32 {
+    PARAM_RPM_JITTER
+}
+
+#[wasm_bindgen]
+pub fn param_class_profile() -> u32 {
+    PARAM_CLASS_PROFILE
+}
+
+#[wasm_bindgen]
+pub fn param_cavitation_level() -> u32 {
+    PARAM_CAVITATION_LEVEL
 }

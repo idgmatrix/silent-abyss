@@ -138,6 +138,50 @@ describe('Scenario loader', () => {
         expect(targets[0].bioRate).toBe(0.8);
     });
 
+    it('accepts propulsion override fields', () => {
+        const scenario = {
+            id: 'propulsion-overrides-test',
+            coreTargets: [
+                {
+                    id: 'target-01',
+                    distance: 35,
+                    angle: 0.7,
+                    type: 'SHIP',
+                    rpm: 210,
+                    bladeCount: 5,
+                    shaftRate: 3.7,
+                    load: 0.84,
+                    rpmJitter: 0.18,
+                    cavitationLevel: 0.92,
+                    classProfile: 3
+                }
+            ],
+            procedural: {
+                idStart: 2,
+                count: 0,
+                types: ['SHIP'],
+                distanceRange: { min: 30, max: 40 },
+                angleRange: { min: 0, max: 1 },
+                shipClasses: ['cargo-vessel'],
+                subClasses: ['kilo-class'],
+                shipSpeedRange: { min: 0.5, max: 0.6 },
+                shipRpmRange: { min: 100, max: 110 },
+                shipBladeCount: { min: 3, max: 3 },
+                subSpeedRange: { min: 0.2, max: 0.3 },
+                subRpmRange: { min: 60, max: 70 },
+                subBladeCount: 7
+            }
+        };
+
+        const targets = buildScenarioTargets(scenario, () => 0.5);
+        expect(targets).toHaveLength(1);
+        expect(targets[0].shaftRate).toBe(3.7);
+        expect(targets[0].load).toBe(0.84);
+        expect(targets[0].rpmJitter).toBe(0.18);
+        expect(targets[0].cavitationLevel).toBe(0.92);
+        expect(targets[0].classProfile).toBe(3);
+    });
+
     it('rejects invalid biological sound fields', () => {
         const scenario = clone(getDefaultScenario());
         scenario.coreTargets[0] = {
@@ -146,6 +190,16 @@ describe('Scenario loader', () => {
         };
 
         expect(() => validateScenarioDefinition(scenario)).toThrow(/bioType must be one of/);
+    });
+
+    it('rejects invalid propulsion override fields', () => {
+        const scenario = clone(getDefaultScenario());
+        scenario.coreTargets[0] = {
+            ...scenario.coreTargets[0],
+            load: 1.2
+        };
+
+        expect(() => validateScenarioDefinition(scenario)).toThrow(/load must be in/);
     });
 
     it('accepts phase-2 biological types', () => {

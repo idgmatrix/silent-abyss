@@ -18,6 +18,15 @@ export const SHIP_SIGNATURES = {
             isPatrolling: true,
             patrolRadius: 60
         },
+        acousticPreset: {
+            classProfile: 1,
+            loadBase: 0.24,
+            loadScale: 0.58,
+            jitterBase: 0.05,
+            jitterScale: 0.45,
+            cavitationBase: 0.08,
+            cavitationScale: 0.30
+        },
         harmonics: [
             { freq: 50, label: 'Electrical Hum (50Hz)', intensity: 0.4 },
             { freq: 120, label: 'Cooling Pump', intensity: 0.3 },
@@ -38,6 +47,15 @@ export const SHIP_SIGNATURES = {
             shaftRate: 70 / 60,
             isPatrolling: true,
             patrolRadius: 70
+        },
+        acousticPreset: {
+            classProfile: 1,
+            loadBase: 0.22,
+            loadScale: 0.52,
+            jitterBase: 0.04,
+            jitterScale: 0.42,
+            cavitationBase: 0.05,
+            cavitationScale: 0.22
         },
         harmonics: [
             { freq: 45, label: 'Generator Hum', intensity: 0.35 },
@@ -60,6 +78,15 @@ export const SHIP_SIGNATURES = {
             isPatrolling: true,
             patrolRadius: 90
         },
+        acousticPreset: {
+            classProfile: 2,
+            loadBase: 0.32,
+            loadScale: 0.72,
+            jitterBase: 0.08,
+            jitterScale: 0.62,
+            cavitationBase: 0.24,
+            cavitationScale: 0.66
+        },
         harmonics: [
             { freq: 60, label: 'Electrical Hum (60Hz)', intensity: 0.5 },
             { freq: 90, label: 'Diesel Auxiliary', intensity: 0.45 }
@@ -80,6 +107,15 @@ export const SHIP_SIGNATURES = {
             isPatrolling: true,
             patrolRadius: 80
         },
+        acousticPreset: {
+            classProfile: 3,
+            loadBase: 0.38,
+            loadScale: 0.86,
+            jitterBase: 0.11,
+            jitterScale: 0.82,
+            cavitationBase: 0.34,
+            cavitationScale: 0.82
+        },
         harmonics: [
             { freq: 150, label: 'Hydraulic Winch', intensity: 0.35 }
         ],
@@ -98,6 +134,15 @@ export const SHIP_SIGNATURES = {
             shaftRate: 95 / 60,
             isPatrolling: true,
             patrolRadius: 110
+        },
+        acousticPreset: {
+            classProfile: 2,
+            loadBase: 0.30,
+            loadScale: 0.64,
+            jitterBase: 0.06,
+            jitterScale: 0.48,
+            cavitationBase: 0.16,
+            cavitationScale: 0.48
         },
         harmonics: [
             { freq: 50, label: 'Power Turbine', intensity: 0.45 },
@@ -122,6 +167,11 @@ export function getClassProfile(classId) {
     return {
         classId,
         type: signature.targetType || 'SHIP',
-        defaults: signature.defaults || {}
+        defaults: signature.defaults || {},
+        acousticPreset: signature.acousticPreset || null
     };
+}
+
+export function getAcousticPreset(classId) {
+    return getSignature(classId).acousticPreset || null;
 }

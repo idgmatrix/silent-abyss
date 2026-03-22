@@ -37,6 +37,15 @@ export class DspGraph {
         return this;
     }
     /**
+     * @returns {Float32Array}
+     */
+    output_copy() {
+        const ret = wasm.dspgraph_output_copy(this.__wbg_ptr);
+        var v1 = getArrayF32FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
+        return v1;
+    }
+    /**
      * @returns {number}
      */
     output_len() {
@@ -141,6 +150,22 @@ export function param_cav_mix() {
 /**
  * @returns {number}
  */
+export function param_cavitation_level() {
+    const ret = wasm.param_cavitation_level();
+    return ret >>> 0;
+}
+
+/**
+ * @returns {number}
+ */
+export function param_class_profile() {
+    const ret = wasm.param_class_profile();
+    return ret >>> 0;
+}
+
+/**
+ * @returns {number}
+ */
 export function param_engine_mix() {
     const ret = wasm.param_engine_mix();
     return ret >>> 0;
@@ -157,8 +182,32 @@ export function param_gain() {
 /**
  * @returns {number}
  */
+export function param_load() {
+    const ret = wasm.param_load();
+    return ret >>> 0;
+}
+
+/**
+ * @returns {number}
+ */
 export function param_rpm() {
     const ret = wasm.param_rpm();
+    return ret >>> 0;
+}
+
+/**
+ * @returns {number}
+ */
+export function param_rpm_jitter() {
+    const ret = wasm.param_rpm_jitter();
+    return ret >>> 0;
+}
+
+/**
+ * @returns {number}
+ */
+export function param_shaft_rate() {
+    const ret = wasm.param_shaft_rate();
     return ret >>> 0;
 }
 

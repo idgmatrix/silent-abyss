@@ -92,6 +92,10 @@ export class SimulationTarget {
         this.bladeCount = clamp(Math.round(bladeInput), 0, 12);
         const shaftRateInput = Number.isFinite(config.shaftRate) ? config.shaftRate : this.rpm / 60;
         this.shaftRate = clamp(shaftRateInput, 0, 120);
+        this.load = Number.isFinite(config.load) ? clamp(config.load, 0, 1) : undefined;
+        this.rpmJitter = Number.isFinite(config.rpmJitter) ? clamp(config.rpmJitter, 0, 1) : undefined;
+        this.cavitationLevel = Number.isFinite(config.cavitationLevel) ? clamp(config.cavitationLevel, 0, 1) : undefined;
+        this.classProfile = Number.isFinite(config.classProfile) ? clamp(Math.round(config.classProfile), 0, 4) : undefined;
         this.bioType = typeof config.bioType === 'string' ? config.bioType : undefined;
         this.bioRate = Number.isFinite(config.bioRate) ? clamp(config.bioRate, 0, 1) : undefined;
 
