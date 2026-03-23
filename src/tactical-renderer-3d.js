@@ -599,6 +599,10 @@ export class Tactical3DRenderer {
                 geometry = new THREE.OctahedronGeometry(1.5, 0);
                 color = 0x00ffff;
                 break;
+            case 'AIRCRAFT':
+                geometry = new THREE.TetrahedronGeometry(1.2, 0);
+                color = 0xffff55;
+                break;
             case 'TORPEDO':
                 geometry = new THREE.ConeGeometry(0.8, 4, 8);
                 geometry.rotateX(Math.PI / 2);
@@ -607,6 +611,10 @@ export class Tactical3DRenderer {
             case 'BIOLOGICAL':
                 geometry = new THREE.SphereGeometry(0.8, 8, 8);
                 color = 0x00ff00;
+                break;
+            case 'ENVIRONMENTAL':
+                geometry = new THREE.IcosahedronGeometry(1.0, 0);
+                color = 0x88bbff;
                 break;
             case 'STATIC':
                 geometry = new THREE.BoxGeometry(2, 2, 2);
@@ -626,6 +634,15 @@ export class Tactical3DRenderer {
         mesh.userData = { type, speed: target.speed ?? 0 };
         this.scene.add(mesh);
         this.targetMeshes.set(targetId, mesh);
+    }
+
+    removeTarget(targetId) {
+        const mesh = this.targetMeshes.get(targetId);
+        if (!mesh) return;
+        this.scene?.remove(mesh);
+        mesh.geometry?.dispose?.();
+        mesh.material?.dispose?.();
+        this.targetMeshes.delete(targetId);
     }
 
     updateTargetPosition(targetId, x, z, passive = false, speed = 0) {

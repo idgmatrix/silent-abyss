@@ -50,10 +50,33 @@ export class WorldModel {
         this.simEngine.targets = []; // Ensure clean state
         const scenario = getDefaultScenario();
         const targetConfigs = buildScenarioTargets(scenario, () => this.simEngine.random());
+        this.setTargetsFromConfigs(targetConfigs);
+    }
 
+    setTargetsFromConfigs(targetConfigs = []) {
+        this.simEngine.targets = [];
         targetConfigs.forEach((config) => {
             this.simEngine.addTarget(new SimulationTarget(config.id, config));
         });
+    }
+
+    addOrUpdateTarget(config) {
+        const existing = this.simEngine.targets.find((target) => target.id === config.id);
+        if (existing) {
+            Object.assign(existing, new SimulationTarget(config.id, { ...existing, ...config }));
+            return existing;
+        }
+
+        const next = new SimulationTarget(config.id, config);
+        this.simEngine.addTarget(next);
+        return next;
+    }
+
+    removeTarget(targetId) {
+        this.simEngine.targets = this.simEngine.targets.filter((target) => target.id !== targetId);
+        if (this.selectedTargetId === targetId) {
+            this.selectedTargetId = null;
+        }
     }
 
     update(dt) {
@@ -242,6 +265,12 @@ export class WorldModel {
     }
 
     getTargetDepth(target) {
+        if (Number.isFinite(target?.altitude) && target.type === 'AIRCRAFT') {
+            return 1.0;
+        }
+        if (Number.isFinite(target?.depth)) {
+            return Math.max(1.0, target.depth);
+        }
         if (!this.spatialService || typeof this.spatialService.getTerrainHeight !== 'function') {
             return 10.0;
         }

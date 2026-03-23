@@ -105,6 +105,8 @@ export class SimulationTarget {
         this.bioType = typeof config.bioType === 'string' ? config.bioType : undefined;
         this.bioRate = Number.isFinite(config.bioRate) ? clamp(config.bioRate, 0, 1) : undefined;
         this.soundPreset = typeof config.soundPreset === 'string' ? config.soundPreset : undefined;
+        this.depth = Number.isFinite(config.depth) ? Math.max(0, config.depth) : undefined;
+        this.altitude = Number.isFinite(config.altitude) ? Math.max(0, config.altitude) : undefined;
         this.sourceLevelOffset = Number.isFinite(config.sourceLevelOffset)
             ? config.sourceLevelOffset
             : 0;
@@ -186,8 +188,11 @@ export class SimulationTarget {
 
         // Machinery/RPM contribution
         const machineryFactor = this.rpm > 0 ? 5 * Math.log10(1 + this.rpm / 60) : 0;
+        const aircraftSurfacePenalty = this.type === 'AIRCRAFT' && Number.isFinite(this.altitude)
+            ? -6 * Math.log10(1 + this.altitude / 150)
+            : 0;
 
-        return sl + speedFactor + machineryFactor + this.sourceLevelOffset;
+        return sl + speedFactor + machineryFactor + aircraftSurfacePenalty + this.sourceLevelOffset;
     }
 
     set velocity(val) {

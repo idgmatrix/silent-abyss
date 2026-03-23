@@ -123,6 +123,65 @@ function getOwnShipPropulsionParams(rpm, bladeCount) {
     };
 }
 
+function getTargetVoiceConfig(target) {
+    const type = target.type || 'SHIP';
+    let baseEngineMix = 1.0;
+    let baseCavMix = 0.6;
+    let baseBioMix = 0.0;
+    let baseBioType = 0;
+    let baseBioRate = 0.35;
+
+    if (type === 'BIOLOGICAL') {
+        baseEngineMix = 0.0;
+        baseCavMix = 0.0;
+        baseBioMix = 1.0;
+        baseBioType = 1;
+        baseBioRate = 0.8;
+    } else if (type === 'AIRCRAFT') {
+        baseEngineMix = 0.15;
+        baseCavMix = 0.0;
+        baseBioMix = 0.95;
+        baseBioType = 13;
+        baseBioRate = 0.55;
+    } else if (type === 'ENVIRONMENTAL') {
+        baseEngineMix = 0.0;
+        baseCavMix = 0.0;
+        baseBioMix = 1.0;
+        baseBioType = 16;
+        baseBioRate = 0.45;
+    } else if (type === 'STATIC') {
+        baseEngineMix = 0.1;
+        baseCavMix = 0.3;
+        baseBioMix = 0.0;
+    } else {
+        baseEngineMix = 1.0;
+        baseCavMix = type === 'SUBMARINE' ? 0.2 : 0.6;
+        baseBioMix = 0.0;
+    }
+
+    if (typeof target.bioType === 'string') {
+        const mappedBioType = BIO_TYPE_TO_PARAM[target.bioType.trim().toLowerCase()];
+        if (Number.isInteger(mappedBioType)) {
+            baseBioType = mappedBioType;
+        }
+    }
+    if (Number.isFinite(target.bioRate)) {
+        baseBioRate = Math.max(0, Math.min(1, target.bioRate));
+    }
+
+    const propulsion = getTargetPropulsionParams(target, type);
+
+    return {
+        type,
+        baseEngineMix,
+        baseCavMix,
+        baseBioMix,
+        baseBioType,
+        baseBioRate,
+        propulsion
+    };
+}
+
 export class AudioSystem {
     constructor() {
         this.ctx = null;
@@ -142,6 +201,7 @@ export class AudioSystem {
         this.dataArray = null;
         this.targetNodes = new Map(); // Stores voice indices for targets
         this.focusedTargetId = null;
+        this.isolatedTargetId = null;
         this.bioTimeouts = new Set();
         this.timeDomainArray = null;
         this.computeProcessor = null;
@@ -368,7 +428,6 @@ export class AudioSystem {
     async createTargetAudio(target) {
         if (!this.ctx || !this.wasmManager.ready) return;
         const targetId = target.id;
-        const type = target.type || 'SHIP';
         const now = this.ctx.currentTime;
 
         // Request a new voice from speaker path Wasm.
@@ -392,57 +451,21 @@ export class AudioSystem {
         this.wasmManager.setGain(initialGain, speakerVoiceId);
         this.wasmManager.setBlades(target.bladeCount || 5, speakerVoiceId);
         this.wasmManager.setRpm(target.rpm || 0, speakerVoiceId);
-        let baseEngineMix = 1.0;
-        let baseCavMix = 0.6;
-        let baseBioMix = 0.0;
-        let baseBioType = 0; // Chirp
-        let baseBioRate = 0.35;
-
-        if (type === 'BIOLOGICAL') {
-            baseEngineMix = 0.0;
-            baseCavMix = 0.0;
-            baseBioMix = 1.0;
-            baseBioType = 1; // Snapping shrimp (Phase 1)
-            baseBioRate = 0.8;
-        } else if (type === 'AIRCRAFT') {
-            baseEngineMix = 0.15;
-            baseCavMix = 0.0;
-            baseBioMix = 0.95;
-            baseBioType = 13;
-            baseBioRate = 0.55;
-        } else if (type === 'ENVIRONMENTAL') {
-            baseEngineMix = 0.0;
-            baseCavMix = 0.0;
-            baseBioMix = 1.0;
-            baseBioType = 16;
-            baseBioRate = 0.45;
-        } else if (type === 'STATIC') {
-            baseEngineMix = 0.1; // Low rumble
-            baseCavMix = 0.3;
-            baseBioMix = 0.0;
-        } else {
-            // SHIP or SUBMARINE
-            baseEngineMix = 1.0;
-            baseCavMix = type === 'SUBMARINE' ? 0.2 : 0.6;
-            baseBioMix = 0.0;
-        }
-
-        if (typeof target.bioType === 'string') {
-            const mappedBioType = BIO_TYPE_TO_PARAM[target.bioType.trim().toLowerCase()];
-            if (Number.isInteger(mappedBioType)) {
-                baseBioType = mappedBioType;
-            }
-        }
-        if (Number.isFinite(target.bioRate)) {
-            baseBioRate = Math.max(0, Math.min(1, target.bioRate));
-        }
+        const {
+            type,
+            baseEngineMix,
+            baseCavMix,
+            baseBioMix,
+            baseBioType,
+            baseBioRate,
+            propulsion
+        } = getTargetVoiceConfig(target);
 
         this.wasmManager.setEngineMix(baseEngineMix, speakerVoiceId);
         this.wasmManager.setCavMix(baseCavMix, speakerVoiceId);
         this.wasmManager.setBioMix(baseBioMix, speakerVoiceId);
         this.wasmManager.setBioType(baseBioType, speakerVoiceId);
         this.wasmManager.setBioRate(baseBioRate, speakerVoiceId);
-        const propulsion = getTargetPropulsionParams(target, type);
         this.wasmManager.setShaftRate(propulsion.shaftRate, speakerVoiceId);
         this.wasmManager.setLoad(propulsion.load, speakerVoiceId);
         this.wasmManager.setRpmJitter(propulsion.rpmJitter, speakerVoiceId);
@@ -493,6 +516,92 @@ export class AudioSystem {
         });
     }
 
+    updateTargetAudio(target) {
+        const node = this.targetNodes.get(target.id);
+        if (!node || !this.wasmManager?.ready) return;
+
+        const {
+            type,
+            baseEngineMix,
+            baseCavMix,
+            baseBioMix,
+            baseBioType,
+            baseBioRate,
+            propulsion
+        } = getTargetVoiceConfig(target);
+
+        node.type = type;
+        node.rpm = target.rpm || 0;
+        node.bladeCount = target.bladeCount || 5;
+        node.baseEngineMix = baseEngineMix;
+        node.baseCavMix = baseCavMix;
+        node.baseBioMix = baseBioMix;
+        node.baseBioType = baseBioType;
+        node.baseBioRate = baseBioRate;
+        node.shaftRate = propulsion.shaftRate;
+        node.load = propulsion.load;
+        node.rpmJitter = propulsion.rpmJitter;
+        node.classProfile = propulsion.classProfile;
+        node.cavitationLevel = propulsion.cavitationLevel;
+
+        this.wasmManager.setBlades(node.bladeCount, node.voiceId);
+        this.wasmManager.setRpm(node.rpm, node.voiceId);
+        this.wasmManager.setEngineMix(node.currentEngineMix = baseEngineMix, node.voiceId);
+        this.wasmManager.setCavMix(node.currentCavMix = baseCavMix, node.voiceId);
+        this.wasmManager.setBioMix(node.currentBioMix = baseBioMix, node.voiceId);
+        this.wasmManager.setBioType(baseBioType, node.voiceId);
+        this.wasmManager.setBioRate(baseBioRate, node.voiceId);
+        this.wasmManager.setShaftRate(propulsion.shaftRate, node.voiceId);
+        this.wasmManager.setLoad(propulsion.load, node.voiceId);
+        this.wasmManager.setRpmJitter(propulsion.rpmJitter, node.voiceId);
+        this.wasmManager.setClassProfile(propulsion.classProfile, node.voiceId);
+        this.wasmManager.setCavitationLevel(propulsion.cavitationLevel, node.voiceId);
+
+        if (node.analysisVoiceId >= 0 && this.analysisWasmManager?.ready) {
+            this.analysisWasmManager.setBlades(node.bladeCount, node.analysisVoiceId);
+            this.analysisWasmManager.setRpm(node.rpm, node.analysisVoiceId);
+            this.analysisWasmManager.setEngineMix(
+                node.currentAnalysisEngineMix = baseEngineMix,
+                node.analysisVoiceId
+            );
+            this.analysisWasmManager.setCavMix(
+                node.currentAnalysisCavMix = baseCavMix,
+                node.analysisVoiceId
+            );
+            this.analysisWasmManager.setBioMix(
+                node.currentAnalysisBioMix = baseBioMix,
+                node.analysisVoiceId
+            );
+            this.analysisWasmManager.setBioType(baseBioType, node.analysisVoiceId);
+            this.analysisWasmManager.setBioRate(baseBioRate, node.analysisVoiceId);
+            this.analysisWasmManager.setShaftRate(propulsion.shaftRate, node.analysisVoiceId);
+            this.analysisWasmManager.setLoad(propulsion.load, node.analysisVoiceId);
+            this.analysisWasmManager.setRpmJitter(propulsion.rpmJitter, node.analysisVoiceId);
+            this.analysisWasmManager.setClassProfile(propulsion.classProfile, node.analysisVoiceId);
+            this.analysisWasmManager.setCavitationLevel(propulsion.cavitationLevel, node.analysisVoiceId);
+        }
+
+        if (this.focusedTargetId === target.id) {
+            this.syncSelectedAnalysisVoice();
+        }
+    }
+
+    removeTargetAudio(targetId) {
+        const node = this.targetNodes.get(targetId);
+        if (!node) return;
+
+        if (this.focusedTargetId === targetId) {
+            this.focusedTargetId = null;
+            this.syncSelectedAnalysisVoice();
+        }
+
+        this.wasmManager?.removeVoice(node.voiceId);
+        if (node.analysisVoiceId >= 0) {
+            this.analysisWasmManager?.removeVoice(node.analysisVoiceId);
+        }
+        this.targetNodes.delete(targetId);
+    }
+
     setFocusedTarget(targetId) {
         const nextFocus = (targetId !== null && targetId !== undefined && this.targetNodes.has(targetId))
             ? targetId
@@ -502,6 +611,10 @@ export class AudioSystem {
         this.focusedTargetId = nextFocus;
         this.updateOwnShipFocusGain();
         this.syncSelectedAnalysisVoice();
+    }
+
+    setIsolationTarget(targetId) {
+        this.isolatedTargetId = targetId && this.targetNodes.has(targetId) ? targetId : null;
     }
 
     syncSelectedAnalysisVoice() {
@@ -560,10 +673,15 @@ export class AudioSystem {
 
             const hasFocus = this.focusedTargetId !== null;
             const isFocused = this.focusedTargetId === targetId;
+            const isolateActive = this.isolatedTargetId !== null;
+            const isIsolated = this.isolatedTargetId === targetId;
             if (isFocused) {
                 targetGain *= cfg.focusedTargetBoost;
             } else if (hasFocus) {
                 targetGain *= cfg.backgroundDuck;
+            }
+            if (isolateActive && !isIsolated) {
+                targetGain = 0;
             }
 
             const gainRising = targetGain > node.currentGain;
@@ -609,13 +727,14 @@ export class AudioSystem {
 
             if (node.analysisVoiceId >= 0 && this.analysisWasmManager?.ready) {
                 const acfg = this.analysisFocusSettings;
-                const analysisTargetGain = hasFocus
+            const analysisTargetGain = hasFocus
                     ? (isFocused ? baseGain * acfg.focusedTargetBoost : baseGain * acfg.backgroundDuck)
                     : baseGain;
-                const analysisRising = analysisTargetGain > node.currentAnalysisGain;
+                const isolatedAnalysisGain = isolateActive && !isIsolated ? 0 : analysisTargetGain;
+                const analysisRising = isolatedAnalysisGain > node.currentAnalysisGain;
                 const analysisTau = analysisRising ? acfg.gainAttack : acfg.gainRelease;
                 const analysisAlpha = 1 - Math.exp(-dt / Math.max(0.001, analysisTau));
-                node.currentAnalysisGain += (analysisTargetGain - node.currentAnalysisGain) * analysisAlpha;
+                node.currentAnalysisGain += (isolatedAnalysisGain - node.currentAnalysisGain) * analysisAlpha;
                 this.analysisWasmManager.setGain(node.currentAnalysisGain, node.analysisVoiceId);
 
                 const analysisEngineFactor = isFocused
@@ -637,15 +756,18 @@ export class AudioSystem {
                 const analysisTargetEngineMix = Math.min(1, Math.max(0, node.baseEngineMix * analysisEngineFactor));
                 const analysisTargetCavMix = Math.min(1, Math.max(0, node.baseCavMix * analysisCavFactor));
                 const analysisTargetBioMix = Math.min(1, Math.max(0, node.baseBioMix * analysisBioFactor));
-                const analysisMixRising = analysisTargetEngineMix > node.currentAnalysisEngineMix ||
-                    analysisTargetCavMix > node.currentAnalysisCavMix ||
-                    analysisTargetBioMix > node.currentAnalysisBioMix;
+                const isolatedEngineMix = isolateActive && !isIsolated ? 0 : analysisTargetEngineMix;
+                const isolatedCavMix = isolateActive && !isIsolated ? 0 : analysisTargetCavMix;
+                const isolatedBioMix = isolateActive && !isIsolated ? 0 : analysisTargetBioMix;
+                const analysisMixRising = isolatedEngineMix > node.currentAnalysisEngineMix ||
+                    isolatedCavMix > node.currentAnalysisCavMix ||
+                    isolatedBioMix > node.currentAnalysisBioMix;
                 const analysisMixTau = analysisMixRising ? acfg.gainAttack : acfg.gainRelease;
                 const analysisMixAlpha = 1 - Math.exp(-dt / Math.max(0.001, analysisMixTau));
 
-                node.currentAnalysisEngineMix += (analysisTargetEngineMix - node.currentAnalysisEngineMix) * analysisMixAlpha;
-                node.currentAnalysisCavMix += (analysisTargetCavMix - node.currentAnalysisCavMix) * analysisMixAlpha;
-                node.currentAnalysisBioMix += (analysisTargetBioMix - node.currentAnalysisBioMix) * analysisMixAlpha;
+                node.currentAnalysisEngineMix += (isolatedEngineMix - node.currentAnalysisEngineMix) * analysisMixAlpha;
+                node.currentAnalysisCavMix += (isolatedCavMix - node.currentAnalysisCavMix) * analysisMixAlpha;
+                node.currentAnalysisBioMix += (isolatedBioMix - node.currentAnalysisBioMix) * analysisMixAlpha;
 
                 this.analysisWasmManager.setEngineMix(node.currentAnalysisEngineMix, node.analysisVoiceId);
                 this.analysisWasmManager.setCavMix(node.currentAnalysisCavMix, node.analysisVoiceId);

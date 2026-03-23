@@ -10,6 +10,36 @@ import { CampaignManager } from './campaign-manager.js';
 import { CAMPAIGN_MISSIONS } from './data/missions.js';
 import { UIManager } from './ui-manager.js';
 
+function cloneTargetConfig(target) {
+    if (!target) return null;
+    return {
+        id: target.id,
+        type: target.type,
+        classId: target.classId,
+        soundPreset: target.soundPreset,
+        x: target.x,
+        z: target.z,
+        course: target.course,
+        targetCourse: target.targetCourse,
+        speed: target.speed,
+        rpm: target.rpm,
+        bladeCount: target.bladeCount,
+        shaftRate: target.shaftRate,
+        load: target.load,
+        rpmJitter: target.rpmJitter,
+        cavitationLevel: target.cavitationLevel,
+        classProfile: target.classProfile,
+        bioType: target.bioType,
+        bioRate: target.bioRate,
+        depth: target.depth,
+        altitude: target.altitude,
+        isPatrolling: target.isPatrolling,
+        patrolRadius: target.patrolRadius,
+        seed: target.seed,
+        sourceLevelOffset: target.sourceLevelOffset,
+    };
+}
+
 export class GameOrchestrator {
     constructor() {
         // State
@@ -169,6 +199,66 @@ export class GameOrchestrator {
         this.renderRequest = requestAnimationFrame(this.renderLoop);
     }
 
+    snapshotCurrentTargets() {
+        return this.simEngine.targets.map((target) => cloneTargetConfig(target)).filter(Boolean);
+    }
+
+    async setActiveTargets(targetConfigs = []) {
+        const previousIds = this.simEngine.targets.map((target) => target.id);
+        previousIds.forEach((targetId) => {
+            this.audioSys.removeTargetAudio(targetId);
+            this.tacticalView.removeTarget(targetId);
+        });
+
+        this.worldModel.setTargetsFromConfigs(targetConfigs);
+        this.contactManager.reset();
+        this.setSelectedTarget(null);
+
+        for (const target of this.simEngine.targets) {
+            await this.audioSys.createTargetAudio(target);
+            this.tacticalView.addTarget(target);
+        }
+
+        this.contactManager.update(this.simEngine.targets, this.worldModel.elapsedTime);
+        this.uiManager.renderContactRegistry();
+    }
+
+    async addTarget(config) {
+        const target = this.worldModel.addOrUpdateTarget(config);
+        this.audioSys.removeTargetAudio(target.id);
+        this.tacticalView.removeTarget(target.id);
+        await this.audioSys.createTargetAudio(target);
+        this.tacticalView.addTarget(target);
+        this.contactManager.update(this.simEngine.targets, this.worldModel.elapsedTime);
+        this.uiManager.renderContactRegistry();
+        return target;
+    }
+
+    removeTarget(targetId) {
+        this.worldModel.removeTarget(targetId);
+        this.audioSys.removeTargetAudio(targetId);
+        this.tacticalView.removeTarget(targetId);
+        this.contactManager.reset();
+        this.contactManager.update(this.simEngine.targets, this.worldModel.elapsedTime);
+        if (this.worldModel.selectedTargetId === targetId) {
+            this.setSelectedTarget(null);
+        } else {
+            this.uiManager.renderContactRegistry();
+        }
+    }
+
+    updateTarget(targetId, patch = {}) {
+        const current = this.getTargetById(targetId);
+        if (!current) return null;
+        const updated = this.worldModel.addOrUpdateTarget({ ...cloneTargetConfig(current), ...patch, id: targetId });
+        this.audioSys.updateTargetAudio(updated);
+        this.contactManager.update(this.simEngine.targets, this.worldModel.elapsedTime);
+        if (this.worldModel.selectedTargetId === targetId) {
+            this.setSelectedTarget(targetId);
+        }
+        return updated;
+    }
+
     stop() {
         console.log("Cleaning up systems...");
         if (this.renderRequest) cancelAnimationFrame(this.renderRequest);
@@ -199,6 +289,7 @@ export class GameOrchestrator {
 
     renderLoop(now) {
         this.renderRequest = requestAnimationFrame(this.renderLoop);
+        this.uiManager.updateDevPanels(now);
 
         // Update simulation
         this.simEngine.update(now);

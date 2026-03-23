@@ -344,6 +344,13 @@ export class TacticalView {
         this.renderer3D.addTarget(target);
     }
 
+    removeTarget(targetId) {
+        if (this.selectedTargetId === targetId) {
+            this.selectedTargetId = null;
+        }
+        this.renderer3D.removeTarget(targetId);
+    }
+
     updateTargetPosition(targetId, x, z, passive = false, speed = 0) {
         this.renderer3D.updateTargetPosition(targetId, x, z, passive, speed);
     }

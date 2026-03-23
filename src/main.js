@@ -41,6 +41,15 @@ if (startBtn) {
     startBtn.onclick = () => orchestrator.init();
 }
 
+try {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('autostart') === '1') {
+        orchestrator.init();
+    }
+} catch {
+    // Ignore query-string parsing failures in non-browser contexts.
+}
+
 // But wait, UIManager binds other things too.
 // When orchestrator.init() runs, it calls uiManager.init() which re-binds the start button. That's fine.
 
@@ -77,4 +86,3 @@ if (startBtn) {
 // Yes.
 
 // Okay, so `main.js` is quite simple.
-

@@ -1,3 +1,5 @@
+import { DevAudioPanel } from './dev-audio-panel.js';
+
 export class UIManager {
     constructor(orchestrator) {
         this.orch = orchestrator;
@@ -14,6 +16,7 @@ export class UIManager {
 
         // UI Elements Cache
         this.elements = {};
+        this.devAudioPanel = new DevAudioPanel(orchestrator);
     }
 
     init() {
@@ -25,6 +28,7 @@ export class UIManager {
         this.bindManeuverUiHandlers();
         this.bindViewModeHandlers();
         this.syncLeftSonarPanelHeights();
+        this.devAudioPanel.init();
 
         // Theme selectors
         const themeSelect = document.getElementById('btr-theme-select');
@@ -55,7 +59,12 @@ export class UIManager {
             window.removeEventListener('resize', this.leftSonarWindowResizeHandler);
             this.leftSonarWindowResizeHandler = null;
         }
+        this.devAudioPanel.cleanup();
 
+    }
+
+    updateDevPanels(now) {
+        this.devAudioPanel.update(now);
     }
 
     cacheDomElements() {
