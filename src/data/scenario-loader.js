@@ -1,10 +1,13 @@
 import { getClassProfile } from './ship-signatures.js';
+import { getAcousticSourcePreset } from './acoustic-source-presets.js';
 import { DEFAULT_SCENARIO } from './scenarios/default-scenario.js';
 
 const TARGET_TYPE_DEFAULTS = {
     SHIP: { type: 'SHIP', isPatrolling: true },
     SUBMARINE: { type: 'SUBMARINE', isPatrolling: true },
+    AIRCRAFT: { type: 'AIRCRAFT', isPatrolling: true },
     BIOLOGICAL: { type: 'BIOLOGICAL', isPatrolling: true },
+    ENVIRONMENTAL: { type: 'ENVIRONMENTAL', isPatrolling: false },
     STATIC: { type: 'STATIC', isPatrolling: false },
     TORPEDO: { type: 'TORPEDO', isPatrolling: true }
 };
@@ -12,7 +15,9 @@ const TARGET_TYPE_DEFAULTS = {
 const ACOUSTIC_DEFAULTS_BY_TYPE = {
     SHIP: { rpm: 120, bladeCount: 3 },
     SUBMARINE: { rpm: 90, bladeCount: 7 },
+    AIRCRAFT: { rpm: 180, bladeCount: 4 },
     BIOLOGICAL: { rpm: undefined, bladeCount: undefined },
+    ENVIRONMENTAL: { rpm: undefined, bladeCount: undefined },
     STATIC: { rpm: undefined, bladeCount: undefined },
     TORPEDO: { rpm: 600, bladeCount: 4 }
 };
@@ -27,7 +32,30 @@ const ACOUSTIC_LIMITS = {
     classProfile: { min: 0, max: 4 }
 };
 
-const BIO_SOUND_TYPES = ['chirp', 'snapping_shrimp', 'whale_moan', 'dolphin_whistle', 'echolocation_click', 'humpback_song'];
+const BIO_SOUND_TYPES = [
+    'chirp',
+    'snapping_shrimp',
+    'whale_moan',
+    'dolphin_whistle',
+    'echolocation_click',
+    'humpback_song',
+    'blue_whale',
+    'fin_whale',
+    'minke_pulse',
+    'sperm_whale_click',
+    'orca_call',
+    'beluga_call',
+    'fish_chorus',
+    'herring_school',
+    'dolphin_school',
+    'helicopter_rotor',
+    'fixed_wing_aircraft',
+    'jet_aircraft',
+    'ambient_ocean',
+    'precipitation',
+    'ice_noise',
+    'geological_noise'
+];
 const BIO_RATE_LIMITS = { min: 0, max: 1 };
 
 function isObject(value) {
@@ -49,14 +77,17 @@ function randomIntInRangeInclusive(random, min, max) {
 }
 
 function normalizeTargetConfig(target) {
-    const classProfile = target.classId ? getClassProfile(target.classId) : null;
-    const inferredType = target.type ?? classProfile?.type ?? 'SHIP';
+    const soundPreset = target.soundPreset ? getAcousticSourcePreset(target.soundPreset) : null;
+    const targetWithPreset = soundPreset ? { ...soundPreset, ...target } : target;
+    const classProfile = targetWithPreset.classId ? getClassProfile(targetWithPreset.classId) : null;
+    const inferredType = targetWithPreset.type ?? classProfile?.type ?? 'SHIP';
     const typeDefaults = TARGET_TYPE_DEFAULTS[inferredType] ?? TARGET_TYPE_DEFAULTS.SHIP;
 
     const merged = {
         ...typeDefaults,
         ...(classProfile?.defaults ?? {}),
-        ...target,
+        ...(soundPreset ?? {}),
+        ...targetWithPreset,
         type: inferredType
     };
 
@@ -66,7 +97,8 @@ function normalizeTargetConfig(target) {
 function normalizeAcousticTargetConfig(target) {
     const type = target.type ?? 'SHIP';
     const defaults = ACOUSTIC_DEFAULTS_BY_TYPE[type] ?? ACOUSTIC_DEFAULTS_BY_TYPE.SHIP;
-    const isPropulsionTarget = type === 'SHIP' || type === 'SUBMARINE' || type === 'TORPEDO';
+    const isPropulsionTarget =
+        type === 'SHIP' || type === 'SUBMARINE' || type === 'TORPEDO' || type === 'AIRCRAFT';
     const rpmRaw = Number.isFinite(target.rpm) ? target.rpm : defaults.rpm;
     const bladeRaw = Number.isFinite(target.bladeCount) ? target.bladeCount : defaults.bladeCount;
 
@@ -149,6 +181,10 @@ function validateTarget(target, index, context) {
 
     if (target.type !== undefined) {
         assert(Object.hasOwn(TARGET_TYPE_DEFAULTS, target.type), `${context}[${index}].type must be one of ${Object.keys(TARGET_TYPE_DEFAULTS).join(', ')}`);
+    }
+    if (target.soundPreset !== undefined) {
+        assert(typeof target.soundPreset === 'string', `${context}[${index}].soundPreset must be a string`);
+        assert(getAcousticSourcePreset(target.soundPreset), `${context}[${index}].soundPreset is unknown`);
     }
 
     if (target.rpm !== undefined) {
@@ -262,7 +298,7 @@ function generateProceduralTargets(procedural, random) {
             type,
             distance,
             angle,
-            isPatrolling: type !== 'STATIC',
+            isPatrolling: type !== 'STATIC' && type !== 'ENVIRONMENTAL',
             seed
         };
 

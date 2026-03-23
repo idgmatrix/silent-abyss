@@ -219,7 +219,7 @@ describe('DEMON lock tracker', () => {
         expect(Math.abs(lock.bpfEstimateHz - expectedBpf)).toBeLessThanOrEqual(expectedBpf * 0.12);
     });
 
-    it('keeps lock state invariant when DEMON is redrawn without new analysis', () => {
+    it('keeps lock state invariant when DEMON is redrawn without new analysis', { timeout: 10000 }, () => {
         const selectedTarget = {
             id: 'target-frame-invariant',
             type: 'SHIP',

@@ -7,7 +7,23 @@ const BIO_TYPE_TO_PARAM = {
     whale_moan: 2,
     dolphin_whistle: 3,
     echolocation_click: 4,
-    humpback_song: 5
+    humpback_song: 5,
+    blue_whale: 6,
+    fin_whale: 7,
+    sperm_whale_click: 8,
+    orca_call: 9,
+    beluga_call: 10,
+    fish_chorus: 11,
+    herring_school: 12,
+    helicopter_rotor: 13,
+    fixed_wing_aircraft: 14,
+    jet_aircraft: 15,
+    ambient_ocean: 16,
+    precipitation: 17,
+    ice_noise: 18,
+    geological_noise: 19,
+    minke_pulse: 20,
+    dolphin_school: 21
 };
 
 function clamp01(value, fallback = 0) {
@@ -35,6 +51,17 @@ function getFallbackAcousticPreset(target, type) {
             jitterScale: 0.22,
             cavitationBase: 0.86,
             cavitationScale: 0.18
+        };
+    }
+    if (type === 'AIRCRAFT') {
+        return {
+            classProfile: 0,
+            loadBase: 0.42,
+            loadScale: 0.36,
+            jitterBase: 0.08,
+            jitterScale: 0.24,
+            cavitationBase: 0.0,
+            cavitationScale: 0.0
         };
     }
     return {
@@ -377,6 +404,18 @@ export class AudioSystem {
             baseBioMix = 1.0;
             baseBioType = 1; // Snapping shrimp (Phase 1)
             baseBioRate = 0.8;
+        } else if (type === 'AIRCRAFT') {
+            baseEngineMix = 0.15;
+            baseCavMix = 0.0;
+            baseBioMix = 0.95;
+            baseBioType = 13;
+            baseBioRate = 0.55;
+        } else if (type === 'ENVIRONMENTAL') {
+            baseEngineMix = 0.0;
+            baseCavMix = 0.0;
+            baseBioMix = 1.0;
+            baseBioType = 16;
+            baseBioRate = 0.45;
         } else if (type === 'STATIC') {
             baseEngineMix = 0.1; // Low rumble
             baseCavMix = 0.3;

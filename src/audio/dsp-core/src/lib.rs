@@ -800,19 +800,452 @@ enum BioType {
     DolphinWhistle = 3,
     EcholocationClick = 4,
     HumpbackSong = 5,
+    BlueWhale = 6,
+    FinWhale = 7,
+    SpermWhaleClick = 8,
+    OrcaCall = 9,
+    BelugaCall = 10,
+    FishChorus = 11,
+    HerringSchool = 12,
+    HelicopterRotor = 13,
+    FixedWingAircraft = 14,
+    JetAircraft = 15,
+    AmbientOcean = 16,
+    Precipitation = 17,
+    IceNoise = 18,
+    GeologicalNoise = 19,
+    MinkePulse = 20,
+    DolphinSchool = 21,
 }
 
 impl BioType {
     #[inline]
     fn from_param(value: f32) -> Self {
-        match clamp(value.round(), 0.0, 5.0) as u32 {
+        match clamp(value.round(), 0.0, 21.0) as u32 {
             1 => Self::SnappingShrimp,
             2 => Self::WhaleMoan,
             3 => Self::DolphinWhistle,
             4 => Self::EcholocationClick,
             5 => Self::HumpbackSong,
+            6 => Self::BlueWhale,
+            7 => Self::FinWhale,
+            8 => Self::SpermWhaleClick,
+            9 => Self::OrcaCall,
+            10 => Self::BelugaCall,
+            11 => Self::FishChorus,
+            12 => Self::HerringSchool,
+            13 => Self::HelicopterRotor,
+            14 => Self::FixedWingAircraft,
+            15 => Self::JetAircraft,
+            16 => Self::AmbientOcean,
+            17 => Self::Precipitation,
+            18 => Self::IceNoise,
+            19 => Self::GeologicalNoise,
+            20 => Self::MinkePulse,
+            21 => Self::DolphinSchool,
             _ => Self::Chirp,
         }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct LowCallState {
+    samples_to_next: u32,
+    unit_left: u32,
+    env: f32,
+    phase: f32,
+    lfo_phase: f32,
+    current_hz: f32,
+    target_hz: f32,
+}
+
+impl LowCallState {
+    fn new() -> Self {
+        Self {
+            samples_to_next: 0,
+            unit_left: 0,
+            env: 0.0,
+            phase: 0.0,
+            lfo_phase: 0.0,
+            current_hz: 40.0,
+            target_hz: 40.0,
+        }
+    }
+
+    #[inline]
+    fn schedule_next(&mut self, sample_rate: f32, bio_rate: f32, min_ms: f32, max_ms: f32, rng: &mut u32) {
+        let jitter = 0.65 + 0.7 * ((xorshift32(rng) as f32) / u32::MAX as f32);
+        let span = (max_ms - min_ms).max(1.0);
+        let ms = (max_ms - span * bio_rate) * jitter;
+        self.samples_to_next = (sample_rate * ms.max(5.0) * 0.001) as u32;
+    }
+
+    #[inline]
+    fn trigger(&mut self, sample_rate: f32, hz: f32, dur_ms: f32) {
+        self.unit_left = (sample_rate * dur_ms.max(10.0) * 0.001) as u32;
+        self.current_hz = hz;
+        self.target_hz = hz;
+        self.env = 1.0;
+    }
+
+    #[inline]
+    fn tick(&mut self, mode: BioType, sample_rate: f32, bio_rate: f32, rng: &mut u32) -> f32 {
+        if self.unit_left == 0 {
+            if self.samples_to_next == 0 {
+                match mode {
+                    BioType::BlueWhale => {
+                        let base = 14.0 + 6.0 * ((xorshift32(rng) as f32) / u32::MAX as f32);
+                        self.trigger(sample_rate, base, 2600.0 + bio_rate * 1800.0);
+                        self.target_hz = base + 2.2 + bio_rate * 1.4;
+                        self.schedule_next(sample_rate, bio_rate, 2800.0, 8000.0, rng);
+                    }
+                    BioType::FinWhale => {
+                        self.trigger(sample_rate, 18.0 + 4.0 * bio_rate, 650.0);
+                        self.target_hz = 20.0 + 2.0 * bio_rate;
+                        self.schedule_next(sample_rate, bio_rate, 900.0, 2500.0, rng);
+                    }
+                    BioType::MinkePulse => {
+                        self.trigger(sample_rate, 85.0 + 70.0 * bio_rate, 180.0);
+                        self.target_hz = self.current_hz * (1.1 + 0.2 * bio_rate);
+                        self.schedule_next(sample_rate, bio_rate, 120.0, 520.0, rng);
+                    }
+                    _ => {
+                        self.trigger(sample_rate, 160.0 + 260.0 * bio_rate, 420.0 + 420.0 * bio_rate);
+                        self.target_hz = self.current_hz * (0.9 + 0.15 * bio_rate);
+                        self.schedule_next(sample_rate, bio_rate, 350.0, 1200.0, rng);
+                    }
+                }
+            } else {
+                self.samples_to_next -= 1;
+                return 0.0;
+            }
+        }
+
+        self.unit_left = self.unit_left.saturating_sub(1);
+        self.current_hz += 0.0015 * (self.target_hz - self.current_hz);
+        self.lfo_phase += TWO_PI * (0.04 + bio_rate * 0.25) / sample_rate;
+        if self.lfo_phase >= TWO_PI {
+            self.lfo_phase -= TWO_PI;
+        }
+        let wobble = match mode {
+            BioType::BlueWhale => 0.9,
+            BioType::FinWhale => 0.25,
+            BioType::MinkePulse => 2.8,
+            _ => 6.0,
+        };
+        self.phase += TWO_PI * (self.current_hz + wobble * self.lfo_phase.sin()) / sample_rate;
+        if self.phase >= TWO_PI {
+            self.phase -= TWO_PI;
+        }
+
+        self.env *= match mode {
+            BioType::BlueWhale => 0.99985,
+            BioType::FinWhale => 0.9992,
+            BioType::MinkePulse => 0.997,
+            _ => 0.9984,
+        };
+
+        let tone = match mode {
+            BioType::BlueWhale => self.phase.sin() * 0.9 + (0.5 * self.phase).sin() * 0.22,
+            BioType::FinWhale => self.phase.sin() * 0.95,
+            BioType::MinkePulse => self.phase.sin() * 0.65 + rand_signed(rng) * 0.08,
+            _ => self.phase.sin() * 0.75 + (1.4 * self.phase).sin() * 0.2,
+        };
+        tone * self.env * 0.42
+    }
+}
+
+#[derive(Clone, Copy)]
+struct ClickTrainState {
+    samples_to_next: u32,
+    burst_left: u32,
+    click_phase: f32,
+    env: f32,
+    click_hz: f32,
+}
+
+impl ClickTrainState {
+    fn new() -> Self {
+        Self {
+            samples_to_next: 0,
+            burst_left: 0,
+            click_phase: 0.0,
+            env: 0.0,
+            click_hz: 6000.0,
+        }
+    }
+
+    #[inline]
+    fn tick(&mut self, mode: BioType, sample_rate: f32, bio_rate: f32, rng: &mut u32) -> f32 {
+        if self.samples_to_next == 0 {
+            let r = (xorshift32(rng) as f32) / u32::MAX as f32;
+            self.click_hz = match mode {
+                BioType::SpermWhaleClick => 1800.0 + 1800.0 * r,
+                _ => 6000.0 + 8000.0 * r,
+            };
+            self.burst_left = match mode {
+                BioType::SpermWhaleClick => (sample_rate * 0.00065) as u32 + 1,
+                _ => (sample_rate * 0.00025) as u32 + 1,
+            };
+            self.env = 1.0;
+            let base_ms = match mode {
+                BioType::SpermWhaleClick => 120.0 - 105.0 * bio_rate,
+                _ => 35.0 - 28.0 * bio_rate,
+            };
+            let jitter = 0.65 + 0.8 * r;
+            self.samples_to_next = (sample_rate * (base_ms * jitter).max(1.0) * 0.001) as u32;
+        } else {
+            self.samples_to_next -= 1;
+        }
+
+        if self.burst_left == 0 {
+            return 0.0;
+        }
+
+        self.burst_left -= 1;
+        self.click_phase += TWO_PI * self.click_hz / sample_rate;
+        if self.click_phase >= TWO_PI {
+            self.click_phase -= TWO_PI;
+        }
+        self.env *= match mode {
+            BioType::SpermWhaleClick => 0.62,
+            _ => 0.48,
+        };
+        (self.click_phase.sin() + rand_signed(rng) * 0.15) * self.env * 0.78
+    }
+}
+
+#[derive(Clone, Copy)]
+struct SocialCallState {
+    samples_to_next: u32,
+    unit_left: u32,
+    env: f32,
+    phase_a: f32,
+    phase_b: f32,
+    start_hz: f32,
+    end_hz: f32,
+    progress: f32,
+}
+
+impl SocialCallState {
+    fn new() -> Self {
+        Self {
+            samples_to_next: 0,
+            unit_left: 0,
+            env: 0.0,
+            phase_a: 0.0,
+            phase_b: 0.0,
+            start_hz: 1200.0,
+            end_hz: 1600.0,
+            progress: 1.0,
+        }
+    }
+
+    #[inline]
+    fn tick(&mut self, mode: BioType, sample_rate: f32, bio_rate: f32, rng: &mut u32) -> f32 {
+        if self.unit_left == 0 {
+            if self.samples_to_next == 0 {
+                let r0 = (xorshift32(rng) as f32) / u32::MAX as f32;
+                let r1 = (xorshift32(rng) as f32) / u32::MAX as f32;
+                self.start_hz = match mode {
+                    BioType::OrcaCall => 650.0 + 1800.0 * r0,
+                    BioType::BelugaCall => 1800.0 + 6200.0 * r0,
+                    BioType::DolphinSchool => 2500.0 + 4500.0 * r0,
+                    BioType::HerringSchool => 80.0 + 120.0 * r0,
+                    _ => 1100.0 + 1800.0 * r0,
+                };
+                let span = match mode {
+                    BioType::OrcaCall => 900.0 + 1300.0 * bio_rate,
+                    BioType::BelugaCall => 2000.0 + 3000.0 * bio_rate,
+                    BioType::DolphinSchool => 2600.0 + 3600.0 * bio_rate,
+                    BioType::HerringSchool => 20.0 + 35.0 * bio_rate,
+                    _ => 1200.0,
+                };
+                self.end_hz = if r1 > 0.5 {
+                    self.start_hz + span
+                } else {
+                    self.start_hz - span * 0.6
+                };
+                let unit_ms = match mode {
+                    BioType::OrcaCall => 260.0 + 420.0 * r0,
+                    BioType::BelugaCall => 120.0 + 260.0 * r0,
+                    BioType::DolphinSchool => 90.0 + 200.0 * r0,
+                    BioType::HerringSchool => 320.0 + 240.0 * r0,
+                    _ => 240.0,
+                };
+                self.unit_left = (sample_rate * unit_ms * 0.001) as u32;
+                self.samples_to_next =
+                    (sample_rate * (120.0 + 260.0 * (1.0 - bio_rate)).max(10.0) * 0.001) as u32;
+                self.progress = 0.0;
+                self.env = 1.0;
+            } else {
+                self.samples_to_next -= 1;
+                return 0.0;
+            }
+        }
+
+        self.unit_left = self.unit_left.saturating_sub(1);
+        self.progress = (self.progress + 0.0035 + bio_rate * 0.002).min(1.0);
+        let curved = self.progress * self.progress * (3.0 - 2.0 * self.progress);
+        let hz = self.start_hz + (self.end_hz - self.start_hz) * curved;
+        self.phase_a += TWO_PI * hz / sample_rate;
+        self.phase_b += TWO_PI * (hz * 1.37) / sample_rate;
+        if self.phase_a >= TWO_PI {
+            self.phase_a -= TWO_PI;
+        }
+        if self.phase_b >= TWO_PI {
+            self.phase_b -= TWO_PI;
+        }
+        self.env *= 0.997 - 0.001 * bio_rate;
+
+        match mode {
+            BioType::OrcaCall => {
+                (self.phase_a.sin() * 0.74 + (self.phase_b * 0.5).sin() * 0.24 + rand_signed(rng) * 0.06)
+                    * self.env
+                    * 0.36
+            }
+            BioType::BelugaCall => {
+                (self.phase_a.sin() * 0.55 + self.phase_b.sin() * 0.32 + rand_signed(rng) * 0.08)
+                    * self.env
+                    * 0.34
+            }
+            BioType::DolphinSchool => {
+                (self.phase_a.sin() * 0.42 + rand_signed(rng) * 0.12) * self.env * 0.28
+            }
+            BioType::HerringSchool => {
+                (self.phase_a.sin() * 0.26 + self.phase_b.sin() * 0.18 + rand_signed(rng) * 0.14)
+                    * self.env
+                    * 0.30
+            }
+            _ => 0.0,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct RotorState {
+    phase_a: f32,
+    phase_b: f32,
+    phase_c: f32,
+    noise_lp: f32,
+    burst_env: f32,
+}
+
+impl RotorState {
+    fn new() -> Self {
+        Self {
+            phase_a: 0.0,
+            phase_b: 0.0,
+            phase_c: 0.0,
+            noise_lp: 0.0,
+            burst_env: 0.0,
+        }
+    }
+
+    #[inline]
+    fn tick(&mut self, mode: BioType, sample_rate: f32, bio_rate: f32, rpm: f32, rng: &mut u32) -> f32 {
+        let rate_base = if rpm > 1.0 { rpm / 60.0 } else { 4.0 + bio_rate * 8.0 };
+        let main_rate = match mode {
+            BioType::HelicopterRotor => rate_base * (0.8 + 0.3 * bio_rate),
+            BioType::FixedWingAircraft => rate_base * (1.2 + 0.4 * bio_rate),
+            BioType::JetAircraft => rate_base * (1.6 + 0.5 * bio_rate),
+            _ => rate_base,
+        };
+        let tail_rate = main_rate * match mode {
+            BioType::HelicopterRotor => 4.6,
+            BioType::FixedWingAircraft => 2.7,
+            BioType::JetAircraft => 5.3,
+            _ => 1.0,
+        };
+        let broadband = rand_signed(rng);
+        self.noise_lp += 0.06 * (broadband - self.noise_lp);
+        let hp = broadband - self.noise_lp;
+
+        self.phase_a += TWO_PI * main_rate / sample_rate;
+        self.phase_b += TWO_PI * tail_rate / sample_rate;
+        self.phase_c += TWO_PI * (main_rate * 0.5 + 16.0 * bio_rate) / sample_rate;
+        if self.phase_a >= TWO_PI {
+            self.phase_a -= TWO_PI;
+        }
+        if self.phase_b >= TWO_PI {
+            self.phase_b -= TWO_PI;
+        }
+        if self.phase_c >= TWO_PI {
+            self.phase_c -= TWO_PI;
+        }
+
+        let blade = self.phase_a.sin() * 0.82 + (2.0 * self.phase_a).sin() * 0.22;
+        let tail = self.phase_b.sin() * 0.22;
+        let turbine = self.phase_c.sin() * 0.16;
+        let slap_drive = self.phase_a.sin().abs();
+        if mode == BioType::HelicopterRotor && bio_rate < 0.4 && slap_drive > 0.94 {
+            self.burst_env = 1.0;
+        }
+        self.burst_env *= 0.96;
+
+        match mode {
+            BioType::JetAircraft => (hp * (0.22 + 0.45 * bio_rate) + turbine + blade * 0.18) * 0.55,
+            BioType::FixedWingAircraft => (blade * 0.62 + tail * 0.18 + hp * 0.12 + turbine) * 0.46,
+            _ => (blade * 0.76 + tail * 0.24 + turbine * 0.18 + hp * 0.08 + self.burst_env * hp * 0.55) * 0.48,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct NoiseFieldState {
+    lp_a: f32,
+    lp_b: f32,
+    drift: f32,
+    burst_env: f32,
+}
+
+impl NoiseFieldState {
+    fn new() -> Self {
+        Self {
+            lp_a: 0.0,
+            lp_b: 0.0,
+            drift: 0.0,
+            burst_env: 0.0,
+        }
+    }
+
+    #[inline]
+    fn tick(&mut self, mode: BioType, sample_rate: f32, bio_rate: f32, rng: &mut u32) -> f32 {
+        let white = rand_signed(rng);
+        self.lp_a += 0.02 * (white - self.lp_a);
+        self.lp_b += 0.12 * (white - self.lp_b);
+        self.drift += 0.001 * (rand_signed(rng) - self.drift);
+        let low = self.lp_a;
+        let mid = self.lp_b - self.lp_a * 0.6;
+        let high = white - self.lp_b;
+
+        let trigger = ((xorshift32(rng) as f32) / u32::MAX as f32) < (0.0004 + bio_rate * 0.0025);
+        if trigger {
+            self.burst_env = 1.0;
+        }
+        self.burst_env *= match mode {
+            BioType::GeologicalNoise => 0.997,
+            BioType::IceNoise => 0.985,
+            BioType::Precipitation => 0.94,
+            _ => 0.965,
+        };
+
+        let shaped = match mode {
+            BioType::AmbientOcean => low * 0.65 + mid * 0.22 + high * 0.04 + (18.0 * self.drift).sin() * 0.03,
+            BioType::Precipitation => high * (0.22 + 0.46 * bio_rate) + mid * 0.12 + self.burst_env * high * 0.5,
+            BioType::IceNoise => low * 0.32 + mid * 0.28 + self.burst_env * (low * 0.8 + high * 0.25),
+            BioType::GeologicalNoise => low * 0.82 + mid * 0.14 + self.burst_env * (low * 1.2 + mid * 0.4),
+            _ => low * 0.4 + mid * 0.2,
+        };
+        let level = match mode {
+            BioType::AmbientOcean => 0.18 + 0.18 * bio_rate,
+            BioType::Precipitation => 0.15 + 0.30 * bio_rate,
+            BioType::IceNoise => 0.18 + 0.26 * bio_rate,
+            BioType::GeologicalNoise => 0.16 + 0.34 * bio_rate,
+            _ => 0.2,
+        };
+        let _ = sample_rate;
+        shaped * level
     }
 }
 
@@ -828,6 +1261,11 @@ struct BioState {
     dolphin_whistle: DolphinWhistleState,
     echolocation_click: EcholocationClickState,
     humpback_song: HumpbackSongState,
+    low_call: LowCallState,
+    click_train: ClickTrainState,
+    social_call: SocialCallState,
+    rotor: RotorState,
+    noise_field: NoiseFieldState,
 }
 
 impl BioState {
@@ -843,6 +1281,11 @@ impl BioState {
             dolphin_whistle: DolphinWhistleState::new(),
             echolocation_click: EcholocationClickState::new(),
             humpback_song: HumpbackSongState::new(),
+            low_call: LowCallState::new(),
+            click_train: ClickTrainState::new(),
+            social_call: SocialCallState::new(),
+            rotor: RotorState::new(),
+            noise_field: NoiseFieldState::new(),
         }
     }
 
@@ -870,6 +1313,19 @@ impl BioState {
             BioType::DolphinWhistle => self.dolphin_whistle.tick(sample_rate, self.bio_rate, rng),
             BioType::EcholocationClick => self.echolocation_click.tick(sample_rate, self.bio_rate, rng),
             BioType::HumpbackSong => self.humpback_song.tick(sample_rate, self.bio_rate, rng),
+            BioType::BlueWhale | BioType::FinWhale | BioType::MinkePulse | BioType::FishChorus => {
+                self.low_call.tick(mode, sample_rate, self.bio_rate, rng)
+            }
+            BioType::SpermWhaleClick => self.click_train.tick(mode, sample_rate, self.bio_rate, rng),
+            BioType::OrcaCall | BioType::BelugaCall | BioType::HerringSchool | BioType::DolphinSchool => {
+                self.social_call.tick(mode, sample_rate, self.bio_rate, rng)
+            }
+            BioType::HelicopterRotor | BioType::FixedWingAircraft | BioType::JetAircraft => {
+                self.rotor.tick(mode, sample_rate, self.bio_rate, rpm, rng)
+            }
+            BioType::AmbientOcean | BioType::Precipitation | BioType::IceNoise | BioType::GeologicalNoise => {
+                self.noise_field.tick(mode, sample_rate, self.bio_rate, rng)
+            }
         }
     }
 

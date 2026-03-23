@@ -51,6 +51,13 @@ describe('EnvironmentModel', () => {
         expect(boosted.notes.length).toBeGreaterThan(0);
     });
 
+    it('should expose thermocline and broadband propagation penalties', () => {
+        const crossing = env.getAcousticModifiers(40, 320, 1400);
+        expect(crossing.notes).toContain('thermocline');
+        expect(crossing.highFreqLossDb).toBeGreaterThan(0);
+        expect(crossing.lowFreqLossDb).toBeGreaterThanOrEqual(0);
+    });
+
     it('should expose sampled water-column data', () => {
         const samples = env.sampleWaterColumn(50, 200);
         expect(samples.length).toBeGreaterThan(3);

@@ -1,7 +1,9 @@
 export const TargetType = {
     SHIP: 'SHIP',
     SUBMARINE: 'SUBMARINE',
+    AIRCRAFT: 'AIRCRAFT',
     BIOLOGICAL: 'BIOLOGICAL',
+    ENVIRONMENTAL: 'ENVIRONMENTAL',
     STATIC: 'STATIC',
     TORPEDO: 'TORPEDO'
 };
@@ -29,9 +31,12 @@ function getAcousticDefaultsForType(type) {
     switch (type) {
         case TargetType.SUBMARINE:
             return { rpm: 90, bladeCount: 7 };
+        case TargetType.AIRCRAFT:
+            return { rpm: 180, bladeCount: 4 };
         case TargetType.TORPEDO:
             return { rpm: 600, bladeCount: 4 };
         case TargetType.BIOLOGICAL:
+        case TargetType.ENVIRONMENTAL:
         case TargetType.STATIC:
             return { rpm: 0, bladeCount: 0 };
         case TargetType.SHIP:
@@ -67,6 +72,7 @@ export class SimulationTarget {
         let defaultTurnRate = 0.1;
         if (this.type === TargetType.SUBMARINE) defaultTurnRate = 0.05;
         if (this.type === TargetType.BIOLOGICAL) defaultTurnRate = 0.3;
+        if (this.type === TargetType.AIRCRAFT) defaultTurnRate = 0.18;
         if (this.type === TargetType.TORPEDO) defaultTurnRate = 0.5; // Very agile
 
         this.course = config.course ?? (config.angle ?? 0);
@@ -98,6 +104,10 @@ export class SimulationTarget {
         this.classProfile = Number.isFinite(config.classProfile) ? clamp(Math.round(config.classProfile), 0, 4) : undefined;
         this.bioType = typeof config.bioType === 'string' ? config.bioType : undefined;
         this.bioRate = Number.isFinite(config.bioRate) ? clamp(config.bioRate, 0, 1) : undefined;
+        this.soundPreset = typeof config.soundPreset === 'string' ? config.soundPreset : undefined;
+        this.sourceLevelOffset = Number.isFinite(config.sourceLevelOffset)
+            ? config.sourceLevelOffset
+            : 0;
 
         // AI / Patrol Logic
         this.patrolRadius = config.patrolRadius ?? 90;
@@ -161,7 +171,9 @@ export class SimulationTarget {
         switch (this.type) {
             case 'SHIP': sl = 155; break;
             case 'SUBMARINE': sl = 130; break;
+            case 'AIRCRAFT': sl = 148; break;
             case 'BIOLOGICAL': sl = 140; break;
+            case 'ENVIRONMENTAL': sl = 132; break;
             case 'STATIC': sl = 110; break;
             case 'TORPEDO': sl = 170; break;
             default: sl = 120;
@@ -175,7 +187,7 @@ export class SimulationTarget {
         // Machinery/RPM contribution
         const machineryFactor = this.rpm > 0 ? 5 * Math.log10(1 + this.rpm / 60) : 0;
 
-        return sl + speedFactor + machineryFactor;
+        return sl + speedFactor + machineryFactor + this.sourceLevelOffset;
     }
 
     set velocity(val) {
@@ -236,6 +248,10 @@ export class SimulationTarget {
                         this.targetCourse += (random() - 0.5) * Math.PI; // +/- 90 degrees
                         this.speed = 0.05 + random() * 0.25; // Variable speed
                         this.nextTurnInterval = 2 + random() * 8; // Very frequent turns
+                    } else if (this.type === TargetType.AIRCRAFT) {
+                        this.targetCourse += (random() - 0.5) * 0.7;
+                        this.speed = Math.max(1.2, this.cruiseSpeed + (random() - 0.5) * 0.4);
+                        this.nextTurnInterval = 6 + random() * 12;
                     } else if (this.type === TargetType.TORPEDO) {
                         // Torpedoes make sharp adjustments
                         this.targetCourse += (random() - 0.5) * 0.5;

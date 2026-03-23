@@ -7,7 +7,9 @@ import { DemonWasmProcessor } from './audio/demon-wasm-processor.js';
 export const BTR_THEMES = {
     'CYAN': {
         SUBMARINE: [0, 255, 255],
+        AIRCRAFT: [255, 255, 0],
         BIOLOGICAL: [0, 255, 0],
+        ENVIRONMENTAL: [128, 180, 255],
         STATIC: [128, 128, 128],
         SHIP: [0, 255, 128],
         TORPEDO: [255, 0, 0],
@@ -22,7 +24,9 @@ export const BTR_THEMES = {
     },
     'PHOSPHOR': {
         SUBMARINE: [0, 255, 68],
+        AIRCRAFT: [220, 255, 120],
         BIOLOGICAL: [100, 255, 100],
+        ENVIRONMENTAL: [140, 220, 180],
         STATIC: [0, 100, 20],
         SHIP: [0, 200, 50],
         TORPEDO: [200, 255, 0],
@@ -37,7 +41,9 @@ export const BTR_THEMES = {
     },
     'AMBER': {
         SUBMARINE: [255, 176, 0],
+        AIRCRAFT: [255, 235, 80],
         BIOLOGICAL: [200, 100, 0],
+        ENVIRONMENTAL: [160, 190, 255],
         STATIC: [100, 50, 0],
         SHIP: [255, 120, 0],
         TORPEDO: [255, 50, 0],
@@ -52,7 +58,9 @@ export const BTR_THEMES = {
     },
     'THERMAL': {
         SUBMARINE: [255, 255, 255],
+        AIRCRAFT: [255, 255, 120],
         BIOLOGICAL: [255, 200, 0],
+        ENVIRONMENTAL: [140, 180, 255],
         STATIC: [100, 100, 255],
         SHIP: [255, 100, 0],
         TORPEDO: [255, 0, 0],
