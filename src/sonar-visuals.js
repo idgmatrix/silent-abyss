@@ -140,6 +140,7 @@ export class SonarVisuals {
         this._demonInputBandPreset = 'MACHINERY';
         this._demonInputBandSettings = { ...DEMON_INPUT_BAND_PRESETS.MACHINERY };
         this._demonLocks = new Map();
+        this._demonAnalysisRevision = 0;
         this.enhancedVisualsEnabled = true;
         this.visualMode = VISUAL_MODES.STEALTH;
         this._demonLockConfig = {
@@ -623,6 +624,7 @@ export class SonarVisuals {
                 .map((track) => ({ ...track, strength: track.strength * 0.78, age: track.age + 1, seen: false }))
                 .filter((track) => track.age <= 6 && track.strength >= 0.12);
             this._demonSignalQuality *= 0.84;
+            this._commitDemonTracking(selectedTarget);
             return;
         }
 
@@ -672,6 +674,74 @@ export class SonarVisuals {
 
         this._demonSmoothedSpectrum = this._smoothDemonSpectrum(this._demonEnhancedSpectrum);
         this._demonPeaksHz = this._detectDemonPeaks(this._demonSmoothedSpectrum, 6);
+        this._commitDemonTracking(selectedTarget);
+    }
+
+    _getDemonMaxFrequencyHz(selectedTarget, currentRpm = 0) {
+        const selectedBladeCount = Number.isFinite(selectedTarget?.bladeCount)
+            ? Math.max(1, Math.floor(selectedTarget.bladeCount))
+            : null;
+        const bladeCountForMarkers = selectedBladeCount ?? 5;
+        const rpmForMarkers = selectedTarget?.rpm ?? currentRpm;
+        const bpfHz = rpmForMarkers > 0 ? (rpmForMarkers / 60) * bladeCountForMarkers : 0;
+        const defaultRange = 80;
+        if (!Number.isFinite(bpfHz) || bpfHz <= 0) return defaultRange;
+        const adaptive = Math.ceil((bpfHz * 6) / 10) * 10;
+        return Math.max(40, Math.min(100, adaptive));
+    }
+
+    _updateAutoDemonTracking(spectrum, maxFreqHz) {
+        if (!(spectrum instanceof Float32Array)) {
+            this._demonAutoBpfHz = 0;
+            this._demonAutoBpfConfidence *= 0.9;
+            return;
+        }
+
+        const peakBpf = this._estimateBpfFromPeaks(this._demonPeaksHz, maxFreqHz);
+        if (Number.isFinite(peakBpf) && peakBpf > 0) {
+            const scored = this._scoreDemonComb(spectrum, peakBpf, maxFreqHz);
+            const confidence = Math.max(
+                0,
+                Math.min(1, scored.score * 0.78 + Math.max(0, Math.min(1, this._demonSignalQuality)) * 0.22)
+            );
+            this._demonAutoBpfHz = peakBpf;
+            this._demonAutoBpfConfidence +=
+                (confidence - this._demonAutoBpfConfidence) * 0.12;
+        } else {
+            this._demonAutoBpfHz = 0;
+            this._demonAutoBpfConfidence *= 0.88;
+        }
+    }
+
+    _commitDemonTracking(selectedTarget, currentRpm = 0) {
+        const maxFreqHz = this._getDemonMaxFrequencyHz(selectedTarget, currentRpm);
+        const selectedBladeCount = Number.isFinite(selectedTarget?.bladeCount)
+            ? Math.max(1, Math.floor(selectedTarget.bladeCount))
+            : null;
+        const bladeCountForMarkers = selectedBladeCount ?? 5;
+        const rpmForMarkers = selectedTarget?.rpm ?? currentRpm;
+        const bpfHintHz = rpmForMarkers > 0 ? (rpmForMarkers / 60) * bladeCountForMarkers : 0;
+
+        if (selectedTarget) {
+            const selectedLock = this._updateSelectedDemonLock(
+                selectedTarget,
+                bpfHintHz,
+                this._demonSmoothedSpectrum,
+                maxFreqHz
+            );
+            this._demonAutoBpfHz = 0;
+            this._demonAutoBpfConfidence *= 0.9;
+            this._demonHarmonicScore = selectedLock ? selectedLock.confidence : 0;
+        } else {
+            this._demonTrackState = 'SEARCHING';
+            this._demonLockConfidence += (0 - this._demonLockConfidence) * 0.2;
+            this._updateAutoDemonTracking(this._demonSmoothedSpectrum, maxFreqHz);
+            this._demonHarmonicScore = this._demonAutoBpfConfidence;
+        }
+
+        this._demonDisplayHarmonicScore +=
+            (this._demonHarmonicScore - this._demonDisplayHarmonicScore) * 0.12;
+        this._demonAnalysisRevision++;
     }
 
     /**
@@ -1227,12 +1297,7 @@ export class SonarVisuals {
         const bladeCountForMarkers = selectedBladeCount ?? 5;
         const rpmForMarkers = selectedTarget?.rpm ?? currentRpm;
         const bpfHz = rpmForMarkers > 0 ? (rpmForMarkers / 60) * bladeCountForMarkers : 0;
-        const maxFreqHz = (() => {
-            const defaultRange = 80;
-            if (!Number.isFinite(bpfHz) || bpfHz <= 0) return defaultRange;
-            const adaptive = Math.ceil((bpfHz * 6) / 10) * 10;
-            return Math.max(40, Math.min(100, adaptive));
-        })();
+        const maxFreqHz = this._getDemonMaxFrequencyHz(selectedTarget, currentRpm);
         const infoPanelWidth = Math.min(220, Math.max(180, Math.floor(cvs.width * 0.42)));
         const infoPanelX = cvs.width - infoPanelWidth - 8;
         const infoPanelY = 6;
@@ -1329,36 +1394,10 @@ export class SonarVisuals {
         // Blade-rate harmonic markers.
         const autoBpfConfidenceThreshold = 0.45;
         const hasSelectedTarget = !!selectedTarget;
-        const selectedLock = this._updateSelectedDemonLock(
-            selectedTarget,
-            bpfHz,
-            enhancedSpectrum,
-            maxFreqHz
-        );
-        let autoBpfHz = 0;
-        if (!hasSelectedTarget && enhancedSpectrum instanceof Float32Array) {
-            const peakBpf = this._estimateBpfFromPeaks(this._demonPeaksHz, maxFreqHz);
-            if (Number.isFinite(peakBpf) && peakBpf > 0) {
-                const scored = this._scoreDemonComb(enhancedSpectrum, peakBpf, maxFreqHz);
-                const confidence = Math.max(
-                    0,
-                    Math.min(1, scored.score * 0.78 + Math.max(0, Math.min(1, this._demonSignalQuality)) * 0.22)
-                );
-                this._demonAutoBpfHz = peakBpf;
-                this._demonAutoBpfConfidence +=
-                    (confidence - this._demonAutoBpfConfidence) * 0.12;
-                autoBpfHz = peakBpf;
-            } else {
-                this._demonAutoBpfHz = 0;
-                this._demonAutoBpfConfidence *= 0.88;
-            }
-        } else {
-            this._demonAutoBpfHz = 0;
-            this._demonAutoBpfConfidence *= 0.9;
-        }
+        const selectedLock = hasSelectedTarget ? this._demonLocks.get(selectedTarget.id) || null : null;
         const trackedBpfHz = hasSelectedTarget
             ? (Number.isFinite(selectedLock?.bpfEstimateHz) ? selectedLock.bpfEstimateHz : bpfHz)
-            : (Number.isFinite(this._demonAutoBpfHz) ? this._demonAutoBpfHz : autoBpfHz);
+            : (Number.isFinite(this._demonAutoBpfHz) ? this._demonAutoBpfHz : 0);
         const harmonicEvalEnabled =
             hasSelectedTarget &&
             this._demonTrackState !== 'SEARCHING' &&
@@ -1366,9 +1405,6 @@ export class SonarVisuals {
             (selectedLock?.harmonicHits ?? 0) >= 1;
         const harmonicGuidesVisible = this._demonTrackState !== 'SEARCHING';
         const targetHarmonicsHz = [];
-        this._demonHarmonicScore = selectedLock
-            ? selectedLock.confidence
-            : this._demonAutoBpfConfidence;
         if (hasSelectedTarget && trackedBpfHz > 0 && Number.isFinite(trackedBpfHz) && harmonicGuidesVisible) {
             ctx.save();
             const toleranceHz = Math.max(0.5, this._demonFocusWidthHz);
@@ -1397,8 +1433,6 @@ export class SonarVisuals {
             }
             ctx.restore();
         }
-        this._demonDisplayHarmonicScore +=
-            (this._demonHarmonicScore - this._demonDisplayHarmonicScore) * 0.12;
         const showBpfReadout =
             (hasSelectedTarget && (selectedLock?.confidence ?? 0) >= 0.32) ||
             (!hasSelectedTarget && this._demonDisplayHarmonicScore >= autoBpfConfidenceThreshold);

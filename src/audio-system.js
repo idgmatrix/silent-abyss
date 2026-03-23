@@ -102,8 +102,10 @@ export class AudioSystem {
         this.wasmManager = new WasmAudioManager();
         this.analysisWasmManager = new WasmAudioManager();
         this.analysisOwnShipWasmManager = new WasmAudioManager();
+        this.analysisSelectedTargetWasmManager = new WasmAudioManager();
         this.ownVoiceId = 0;
         this.analysisOwnShipVoiceId = -1;
+        this.analysisSelectedVoiceId = -1;
         this.ownShipBladeCount = 5;
         this.ownShipRpm = 0;
         this.ownBaseGain = 0.8;
@@ -209,10 +211,7 @@ export class AudioSystem {
         this.analysisOwnShipGain.connect(this.analysisMixGain);
         this.analysisMixGain.connect(this.analysisCompositeAnalyser);
 
-        // Selected bus: contacts only, own-ship excluded.
-        // The focus system boosts the selected target and ducks all others,
-        // so this bus is dominated by the focused contact when one is active.
-        this.analysisContactsGain.connect(this.analysisSelectedGain);
+        // Selected bus: focused contact only, own-ship excluded.
         this.analysisSelectedGain.connect(this.analysisSelectedAnalyser);
     }
 
@@ -257,9 +256,16 @@ export class AudioSystem {
                 maxVoices: 2,
                 autoAddVoice: true
             });
+            await this.analysisSelectedTargetWasmManager.init({
+                ctx: this.ctx,
+                outputNode: this.analysisSelectedGain,
+                maxVoices: 1,
+                autoAddVoice: true
+            });
 
             this.ownVoiceId = this.wasmManager.defaultVoiceId;
             this.analysisOwnShipVoiceId = this.analysisOwnShipWasmManager.defaultVoiceId;
+            this.analysisSelectedVoiceId = this.analysisSelectedTargetWasmManager.defaultVoiceId;
             this.ownCurrentGain = this.ownBaseGain;
             this.currentAnalysisOwnShipGain = this.analysisOwnShipSettings.baseGain;
             this.lastOwnGainUpdateTime = this.ctx.currentTime;
@@ -285,6 +291,10 @@ export class AudioSystem {
             this.analysisOwnShipWasmManager.setClassProfile(ownPropulsion.classProfile, this.analysisOwnShipVoiceId);
             this.analysisOwnShipWasmManager.setCavitationLevel(ownPropulsion.cavitationLevel, this.analysisOwnShipVoiceId);
             this.analysisOwnShipWasmManager.setRpm(this.ownShipRpm, this.analysisOwnShipVoiceId);
+            this.analysisSelectedTargetWasmManager.setGain(0, this.analysisSelectedVoiceId);
+            this.analysisSelectedTargetWasmManager.setEngineMix(0, this.analysisSelectedVoiceId);
+            this.analysisSelectedTargetWasmManager.setCavMix(0, this.analysisSelectedVoiceId);
+            this.analysisSelectedTargetWasmManager.setBioMix(0, this.analysisSelectedVoiceId);
 
         } catch (e) {
             console.error('Audio initialization failed:', e);
@@ -420,9 +430,18 @@ export class AudioSystem {
             voiceId: speakerVoiceId,
             analysisVoiceId,
             type,
+            rpm: target.rpm || 0,
+            bladeCount: target.bladeCount || 5,
             baseEngineMix,
             baseCavMix,
             baseBioMix,
+            baseBioType,
+            baseBioRate,
+            shaftRate: propulsion.shaftRate,
+            load: propulsion.load,
+            rpmJitter: propulsion.rpmJitter,
+            classProfile: propulsion.classProfile,
+            cavitationLevel: propulsion.cavitationLevel,
             currentGain: initialGain,
             currentAnalysisGain: initialGain,
             currentEngineMix: baseEngineMix,
@@ -443,6 +462,49 @@ export class AudioSystem {
 
         this.focusedTargetId = nextFocus;
         this.updateOwnShipFocusGain();
+        this.syncSelectedAnalysisVoice();
+    }
+
+    syncSelectedAnalysisVoice() {
+        if (!this.analysisSelectedTargetWasmManager?.ready || this.analysisSelectedVoiceId < 0) return;
+
+        const focusedNode = this.focusedTargetId ? this.targetNodes.get(this.focusedTargetId) : null;
+        if (!focusedNode) {
+            this.analysisSelectedTargetWasmManager.setGain(0, this.analysisSelectedVoiceId);
+            this.analysisSelectedTargetWasmManager.setEngineMix(0, this.analysisSelectedVoiceId);
+            this.analysisSelectedTargetWasmManager.setCavMix(0, this.analysisSelectedVoiceId);
+            this.analysisSelectedTargetWasmManager.setBioMix(0, this.analysisSelectedVoiceId);
+            return;
+        }
+
+        this.analysisSelectedTargetWasmManager.setBlades(focusedNode.bladeCount, this.analysisSelectedVoiceId);
+        this.analysisSelectedTargetWasmManager.setRpm(focusedNode.rpm, this.analysisSelectedVoiceId);
+        this.analysisSelectedTargetWasmManager.setBioType(focusedNode.baseBioType, this.analysisSelectedVoiceId);
+        this.analysisSelectedTargetWasmManager.setBioRate(focusedNode.baseBioRate, this.analysisSelectedVoiceId);
+        this.analysisSelectedTargetWasmManager.setShaftRate(focusedNode.shaftRate, this.analysisSelectedVoiceId);
+        this.analysisSelectedTargetWasmManager.setLoad(focusedNode.load, this.analysisSelectedVoiceId);
+        this.analysisSelectedTargetWasmManager.setRpmJitter(focusedNode.rpmJitter, this.analysisSelectedVoiceId);
+        this.analysisSelectedTargetWasmManager.setClassProfile(focusedNode.classProfile, this.analysisSelectedVoiceId);
+        this.analysisSelectedTargetWasmManager.setCavitationLevel(
+            focusedNode.cavitationLevel,
+            this.analysisSelectedVoiceId
+        );
+        this.analysisSelectedTargetWasmManager.setGain(
+            focusedNode.currentAnalysisGain,
+            this.analysisSelectedVoiceId
+        );
+        this.analysisSelectedTargetWasmManager.setEngineMix(
+            focusedNode.currentAnalysisEngineMix,
+            this.analysisSelectedVoiceId
+        );
+        this.analysisSelectedTargetWasmManager.setCavMix(
+            focusedNode.currentAnalysisCavMix,
+            this.analysisSelectedVoiceId
+        );
+        this.analysisSelectedTargetWasmManager.setBioMix(
+            focusedNode.currentAnalysisBioMix,
+            this.analysisSelectedVoiceId
+        );
     }
 
     updateTargetVolume(targetId, distance) {
@@ -549,6 +611,17 @@ export class AudioSystem {
                 this.analysisWasmManager.setEngineMix(node.currentAnalysisEngineMix, node.analysisVoiceId);
                 this.analysisWasmManager.setCavMix(node.currentAnalysisCavMix, node.analysisVoiceId);
                 this.analysisWasmManager.setBioMix(node.currentAnalysisBioMix, node.analysisVoiceId);
+
+                if (
+                    isFocused &&
+                    this.analysisSelectedTargetWasmManager?.ready &&
+                    this.analysisSelectedVoiceId >= 0
+                ) {
+                    this.analysisSelectedTargetWasmManager.setGain(node.currentAnalysisGain, this.analysisSelectedVoiceId);
+                    this.analysisSelectedTargetWasmManager.setEngineMix(node.currentAnalysisEngineMix, this.analysisSelectedVoiceId);
+                    this.analysisSelectedTargetWasmManager.setCavMix(node.currentAnalysisCavMix, this.analysisSelectedVoiceId);
+                    this.analysisSelectedTargetWasmManager.setBioMix(node.currentAnalysisBioMix, this.analysisSelectedVoiceId);
+                }
             }
         }
     }
@@ -679,6 +752,9 @@ export class AudioSystem {
         if (this.analysisOwnShipWasmManager) {
             this.analysisOwnShipWasmManager.dispose();
         }
+        if (this.analysisSelectedTargetWasmManager) {
+            this.analysisSelectedTargetWasmManager.dispose();
+        }
         if (this.ctx) {
             this.bioTimeouts.forEach(id => clearTimeout(id));
             this.bioTimeouts.clear();
@@ -728,6 +804,7 @@ export class AudioSystem {
             this.timeDomainArray = null;
             this.computeProcessor = null;
             this.analysisOwnShipVoiceId = -1;
+            this.analysisSelectedVoiceId = -1;
             this.ctx.close();
             this.ctx = null;
         }

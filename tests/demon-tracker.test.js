@@ -219,6 +219,56 @@ describe('DEMON lock tracker', () => {
         expect(Math.abs(lock.bpfEstimateHz - expectedBpf)).toBeLessThanOrEqual(expectedBpf * 0.12);
     });
 
+    it('keeps lock state invariant when DEMON is redrawn without new analysis', () => {
+        const selectedTarget = {
+            id: 'target-frame-invariant',
+            type: 'SHIP',
+            rpm: 216,
+            bladeCount: 5,
+            classification: null
+        };
+        const sampleRate = 4096;
+        const frameSize = 1024;
+        const expectedBpf = (selectedTarget.rpm / 60) * selectedTarget.bladeCount;
+
+        const runScenario = (extraDrawsPerFrame) => {
+            const visuals = createDemonHarness();
+            let phaseCarrier = 0;
+            let phaseMod = 0;
+            const dt = 1 / sampleRate;
+
+            for (let frame = 0; frame < 140; frame++) {
+                const buf = new Float32Array(frameSize);
+                for (let i = 0; i < frameSize; i++) {
+                    const carrier = Math.sin(phaseCarrier) + 0.35 * Math.sin(phaseCarrier * 1.57);
+                    const envelope = Math.sin(phaseMod) >= 0 ? 1.6 : 0.05;
+                    const n = 0.002 * Math.sin(phaseCarrier * 0.23);
+                    buf[i] = envelope * carrier + n;
+                    phaseCarrier += 2 * Math.PI * 420 * dt;
+                    phaseMod += 2 * Math.PI * expectedBpf * dt;
+                }
+
+                visuals._updateDemonSpectrum(buf, sampleRate, selectedTarget);
+                visuals.drawDEMON(new Uint8Array(128), selectedTarget.rpm, selectedTarget, sampleRate);
+                for (let i = 0; i < extraDrawsPerFrame; i++) {
+                    visuals.drawDEMON(new Uint8Array(128), selectedTarget.rpm, selectedTarget, sampleRate);
+                }
+            }
+
+            return visuals._demonLocks.get(selectedTarget.id);
+        };
+
+        const baseline = runScenario(0);
+        const redrawHeavy = runScenario(4);
+
+        expect(baseline).toBeDefined();
+        expect(redrawHeavy).toBeDefined();
+        expect(baseline.state).toBe('LOCKED');
+        expect(redrawHeavy.state).toBe('LOCKED');
+        expect(Math.abs(baseline.confidence - redrawHeavy.confidence)).toBeLessThanOrEqual(0.02);
+        expect(Math.abs(baseline.bpfEstimateHz - redrawHeavy.bpfEstimateHz)).toBeLessThanOrEqual(0.2);
+    });
+
     it('changes synth texture across cavitation regimes while preserving DEMON lock', () => {
         const selectedTarget = {
             id: 'target-real-cav',
