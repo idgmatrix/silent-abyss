@@ -264,8 +264,8 @@ export class AudioSystem {
     }
 
     _configureAnalyser(analyser) {
-        analyser.fftSize = 2048;
-        analyser.smoothingTimeConstant = 0.85;
+        analyser.fftSize = 1024;
+        analyser.smoothingTimeConstant = 0.55;
         analyser.minDecibels = -120;
         analyser.maxDecibels = -30;
     }

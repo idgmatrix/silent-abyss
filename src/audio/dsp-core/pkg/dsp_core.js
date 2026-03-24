@@ -21,9 +21,23 @@ export class DspGraph {
     /**
      * @returns {number}
      */
+    average_process_ms() {
+        const ret = wasm.dspgraph_average_process_ms(this.__wbg_ptr);
+        return ret;
+    }
+    /**
+     * @returns {number}
+     */
     max_frames() {
         const ret = wasm.dspgraph_max_frames(this.__wbg_ptr);
         return ret >>> 0;
+    }
+    /**
+     * @returns {number}
+     */
+    max_process_ms() {
+        const ret = wasm.dspgraph_max_process_ms(this.__wbg_ptr);
+        return ret;
     }
     /**
      * @param {number} sample_rate
@@ -68,12 +82,28 @@ export class DspGraph {
         return ret >>> 0;
     }
     /**
+     * @returns {number}
+     */
+    process_call_count() {
+        const ret = wasm.dspgraph_process_call_count(this.__wbg_ptr);
+        return ret >>> 0;
+    }
+    /**
+     * @param {number} elapsed_ms
+     */
+    record_process_ms(elapsed_ms) {
+        wasm.dspgraph_record_process_ms(this.__wbg_ptr, elapsed_ms);
+    }
+    /**
      * @param {number} voice_id
      * @returns {boolean}
      */
     remove_voice(voice_id) {
         const ret = wasm.dspgraph_remove_voice(this.__wbg_ptr, voice_id);
         return ret !== 0;
+    }
+    reset_process_stats() {
+        wasm.dspgraph_reset_process_stats(this.__wbg_ptr);
     }
     /**
      * @param {number} voice_id

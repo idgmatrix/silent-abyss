@@ -266,6 +266,10 @@ struct CavState {
     broadband_lp_a: f32,
     broadband_lp_b: f32,
     broadband_lp_c: f32,
+    blade_cache_count: usize,
+    blade_offset_cos: [f32; 12],
+    blade_offset_sin: [f32; 12],
+    blade_weight_cache: [f32; 12],
     lp_noise: f32,
     slow_noise: f32,
     shaped_noise: f32,
@@ -279,11 +283,37 @@ impl CavState {
             broadband_lp_a: 0.0,
             broadband_lp_b: 0.0,
             broadband_lp_c: 0.0,
+            blade_cache_count: 0,
+            blade_offset_cos: [0.0; 12],
+            blade_offset_sin: [0.0; 12],
+            blade_weight_cache: [1.0; 12],
             lp_noise: 0.0,
             slow_noise: 0.0,
             shaped_noise: 0.0,
             burst_env: 0.0,
             burst_drive: 0.0,
+        }
+    }
+
+    #[inline]
+    fn refresh_blade_cache(&mut self, discrete_blades: usize) {
+        if self.blade_cache_count == discrete_blades {
+            return;
+        }
+
+        self.blade_cache_count = discrete_blades;
+        for blade_idx in 0..12 {
+            if blade_idx < discrete_blades {
+                let blade_offset = TWO_PI * blade_idx as f32 / discrete_blades as f32;
+                self.blade_offset_cos[blade_idx] = blade_offset.cos();
+                self.blade_offset_sin[blade_idx] = blade_offset.sin();
+                self.blade_weight_cache[blade_idx] =
+                    0.88 + 0.12 * ((blade_idx as f32 * 1.73).sin() * 0.5 + 0.5);
+            } else {
+                self.blade_offset_cos[blade_idx] = 0.0;
+                self.blade_offset_sin[blade_idx] = 0.0;
+                self.blade_weight_cache[blade_idx] = 1.0;
+            }
         }
     }
 
@@ -347,15 +377,16 @@ impl CavState {
         let blade_mod = (0.5 + 0.5 * blade_phase.cos()).powf(10.0);
         let blade_pulse = blade_mod;
         let discrete_blades = clamp(blade_count.round(), 1.0, 12.0) as usize;
+        self.refresh_blade_cache(discrete_blades);
         let pulse_power = 10.0 + regime_drive * 8.0;
         let mut blade_packet = 0.0;
+        let shaft_cos = shaft_phase.cos();
+        let shaft_sin = shaft_phase.sin();
         for blade_idx in 0..discrete_blades {
-            let blade_offset = TWO_PI * blade_idx as f32 / discrete_blades as f32;
-            let phase = shaft_phase + blade_offset;
-            let passage = (0.5 + 0.5 * phase.cos()).powf(pulse_power);
-            let blade_weight =
-                0.88 + 0.12 * ((blade_idx as f32 * 1.73 + load * 2.4).sin() * 0.5 + 0.5);
-            blade_packet += passage * blade_weight;
+            let phase_cos = shaft_cos * self.blade_offset_cos[blade_idx]
+                - shaft_sin * self.blade_offset_sin[blade_idx];
+            let passage = (0.5 + 0.5 * phase_cos).powf(pulse_power);
+            blade_packet += passage * self.blade_weight_cache[blade_idx];
         }
         blade_packet /= discrete_blades.max(1) as f32;
         let modulation_depth = 0.18 + regime_drive * 0.72;
@@ -1445,6 +1476,9 @@ pub struct DspGraph {
     voices: Vec<Voice>,
     output: Vec<f32>,
     next_seed: u32,
+    process_call_count: u32,
+    process_total_ms: f64,
+    process_max_ms: f64,
 }
 
 #[wasm_bindgen]
@@ -1466,6 +1500,9 @@ impl DspGraph {
             voices,
             output: vec![0.0; max_frames.max(1)],
             next_seed: 0x1234_abcd,
+            process_call_count: 0,
+            process_total_ms: 0.0,
+            process_max_ms: 0.0,
         }
     }
 
@@ -1522,15 +1559,59 @@ impl DspGraph {
         let n = frames.min(self.max_frames);
         self.last_frames = n;
 
-        for i in 0..n {
-            let mut mix = 0.0f32;
-            for voice in &mut self.voices {
-                mix += voice.sample(self.sample_rate);
+        for sample in &mut self.output[..n] {
+            *sample = 0.0;
+        }
+
+        for voice in &mut self.voices {
+            if !voice.active {
+                continue;
             }
-            self.output[i] = mix.tanh();
+            for i in 0..n {
+                self.output[i] += voice.sample(self.sample_rate);
+            }
+        }
+
+        for i in 0..n {
+            self.output[i] = self.output[i].tanh();
         }
 
         self.output.as_ptr() as usize
+    }
+
+    pub fn record_process_ms(&mut self, elapsed_ms: f64) {
+        let safe_elapsed = if elapsed_ms.is_finite() {
+            elapsed_ms.max(0.0)
+        } else {
+            0.0
+        };
+        self.process_call_count = self.process_call_count.saturating_add(1);
+        self.process_total_ms += safe_elapsed;
+        if safe_elapsed > self.process_max_ms {
+            self.process_max_ms = safe_elapsed;
+        }
+    }
+
+    pub fn average_process_ms(&self) -> f64 {
+        if self.process_call_count == 0 {
+            0.0
+        } else {
+            self.process_total_ms / self.process_call_count as f64
+        }
+    }
+
+    pub fn max_process_ms(&self) -> f64 {
+        self.process_max_ms
+    }
+
+    pub fn process_call_count(&self) -> u32 {
+        self.process_call_count
+    }
+
+    pub fn reset_process_stats(&mut self) {
+        self.process_call_count = 0;
+        self.process_total_ms = 0.0;
+        self.process_max_ms = 0.0;
     }
 
     pub fn output_len(&self) -> usize {

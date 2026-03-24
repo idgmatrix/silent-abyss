@@ -44,6 +44,9 @@ export class WebGPUFFTProcessor {
         this._hannWindow = null;
         this._lastMode = 'frequency';
         this._maxGpuFftSize = 2048;
+        this._timeDomainScratch = null;
+        this._frequencyScratch = null;
+        this._gpuReadbackScratch = null;
     }
 
     async init() {
@@ -121,7 +124,10 @@ export class WebGPUFFTProcessor {
     }
 
     _prepareTimeDomainInput(timeDomainData, fftSize) {
-        const out = new Float32Array(fftSize);
+        if (!(this._timeDomainScratch instanceof Float32Array) || this._timeDomainScratch.length !== fftSize) {
+            this._timeDomainScratch = new Float32Array(fftSize);
+        }
+        const out = this._timeDomainScratch;
         if (timeDomainData.length === fftSize) {
             out.set(timeDomainData);
         } else {
@@ -147,7 +153,11 @@ export class WebGPUFFTProcessor {
     }
 
     _prepareFrequencyInput(frequencyData, fftSize) {
-        const input = new Float32Array(fftSize);
+        if (!(this._frequencyScratch instanceof Float32Array) || this._frequencyScratch.length !== fftSize) {
+            this._frequencyScratch = new Float32Array(fftSize);
+        }
+        const input = this._frequencyScratch;
+        input.fill(0);
         if (!(frequencyData instanceof Uint8Array)) {
             return input;
         }
@@ -189,10 +199,14 @@ export class WebGPUFFTProcessor {
 
         // mapAsync handles synchronization with the GPU queue internally
         await this.readbackBuffer.mapAsync(GPU_MAP_MODE.READ);
-        const copied = new Float32Array(this.readbackBuffer.getMappedRange()).slice();
+        if (!(this._gpuReadbackScratch instanceof Float32Array) || this._gpuReadbackScratch.length !== bins) {
+            this._gpuReadbackScratch = new Float32Array(bins);
+        }
+        const mapped = new Float32Array(this.readbackBuffer.getMappedRange());
+        this._gpuReadbackScratch.set(mapped);
         this.readbackBuffer.unmap();
 
-        return copied;
+        return this._gpuReadbackScratch;
     }
 
     _ensureGpuResources(fftSize) {

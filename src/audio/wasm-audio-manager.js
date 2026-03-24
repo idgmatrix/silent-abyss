@@ -142,6 +142,15 @@ export class WasmAudioManager {
 
         if (data.type === 'SET_PARAM_FAILED') {
             console.warn('SET_PARAM failed:', data);
+            return;
+        }
+
+        if (data.type === 'PERF_STATS') {
+            console.info(
+                `WasmEngineProcessor perf: avg=${data.averageProcessMs?.toFixed?.(3) ?? data.averageProcessMs}ms ` +
+                `max=${data.maxProcessMs?.toFixed?.(3) ?? data.maxProcessMs}ms ` +
+                `calls=${data.processCallCount} frames=${data.frames}/${data.maxFrames}`
+            );
         }
     }
 

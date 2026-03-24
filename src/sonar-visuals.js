@@ -105,6 +105,17 @@ const LOFAR_NOISE_FLOOR_MIN_DB = -88;
 const VISUAL_GAIN_DEFAULT = 1.0;
 const VISUAL_OFFSET_DB_DEFAULT = 0.0;
 const NOISE_FLOOR_SAMPLE_LIMIT = 512;
+const ANALYSIS_TARGET_HZ = 30;
+const ANALYSIS_INTERVAL_MS = 1000 / ANALYSIS_TARGET_HZ;
+const ANALYSIS_HEARTBEAT_MS = 2000;
+const LOFAR_PENDING_TIMEOUT_MS = 250;
+const LOFAR_LIVE_FALLBACK_MS = 1000;
+
+function nowMs() {
+    return typeof performance !== 'undefined' && typeof performance.now === 'function'
+        ? performance.now()
+        : Date.now();
+}
 
 function linearToDb(value) {
     return 20 * Math.log10(Math.max(1e-6, Number.isFinite(value) ? value : 0));
@@ -148,7 +159,8 @@ export class SonarVisuals {
         this._demonBackend = 'js';
         this.lofarSpectrum = null;
         this._lofarPending = null;
-        this._lofarFrameCounter = 0;
+        this._lofarRequestRevision = 0;
+        this._lofarAppliedRevision = 0;
         this._demonSpectrum = null;
         this._demonEnhancedSpectrum = null;
         this._demonSmoothedSpectrum = null;
@@ -157,7 +169,6 @@ export class SonarVisuals {
         this._demonDisplayHarmonicScore = 0;
         this._demonAutoBpfHz = 0;
         this._demonAutoBpfConfidence = 0;
-        this._demonFrameCounter = 0;
         this._demonSampleBuffer = new Float32Array(131072); // ~3 s at 44100 Hz
         this._demonSampleWriteIndex = 0;
         this._demonSampleCount = 0;
@@ -178,8 +189,6 @@ export class SonarVisuals {
         this._demonInputBandPreset = 'MACHINERY';
         this._demonInputBandSettings = { ...DEMON_INPUT_BAND_PRESETS.MACHINERY };
         this._demonLocks = new Map();
-        this._demonAnalysisRevision = 0;
-        this._demonLastWaterfallRevision = -1;
         this._demonWaterfallSpectrum = null;
         this._demonWaterfallLevels = null;
         this._demonWaterfallWidth = 0;
@@ -208,6 +217,25 @@ export class SonarVisuals {
         this.lineHistory = [];
         this.maxLineHistory = 15;
         this._ownShipCourseRad = 0;
+        this._analysisLatestPacket = null;
+        this._analysisRevision = 0;
+        this._analysisConsumedRevision = 0;
+        this._analysisNextDueMs = 0;
+        this._analysisRuns = 0;
+        this._analysisDrops = 0;
+        this._analysisHeartbeatLastMs = 0;
+        this._analysisHeartbeatRuns = 0;
+        this._analysisHeartbeatDrops = 0;
+        this._analysisDebugEnabled = true;
+        this._lofarPendingStartedAtMs = 0;
+        this._lofarPendingRevision = 0;
+        this._lofarPendingTimeoutId = null;
+        this._lofarForceLiveBinsUntilMs = 0;
+        this._lofarLastResolvedAtMs = 0;
+        this._lastRenderedLofarRevision = -1;
+        this._lastRenderedWaterfallRevision = -1;
+        this._lastDrawMode = 'live';
+        this._lofarWatchdogTrips = 0;
     }
 
     setEnhancedVisualsEnabled(enabled) {
@@ -356,6 +384,161 @@ export class SonarVisuals {
         this.fftProcessor = processor || null;
     }
 
+    _debugAnalysisFlow(event, details = {}) {
+        if (!this._analysisDebugEnabled || typeof window === 'undefined') return;
+        const payload = Object.entries(details)
+            .map(([key, value]) => `${key}=${value}`)
+            .join(' ');
+        console.debug(`[SonarVisuals] ${event}${payload ? ` ${payload}` : ''}`);
+    }
+
+    _clearLofarPendingTimeout() {
+        if (this._lofarPendingTimeoutId) {
+            clearTimeout(this._lofarPendingTimeoutId);
+            this._lofarPendingTimeoutId = null;
+        }
+    }
+
+    _disableGpuLofar(reason) {
+        if (!this.fftProcessor || this.fftProcessor.backend !== 'webgpu') return;
+        this.fftProcessor.backend = 'cpu';
+        this._debugAnalysisFlow('lofar-backend-fallback', { reason, backend: 'cpu' });
+    }
+
+    _discardFrozenLofarSpectrum() {
+        if (this.lofarSpectrum instanceof Float32Array) {
+            float32Pool.release(this.lofarSpectrum);
+            this.lofarSpectrum = null;
+        }
+    }
+
+    _handleLofarStall(reason, observedAtMs = nowMs()) {
+        this._lofarWatchdogTrips++;
+        this._clearLofarPendingTimeout();
+        this._lofarPending = null;
+        this._lofarPendingStartedAtMs = 0;
+        this._lofarForceLiveBinsUntilMs = observedAtMs + LOFAR_LIVE_FALLBACK_MS;
+        this._discardFrozenLofarSpectrum();
+        this._disableGpuLofar(reason);
+        console.error(`[SonarVisuals] LOFAR pipeline stalled: ${reason}`);
+        this._debugAnalysisFlow('lofar-stall', {
+            revision: this._lofarPendingRevision,
+            watchdogs: this._lofarWatchdogTrips
+        });
+    }
+
+    _getDisplaySpectrumSource(dataArray, drawTimeMs = nowMs()) {
+        if (drawTimeMs < this._lofarForceLiveBinsUntilMs) {
+            this._lastDrawMode = 'live-fallback';
+            return dataArray;
+        }
+        if (this.lofarSpectrum instanceof Float32Array && this.lofarSpectrum.length > 0) {
+            this._lastDrawMode = 'lofar-spectrum';
+            return this.lofarSpectrum;
+        }
+        this._lastDrawMode = 'live';
+        return dataArray;
+    }
+
+    _ensureAnalysisPacketBuffers(freqLength, timeLength) {
+        if (
+            !this._analysisLatestPacket ||
+            !(this._analysisLatestPacket.frequencyData instanceof Uint8Array) ||
+            this._analysisLatestPacket.frequencyData.length !== freqLength ||
+            !(this._analysisLatestPacket.timeDomainData instanceof Float32Array) ||
+            this._analysisLatestPacket.timeDomainData.length !== timeLength
+        ) {
+            this._analysisLatestPacket = {
+                frequencyData: new Uint8Array(freqLength),
+                timeDomainData: new Float32Array(timeLength),
+                fftSize: 0,
+                sampleRate: 0,
+                selectedTarget: null,
+                revision: 0
+            };
+        }
+        return this._analysisLatestPacket;
+    }
+
+    _captureLatestAnalysisFrame(dataArray, timeDomainData, sampleRate, fftSize, selectedTarget) {
+        if (!(dataArray instanceof Uint8Array) || !(timeDomainData instanceof Float32Array)) {
+            return;
+        }
+
+        const packet = this._ensureAnalysisPacketBuffers(dataArray.length, timeDomainData.length);
+        if (packet.revision > this._analysisConsumedRevision) {
+            this._analysisDrops++;
+            this._analysisHeartbeatDrops++;
+        }
+
+        packet.frequencyData.set(dataArray);
+        packet.timeDomainData.set(timeDomainData);
+        packet.fftSize = fftSize;
+        packet.sampleRate = sampleRate;
+        packet.selectedTarget = selectedTarget;
+        packet.revision = ++this._analysisRevision;
+        this._debugAnalysisFlow('capture', {
+            revision: packet.revision,
+            fftSize,
+            sampleRate,
+            bins: dataArray.length
+        });
+    }
+
+    _logAnalysisHeartbeat(nowMs) {
+        if (!this._analysisHeartbeatLastMs) {
+            this._analysisHeartbeatLastMs = nowMs;
+            return;
+        }
+        const elapsedMs = nowMs - this._analysisHeartbeatLastMs;
+        if (elapsedMs < ANALYSIS_HEARTBEAT_MS) return;
+
+        const actualHz = (this._analysisHeartbeatRuns * 1000) / Math.max(1, elapsedMs);
+        if (typeof window !== 'undefined') {
+            console.debug(
+                `[SonarVisuals] Visual analysis heartbeat: actual=${actualHz.toFixed(1)}Hz target=${ANALYSIS_TARGET_HZ}Hz drops=${this._analysisHeartbeatDrops}`
+            );
+        }
+        this._analysisHeartbeatLastMs = nowMs;
+        this._analysisHeartbeatRuns = 0;
+        this._analysisHeartbeatDrops = 0;
+    }
+
+    _pumpAnalysisScheduler(nowMs) {
+        this._logAnalysisHeartbeat(nowMs);
+
+        if (this._lofarPending) {
+            const pendingAgeMs = nowMs - this._lofarPendingStartedAtMs;
+            if (pendingAgeMs > LOFAR_PENDING_TIMEOUT_MS) {
+                this._handleLofarStall(
+                    `pending revision ${this._lofarPendingRevision} exceeded ${LOFAR_PENDING_TIMEOUT_MS}ms (${pendingAgeMs.toFixed(1)}ms)`,
+                    nowMs
+                );
+            } else {
+                return;
+            }
+        }
+        if (nowMs < this._analysisNextDueMs) return;
+
+        const packet = this._analysisLatestPacket;
+        if (!packet || packet.revision <= this._analysisConsumedRevision) return;
+        if (!(packet.frequencyData instanceof Uint8Array) || !(packet.timeDomainData instanceof Float32Array)) {
+            return;
+        }
+
+        this._analysisConsumedRevision = packet.revision;
+        this._analysisRuns++;
+        this._analysisHeartbeatRuns++;
+        this._analysisNextDueMs = nowMs + ANALYSIS_INTERVAL_MS;
+        this._debugAnalysisFlow('analysis-dispatch', {
+            revision: packet.revision,
+            dueAt: this._analysisNextDueMs.toFixed(1)
+        });
+
+        this._updateDemonSpectrum(packet.timeDomainData, packet.sampleRate, packet.selectedTarget);
+        this._updateLofarSpectrum(packet.frequencyData, packet.timeDomainData, packet.fftSize, nowMs);
+    }
+
     draw(dataArray, targets, currentRpm, pingIntensity, sampleRate, fftSize, selectedTarget = null, timeDomainData = null, options = {}) {
         if (!dataArray) return;
         this.lastTargets = targets;
@@ -365,12 +548,33 @@ export class SonarVisuals {
         this._pingEchoes = options.pingEchoes || [];
         this._ownShipCourseRad = Number.isFinite(options.ownShipCourseRad) ? options.ownShipCourseRad : this._ownShipCourseRad;
         this._syncDemonTargetCache(selectedTarget);
-        this._updateLofarSpectrum(dataArray, timeDomainData, fftSize);
-        this._updateDemonSpectrum(timeDomainData, sampleRate, selectedTarget);
-        this.drawLOFAR(dataArray, currentRpm, sampleRate, fftSize, selectedTarget);
-        this.drawDEMON(dataArray, currentRpm, selectedTarget, sampleRate);
-        this.drawBTR(targets, currentRpm, pingIntensity, this._pingEchoes, selectedTarget);
-        this.drawWaterfall(dataArray, pingIntensity, sampleRate, fftSize);
+        const frameNowMs = nowMs();
+        try {
+            this._captureLatestAnalysisFrame(dataArray, timeDomainData, sampleRate, fftSize, selectedTarget);
+            this._pumpAnalysisScheduler(frameNowMs);
+        } catch (error) {
+            console.error('[SonarVisuals] Analysis capture/pump failed', error);
+        }
+        try {
+            this.drawLOFAR(dataArray, currentRpm, sampleRate, fftSize, selectedTarget, frameNowMs);
+        } catch (error) {
+            console.error('[SonarVisuals] drawLOFAR failed', error);
+        }
+        try {
+            this.drawDEMON(dataArray, currentRpm, selectedTarget, sampleRate);
+        } catch (error) {
+            console.error('[SonarVisuals] drawDEMON failed', error);
+        }
+        try {
+            this.drawBTR(targets, currentRpm, pingIntensity, this._pingEchoes, selectedTarget);
+        } catch (error) {
+            console.error('[SonarVisuals] drawBTR failed', error);
+        }
+        try {
+            this.drawWaterfall(dataArray, pingIntensity, sampleRate, fftSize, frameNowMs);
+        } catch (error) {
+            console.error('[SonarVisuals] drawWaterfall failed', error);
+        }
     }
 
     _cloneDemonLock(lock) {
@@ -523,7 +727,6 @@ export class SonarVisuals {
         this._demonSampleCount = 0;
         this._demonSampleWriteIndex = 0;
         this._demonSampleBuffer.fill(0);
-        this._demonLastWaterfallRevision = -1;
         if (this._demonWaterfallSpectrum instanceof Float32Array) {
             float32Pool.release(this._demonWaterfallSpectrum);
             this._demonWaterfallSpectrum = null;
@@ -556,14 +759,20 @@ export class SonarVisuals {
         }
     }
 
-    drawLOFAR(dataArray, currentRpm, sampleRate, fftSize, selectedTarget) {
+    drawLOFAR(dataArray, currentRpm, sampleRate, fftSize, selectedTarget, _drawTimeMs = nowMs()) {
         if (!this.lCtx || !this.lCanvas) return;
         const ctx = this.lCtx;
         const cvs = this.lCanvas;
-        const source = this.lofarSpectrum || dataArray;
-        const sourceIsFloat = source instanceof Float32Array;
-        const totalSamples = Math.max(1, Math.floor(source.length * 0.7));
-        const noiseFloorDb = this._estimateNoiseFloorDb(source, sourceIsFloat, totalSamples);
+        const displaySource = dataArray;
+        const displaySourceIsFloat = false;
+        const totalSamples = Math.max(1, Math.floor(displaySource.length * 0.7));
+        const noiseFloorDb = this._estimateNoiseFloorDb(displaySource, displaySourceIsFloat, totalSamples);
+        const classificationSource =
+            this.lofarSpectrum instanceof Float32Array && this.lofarSpectrum.length > 0
+                ? this.lofarSpectrum
+                : displaySource;
+        const classificationViewLength = Math.max(1, Math.min(totalSamples, classificationSource.length));
+        this._lastDrawMode = 'live';
 
         ctx.fillStyle = 'rgba(0, 5, 10, 0.9)';
         ctx.fillRect(0, 0, cvs.width, cvs.height);
@@ -588,8 +797,8 @@ export class SonarVisuals {
         const viewLength = totalSamples; // Limit high frequency view
         for(let i=0; i<viewLength; i++) {
             const x = (i / viewLength) * cvs.width;
-            const sampleValue = source[i] ?? 0;
-            const linear = sourceIsFloat ? sampleValue : sampleValue / 255;
+            const sampleValue = displaySource[i] ?? 0;
+            const linear = sampleValue / 255;
             const displayDb = this._equalizeDisplayDb(linear, noiseFloorDb);
             const normalized = this._mapDisplayDbToUnit(displayDb);
             const h = normalized * cvs.height;
@@ -647,7 +856,15 @@ export class SonarVisuals {
         }
 
         // Draw classification lines
-        this._processAndDrawLines(ctx, cvs, source, viewLength);
+        this._processAndDrawLines(ctx, cvs, classificationSource, classificationViewLength);
+        if (this._lastRenderedLofarRevision !== this._analysisConsumedRevision) {
+            this._lastRenderedLofarRevision = this._analysisConsumedRevision;
+            this._debugAnalysisFlow('render-lofar', {
+                revision: this._analysisConsumedRevision,
+                source: this._lastDrawMode,
+                pending: this._lofarPending ? 1 : 0
+            });
+        }
     }
 
     _processAndDrawLines(ctx, cvs, source, viewLength) {
@@ -691,33 +908,80 @@ export class SonarVisuals {
         float32Pool.release(persistence);
     }
 
-    _updateLofarSpectrum(dataArray, timeDomainData, fftSize) {
-        if (!this.fftProcessor || this._lofarPending) return;
+    _updateLofarSpectrum(dataArray, timeDomainData, fftSize, frameStartMs = 0) {
+        if (!this.fftProcessor) return;
         if (!dataArray || dataArray.length === 0) return;
 
-        // Run compute every other frame to reduce contention with rendering.
-        this._lofarFrameCounter++;
-        if (this._lofarFrameCounter % 2 !== 0) return;
-
-        this._lofarPending = this.fftProcessor.computeLOFARSpectrum(dataArray, {
-            fftSize,
-            timeDomainData
-        })
+        const revision = ++this._lofarRequestRevision;
+        const startedAtMs = frameStartMs || nowMs();
+        this._lofarPendingStartedAtMs = startedAtMs;
+        this._lofarPendingRevision = revision;
+        this._debugAnalysisFlow('lofar-start', {
+            revision,
+            backend: this.fftProcessor.backend || 'unknown'
+        });
+        let pendingPromise = null;
+        pendingPromise = Promise.resolve()
+            .then(() => this.fftProcessor.computeLOFARSpectrum(dataArray, {
+                fftSize,
+                timeDomainData
+            }))
             .then((spectrum) => {
+                if (this._lofarPending !== pendingPromise) {
+                    return;
+                }
+                if (revision < this._lofarAppliedRevision) {
+                    return;
+                }
                 if (spectrum && spectrum.length > 0) {
                     if (this.lofarSpectrum instanceof Float32Array) {
                         float32Pool.release(this.lofarSpectrum);
                     }
                     this.lofarSpectrum = float32Pool.acquire(spectrum.length);
                     this.lofarSpectrum.set(spectrum);
+                    this._lofarAppliedRevision = revision;
+                    this._lofarLastResolvedAtMs = nowMs();
+                    this._lofarForceLiveBinsUntilMs = 0;
+                    this._debugAnalysisFlow('lofar-resolved', {
+                        revision,
+                        bins: spectrum.length,
+                        latencyMs: (this._lofarLastResolvedAtMs - startedAtMs).toFixed(1)
+                    });
                 }
             })
             .catch((error) => {
+                if (this._lofarPending !== pendingPromise) {
+                    return;
+                }
+                this._lofarForceLiveBinsUntilMs = nowMs() + LOFAR_LIVE_FALLBACK_MS;
+                this._discardFrozenLofarSpectrum();
+                this._disableGpuLofar(error?.message || 'compute error');
                 console.warn('LOFAR compute failed, using analyser bins:', error);
+                this._debugAnalysisFlow('lofar-error', {
+                    revision,
+                    message: error?.message || 'unknown'
+                });
             })
             .finally(() => {
+                this._clearLofarPendingTimeout();
+                if (this._lofarPending !== pendingPromise) {
+                    return;
+                }
                 this._lofarPending = null;
+                this._lofarPendingStartedAtMs = 0;
+                const resumeAt = nowMs();
+                this._pumpAnalysisScheduler(resumeAt);
             });
+        this._lofarPending = pendingPromise;
+        this._clearLofarPendingTimeout();
+        this._lofarPendingTimeoutId = setTimeout(() => {
+            if (this._lofarPending !== pendingPromise) return;
+            this._handleLofarStall(
+                `revision ${revision} did not resolve within ${LOFAR_PENDING_TIMEOUT_MS}ms`,
+                nowMs()
+            );
+            this._pumpAnalysisScheduler(nowMs());
+        }, LOFAR_PENDING_TIMEOUT_MS);
     }
 
     _updateDemonSpectrum(timeDomainData, sampleRate, selectedTarget = null) {
@@ -746,18 +1010,14 @@ export class SonarVisuals {
             return;
         }
 
-        // Update less frequently to keep render cost stable.
-        this._demonFrameCounter++;
-        if (this._demonFrameCounter % 3 !== 0) return;
-
         const analysisWindow = this._getDemonAnalysisWindow();
         if (!analysisWindow) return;
 
         const rawSpectrum = this._computeDemonSpectrum(analysisWindow, sampleRate, 120);
         if (this._demonWaterfallSpectrum instanceof Float32Array) {
             float32Pool.release(this._demonWaterfallSpectrum);
+            this._demonWaterfallSpectrum = null;
         }
-        this._demonWaterfallSpectrum = this._computeDemonDisplaySpectrum(analysisWindow, sampleRate);
         float32Pool.release(analysisWindow);
 
         const maskedSpectrum = this._applyOwnShipMask(rawSpectrum, selectedTarget);
@@ -863,7 +1123,6 @@ export class SonarVisuals {
 
         this._demonDisplayHarmonicScore +=
             (this._demonHarmonicScore - this._demonDisplayHarmonicScore) * 0.12;
-        this._demonAnalysisRevision++;
     }
 
     /**
@@ -1067,7 +1326,6 @@ export class SonarVisuals {
         this._demonWaterfallWidth = safeWidth;
         this._demonWaterfallRows = safeRows;
         this._demonWaterfallLevels = new Uint8Array(safeWidth * safeRows);
-        this._demonLastWaterfallRevision = -1;
         this._demonWaterfallImage = null;
         this._demonWaterfallImageDirty = true;
     }
@@ -1628,6 +1886,7 @@ export class SonarVisuals {
         const ctx = this.dCtx;
         const cvs = this.dCanvas;
         const theme = BTR_THEMES[this.currentWaterfallTheme].WATERFALL;
+        const spectrum = this._demonSmoothedSpectrum instanceof Float32Array ? this._demonSmoothedSpectrum : null;
         const selectedBladeCount = Number.isFinite(selectedTarget?.bladeCount)
             ? Math.max(1, Math.floor(selectedTarget.bladeCount))
             : null;
@@ -1644,18 +1903,10 @@ export class SonarVisuals {
         const plotWidth = Math.max(40, plotRight - plotLeft);
         const plotHeight = Math.max(24, plotBottom - plotTop);
         const toWaterfallX = (hz) => plotLeft + (hz / DEMON_WATERFALL_MAX_FREQ_HZ) * plotWidth;
+        const toSpectrumY = (value) => plotBottom - Math.max(0, Math.min(1, value || 0)) * plotHeight;
 
         ctx.fillStyle = 'rgba(0, 5, 10, 0.95)';
         ctx.fillRect(0, 0, cvs.width, cvs.height);
-
-        if (this._demonAnalysisRevision !== this._demonLastWaterfallRevision) {
-            if (this._demonWaterfallSpectrum instanceof Float32Array) {
-                this._pushDemonWaterfallLine(plotWidth, plotHeight);
-            }
-            this._demonLastWaterfallRevision = this._demonAnalysisRevision;
-        }
-
-        this._renderDemonWaterfall(ctx, plotLeft, plotTop, plotWidth, plotHeight, theme);
         ctx.fillStyle = 'rgba(0, 0, 0, 0.22)';
         ctx.fillRect(plotLeft, plotTop, plotWidth, plotHeight);
 
@@ -1673,6 +1924,33 @@ export class SonarVisuals {
             ctx.lineTo(plotRight, y);
         }
         ctx.stroke();
+
+        if (spectrum && spectrum.length > 2) {
+            ctx.save();
+            ctx.beginPath();
+            ctx.strokeStyle = `rgba(${theme.high[0]}, ${theme.high[1]}, ${theme.high[2]}, 0.95)`;
+            ctx.lineWidth = 1.5;
+            const maxBin = Math.min(spectrum.length - 1, DEMON_WATERFALL_MAX_FREQ_HZ);
+            for (let hz = 1; hz <= maxBin; hz++) {
+                const x = toWaterfallX(hz);
+                const y = toSpectrumY(spectrum[hz]);
+                if (hz === 1) ctx.moveTo(x, y);
+                else ctx.lineTo(x, y);
+            }
+            ctx.stroke();
+
+            ctx.strokeStyle = `rgba(${theme.mid[0]}, ${theme.mid[1]}, ${theme.mid[2]}, 0.42)`;
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            for (let hz = 1; hz <= maxBin; hz++) {
+                const x = toWaterfallX(hz);
+                const y = toSpectrumY(spectrum[hz]);
+                ctx.moveTo(x, plotBottom);
+                ctx.lineTo(x, y);
+            }
+            ctx.stroke();
+            ctx.restore();
+        }
 
         // Blade-rate harmonic markers.
         const autoBpfConfidenceThreshold = 0.45;
@@ -1753,9 +2031,9 @@ export class SonarVisuals {
         }
         ctx.textAlign = 'left';
         ctx.fillStyle = `rgba(${theme.high[0]}, ${theme.high[1]}, ${theme.high[2]}, 0.56)`;
-        ctx.fillText('NOW', plotLeft + 2, plotTop + 2);
-        ctx.fillText('TIME', plotLeft + 2, plotTop + Math.max(12, Math.floor(plotHeight * 0.5)));
-        ctx.fillText('OLD', plotLeft + 2, plotBottom - 12);
+        ctx.fillText('MAG', plotLeft + 2, plotTop + 2);
+        ctx.fillText('0.5', plotLeft + 2, plotTop + Math.max(12, Math.floor(plotHeight * 0.5)));
+        ctx.fillText('0.0', plotLeft + 2, plotBottom - 12);
 
         // Keep text readable against dense marker regions.
         ctx.fillStyle = 'rgba(0, 0, 0, 0.48)';
@@ -2138,16 +2416,17 @@ export class SonarVisuals {
         ctx.restore();
     }
 
-    drawWaterfall(dataArray, _pingIntensity = 0, sampleRate = 0, fftSize = 0) {
+    drawWaterfall(dataArray, _pingIntensity = 0, sampleRate = 0, fftSize = 0, _drawTimeMs = nowMs()) {
         if (!this.waterfallDisplay || !this.waterfallDisplay.ctx) return;
 
         const theme = BTR_THEMES[this.currentWaterfallTheme].WATERFALL;
-        const source = this.lofarSpectrum || dataArray;
-        const sourceIsFloat = source instanceof Float32Array;
+        const source = dataArray;
+        const sourceIsFloat = false;
         const totalSamples = Math.floor(source.length * 0.8);
         const binHz = sampleRate > 0 && fftSize > 0 ? sampleRate / fftSize : 0;
         const maxFreqHz = totalSamples > 0 && binHz > 0 ? totalSamples * binHz : 0;
         const noiseFloorDb = this._estimateNoiseFloorDb(source, sourceIsFloat, totalSamples);
+        this._lastDrawMode = 'live';
 
         this.waterfallDisplay.drawNextLine((ctx, width, _height, scanY) => {
             const imageData = ctx.createImageData(width, 1);
@@ -2195,6 +2474,14 @@ export class SonarVisuals {
 
         });
         this._drawWaterfallFrequencyScale(theme, maxFreqHz);
+        if (this._lastRenderedWaterfallRevision !== this._analysisConsumedRevision) {
+            this._lastRenderedWaterfallRevision = this._analysisConsumedRevision;
+            this._debugAnalysisFlow('render-waterfall', {
+                revision: this._analysisConsumedRevision,
+                source: this._lastDrawMode,
+                pending: this._lofarPending ? 1 : 0
+            });
+        }
     }
 
     _drawWaterfallNoiseLine(ctx, width, scanY, highColor) {
@@ -2304,7 +2591,9 @@ export class SonarVisuals {
         this.dCanvas = null;
         this.fftProcessor = null;
         this.lofarSpectrum = null;
+        this._clearLofarPendingTimeout();
         this._lofarPending = null;
+        this._lofarPendingStartedAtMs = 0;
         this._demonWaterfallSpectrum = null;
         this._demonWaterfallLevels = null;
         this._demonWaterfallImage = null;

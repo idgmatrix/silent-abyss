@@ -28,6 +28,11 @@ function createHarness() {
     return visuals;
 }
 
+function drawWithImmediateAnalysis(visuals, ...args) {
+    visuals._analysisNextDueMs = 0;
+    visuals.draw(...args);
+}
+
 function createTargetSignalFrame({
     frameSize = 1024,
     sampleRate = 4096,
@@ -115,7 +120,7 @@ describe('DEMON phase-0 correctness fixes', () => {
         expect(visuals._demonSmoothedSpectrum[1]).toBeCloseTo(0.92, 5);
     });
 
-    it('derives auto-mode BPF confidence/readout from comb evidence', () => {
+    it('derives auto-mode BPF confidence/readout from comb evidence', { timeout: 15000 }, () => {
         const visuals = createHarness();
         const phases = { phaseCarrier: 0, phaseMod: 0 };
         const sampleRate = 4096;
@@ -131,7 +136,8 @@ describe('DEMON phase-0 correctness fixes', () => {
                 bpfHz: expectedBpf,
                 phases
             });
-            visuals.draw(
+            drawWithImmediateAnalysis(
+                visuals,
                 dataArray,
                 [],
                 0,

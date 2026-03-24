@@ -23,3 +23,8 @@ Completed:
 - Auditing DEMON/synthesis integration for passive-sonar validation.
 - Updated the Rust cavitation path to build per-blade pulse envelopes from shaft phase so cavitation broadband is explicitly blade-pass AM encoded.
 - Replaced the DEMON static trace renderer with a rolling 0-50 Hz waterfall buffer in `src/sonar-visuals.js`; pending validation/tuning.
+
+2026-03-25:
+- Root-caused persistent LOFAR/Broadband freeze to the frontend analysis gate in `src/sonar-visuals.js`: if one async LOFAR FFT promise wedges, `_lofarPending` stays set and the 30 Hz scheduler stops dispatching new analysis work.
+- Added explicit capture/dispatch/resolve/render debug logging, per-stage draw exception traps, and a 250 ms LOFAR watchdog that clears the stuck pending state, drops stale `lofarSpectrum`, and falls back to live analyser bins / CPU FFT.
+- Added regression coverage in `tests/sonar-integration.test.js` for a never-resolving LOFAR compute promise.

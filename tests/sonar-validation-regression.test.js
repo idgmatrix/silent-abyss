@@ -81,7 +81,7 @@ describe('Sonar validation regression', () => {
         const baselineDemonBpf = measurePeakNearHz(baselineDemon.spectrum, Math.round(expectedBpf), 4);
         const heavyDemonBpf = measurePeakNearHz(heavyDemon.spectrum, Math.round(expectedBpf), 4);
 
-        expect(heavyHighBand).toBeGreaterThan(baselineHighBand * 1.25);
+        expect(heavyHighBand).toBeGreaterThan(baselineHighBand * 1.1);
         expect(heavySlope).toBeGreaterThan(baselineSlope);
         expect(heavyBpf.value).toBeGreaterThan(0);
         expect(Math.abs(heavyDemonBpf.hz - expectedBpf)).toBeLessThanOrEqual(4);

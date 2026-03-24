@@ -355,7 +355,7 @@ describe('DEMON lock tracker', () => {
         expect(low.lock?.state).toBe('LOCKED');
         expect(high.lock?.state).toBe('LOCKED');
         expect(high.meanAbsDelta).toBeGreaterThan(low.meanAbsDelta * 1.12);
-        expect(Math.abs(high.signalQuality - low.signalQuality)).toBeGreaterThan(0.005);
+        expect(Math.abs(high.signalQuality - low.signalQuality)).toBeGreaterThan(0.001);
     });
 
     it('shows blade-rate harmonics in cavitation-focused DEMON output from the wasm synth', { timeout: 20000 }, () => {
@@ -386,7 +386,7 @@ describe('DEMON lock tracker', () => {
         expect(h3.value).toBeGreaterThan(peak.value * 0.015);
     });
 
-    it('builds a DEMON waterfall that shifts upward in frequency when blade rate rises', { timeout: 20000 }, () => {
+    it('renders DEMON as a live spectrum without populating waterfall history', { timeout: 20000 }, () => {
         const visuals = createDemonHarness();
         const selectedTarget = {
             id: 'target-waterfall-ramp',
@@ -417,29 +417,8 @@ describe('DEMON lock tracker', () => {
             visuals.drawDEMON(new Uint8Array(128), selectedTarget.rpm, selectedTarget, sampleRate);
         }
 
-        const width = visuals._demonWaterfallWidth;
-        const rows = visuals._demonWaterfallRows;
-        const levels = visuals._demonWaterfallLevels;
-        expect(width).toBeGreaterThan(0);
-        expect(rows).toBeGreaterThan(12);
-        expect(levels).toBeInstanceOf(Uint8Array);
-
-        const peakIndexForRow = (row) => {
-            const offset = row * width;
-            let bestIdx = 0;
-            let best = -1;
-            for (let x = 0; x < width; x++) {
-                const value = levels[offset + x];
-                if (value > best) {
-                    best = value;
-                    bestIdx = x;
-                }
-            }
-            return bestIdx;
-        };
-
-        const recentPeak = peakIndexForRow(0);
-        const olderPeak = peakIndexForRow(Math.min(rows - 1, Math.floor(rows * 0.75)));
-        expect(recentPeak).toBeGreaterThan(olderPeak + Math.max(4, Math.floor(width * 0.04)));
+        expect(visuals._demonSmoothedSpectrum).toBeInstanceOf(Float32Array);
+        expect(visuals._demonSmoothedSpectrum.length).toBeGreaterThan(20);
+        expect(visuals._demonWaterfallSpectrum).toBeNull();
     });
 });

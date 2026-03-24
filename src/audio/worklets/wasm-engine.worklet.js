@@ -86,6 +86,24 @@ class DspGraph {
         const ret = wasm.dspgraph_process(this.__wbg_ptr, frames);
         return ret >>> 0;
     }
+    average_process_ms() {
+        const ret = wasm.dspgraph_average_process_ms(this.__wbg_ptr);
+        return ret;
+    }
+    max_process_ms() {
+        const ret = wasm.dspgraph_max_process_ms(this.__wbg_ptr);
+        return ret;
+    }
+    process_call_count() {
+        const ret = wasm.dspgraph_process_call_count(this.__wbg_ptr);
+        return ret >>> 0;
+    }
+    record_process_ms(elapsedMs) {
+        wasm.dspgraph_record_process_ms(this.__wbg_ptr, elapsedMs);
+    }
+    reset_process_stats() {
+        wasm.dspgraph_reset_process_stats(this.__wbg_ptr);
+    }
     remove_voice(voice_id) {
         const ret = wasm.dspgraph_remove_voice(this.__wbg_ptr, voice_id);
         return ret !== 0;
@@ -170,6 +188,11 @@ class WasmEngineProcessor extends AudioWorkletProcessor {
         this.defaultVoiceId = 0;
         this.fallbackMaxFrames = 128;
         this.failedMemoryAccess = false;
+        this.cachedSampleView = null;
+        this.cachedSamplePtr = -1;
+        this.cachedSampleLen = -1;
+        this.cachedMemoryBuffer = null;
+        this.nextPerfReportAt = 0;
 
         this.port.onmessage = (event) => {
             this.handleMessage(event.data);
@@ -284,7 +307,16 @@ class WasmEngineProcessor extends AudioWorkletProcessor {
         }
 
         try {
+            const processStartMs =
+                typeof performance !== 'undefined' && typeof performance.now === 'function'
+                    ? performance.now()
+                    : currentTime * 1000;
             this.graph.process(frames);
+            const processEndMs =
+                typeof performance !== 'undefined' && typeof performance.now === 'function'
+                    ? performance.now()
+                    : currentTime * 1000;
+            this.graph.record_process_ms(processEndMs - processStartMs);
             const len = this.graph.output_len();
             const ptr = this.graph.output_ptr();
             const memory = this.wasm.memory.buffer;
@@ -292,12 +324,36 @@ class WasmEngineProcessor extends AudioWorkletProcessor {
             // Simple safety checks
             if (ptr === 0 || len === 0) return true;
 
-            // Create view with explicit error handling
-            const samples = new Float32Array(memory, ptr, Math.min(len, frames));
+            const sampleLen = Math.min(len, frames);
+            if (
+                !this.cachedSampleView ||
+                this.cachedSamplePtr !== ptr ||
+                this.cachedSampleLen !== sampleLen ||
+                this.cachedMemoryBuffer !== memory
+            ) {
+                this.cachedSampleView = new Float32Array(memory, ptr, sampleLen);
+                this.cachedSamplePtr = ptr;
+                this.cachedSampleLen = sampleLen;
+                this.cachedMemoryBuffer = memory;
+            }
+            const samples = this.cachedSampleView;
 
             for (let ch = 0; ch < outputChannels.length; ch += 1) {
                 const out = outputChannels[ch];
                 out.set(samples);
+            }
+
+            if (currentTime >= this.nextPerfReportAt) {
+                this.nextPerfReportAt = currentTime + 0.5;
+                this.port.postMessage({
+                    type: 'PERF_STATS',
+                    averageProcessMs: this.graph.average_process_ms(),
+                    maxProcessMs: this.graph.max_process_ms(),
+                    processCallCount: this.graph.process_call_count(),
+                    frames,
+                    maxFrames: this.graph.max_frames()
+                });
+                this.graph.reset_process_stats();
             }
         } catch (e) {
             if (!this.failedMemoryAccess) {

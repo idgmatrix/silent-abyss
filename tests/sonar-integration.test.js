@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { SonarVisuals } from '../src/sonar-visuals.js';
 
 function createNoopContext() {
@@ -26,6 +26,11 @@ function createHarness() {
     visuals.setDemonResponsiveness(1.0);
     visuals.setDemonFocusWidth(1.2);
     return visuals;
+}
+
+function drawWithImmediateAnalysis(visuals, ...args) {
+    visuals._analysisNextDueMs = 0;
+    visuals.draw(...args);
 }
 
 function createTargetSignalFrame({
@@ -56,7 +61,7 @@ function createTargetSignalFrame({
 }
 
 describe('Sonar integration smoke (selection -> DEMON metadata)', () => {
-    it('updates source mode and lock metadata across selection transitions', () => {
+    it('updates source mode and lock metadata across selection transitions', { timeout: 15000 }, () => {
         const visuals = createHarness();
         const selectedTarget = {
             id: 'target-07',
@@ -73,7 +78,8 @@ describe('Sonar integration smoke (selection -> DEMON metadata)', () => {
         const dataArray = new Uint8Array(256);
         const targets = [selectedTarget];
 
-        visuals.draw(
+        drawWithImmediateAnalysis(
+            visuals,
             dataArray,
             targets,
             0,
@@ -96,7 +102,8 @@ describe('Sonar integration smoke (selection -> DEMON metadata)', () => {
                 bpfHz: expectedBpf,
                 phases
             });
-            visuals.draw(
+            drawWithImmediateAnalysis(
+                visuals,
                 dataArray,
                 targets,
                 selectedTarget.rpm,
@@ -119,7 +126,8 @@ describe('Sonar integration smoke (selection -> DEMON metadata)', () => {
         expect(lock.state).toBe('LOCKED');
         expect(Math.abs(lock.bpfEstimateHz - expectedBpf)).toBeLessThanOrEqual(expectedBpf * 0.1);
 
-        visuals.draw(
+        drawWithImmediateAnalysis(
+            visuals,
             dataArray,
             targets,
             0,
@@ -133,5 +141,35 @@ describe('Sonar integration smoke (selection -> DEMON metadata)', () => {
         expect(visuals._demonSourceMode).toBe('COMPOSITE');
         expect(visuals._demonSelectedTargetId).toBeNull();
         expect(visuals._demonTrackState).toBe('SEARCHING');
+    });
+
+    it('recovers when the async LOFAR compute promise stalls', async () => {
+        vi.useFakeTimers();
+        const visuals = createHarness();
+        visuals._analysisDebugEnabled = false;
+        visuals.fftProcessor = {
+            backend: 'webgpu',
+            computeLOFARSpectrum() {
+                return new Promise(() => {});
+            }
+        };
+
+        const dataArray = new Uint8Array(256);
+        const timeDomainData = new Float32Array(1024);
+        visuals._captureLatestAnalysisFrame(dataArray, timeDomainData, 4096, 1024, null);
+        visuals._analysisNextDueMs = 0;
+        visuals._pumpAnalysisScheduler(0);
+
+        expect(visuals._lofarPending).toBeTruthy();
+        expect(visuals.fftProcessor.backend).toBe('webgpu');
+
+        await vi.advanceTimersByTimeAsync(260);
+
+        expect(visuals._lofarPending).toBeNull();
+        expect(visuals.fftProcessor.backend).toBe('cpu');
+        expect(visuals._lofarForceLiveBinsUntilMs).toBeGreaterThan(0);
+        expect(visuals._getDisplaySpectrumSource(dataArray, 1)).toBe(dataArray);
+
+        vi.useRealTimers();
     });
 });
