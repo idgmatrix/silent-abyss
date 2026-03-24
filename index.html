@@ -162,6 +162,38 @@
 
             <div class="panel p-2 flex-1 min-h-0">
                 <div class="label-tech">LOFAR (Narrowband Frequency)</div>
+                <div class="border border-cyan-900/60 p-2 my-2 space-y-2 bg-cyan-950/10">
+                    <div>
+                        <div class="flex justify-between text-[9px] mb-1">
+                            <span>Visual Gain</span>
+                            <span id="visual-gain-value" class="text-cyan-300">1.0x</span>
+                        </div>
+                        <input
+                            type="range"
+                            id="visual-gain-slider"
+                            min="0.5"
+                            max="3.0"
+                            step="0.1"
+                            value="1.0"
+                            class="w-full"
+                        >
+                    </div>
+                    <div>
+                        <div class="flex justify-between text-[9px] mb-1">
+                            <span>Visual Offset</span>
+                            <span id="visual-offset-value" class="text-cyan-300">0dB</span>
+                        </div>
+                        <input
+                            type="range"
+                            id="visual-offset-slider"
+                            min="-30"
+                            max="30"
+                            step="1"
+                            value="0"
+                            class="w-full"
+                        >
+                    </div>
+                </div>
                 <div class="flex-1 min-h-0 bg-black/50 relative">
                     <canvas id="lofar-canvas"></canvas>
                 </div>

@@ -25,6 +25,7 @@ export class UIManager {
         this.bindContactUiHandlers();
         this.bindCampaignUiHandlers();
         this.bindDemonControlUiHandlers();
+        this.bindSonarVisualUiHandlers();
         this.bindManeuverUiHandlers();
         this.bindViewModeHandlers();
         this.syncLeftSonarPanelHeights();
@@ -79,6 +80,7 @@ export class UIManager {
             'mission-objectives', 'demon-focus-width-slider', 'demon-focus-width-value',
             'demon-self-noise-toggle', 'demon-input-band-select',
             'demon-stability-slider', 'demon-stability-value',
+            'visual-gain-slider', 'visual-gain-value', 'visual-offset-slider', 'visual-offset-value',
             'demon-controls-toggle', 'demon-controls-content', 'rudder-slider',
             'rudder-angle-display', 'rudder-port-btn', 'rudder-starboard-btn',
             'rudder-center-btn', 'heading-display', 'throttle-slider', 'throttle-display',
@@ -584,6 +586,37 @@ export class UIManager {
                 const isHidden = demonControlsContentEl.classList.contains('hidden');
                 demonControlsToggleEl.innerHTML = isHidden ? '&#9654;' : '&#9660;';
             });
+        }
+    }
+
+    bindSonarVisualUiHandlers() {
+        const visualGainSliderEl = this.getEl('visual-gain-slider');
+        const visualGainValueEl = this.getEl('visual-gain-value');
+        const visualOffsetSliderEl = this.getEl('visual-offset-slider');
+        const visualOffsetValueEl = this.getEl('visual-offset-value');
+
+        if (visualGainSliderEl) {
+            const applyVisualGain = () => {
+                const value = Number.parseFloat(visualGainSliderEl.value);
+                this.orch.sonarVisuals.setVisualGain(value);
+                if (visualGainValueEl) {
+                    visualGainValueEl.innerText = `${value.toFixed(1)}x`;
+                }
+            };
+            visualGainSliderEl.oninput = applyVisualGain;
+            applyVisualGain();
+        }
+
+        if (visualOffsetSliderEl) {
+            const applyVisualOffset = () => {
+                const value = Number.parseFloat(visualOffsetSliderEl.value);
+                this.orch.sonarVisuals.setVisualOffsetDb(value);
+                if (visualOffsetValueEl) {
+                    visualOffsetValueEl.innerText = `${value >= 0 ? '+' : ''}${value.toFixed(0)}dB`;
+                }
+            };
+            visualOffsetSliderEl.oninput = applyVisualOffset;
+            applyVisualOffset();
         }
     }
 

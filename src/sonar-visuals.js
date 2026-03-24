@@ -99,6 +99,32 @@ const DEMON_INPUT_BAND_PRESETS = {
 const DEMON_WATERFALL_MAX_FREQ_HZ = 50;
 const DEMON_WATERFALL_BIN_RESOLUTION_HZ = 0.25;
 const DEMON_WATERFALL_TOP_INSET_PX = 14;
+const DISPLAY_RANGE_MIN_DB = -90;
+const DISPLAY_RANGE_MAX_DB = 0;
+const LOFAR_NOISE_FLOOR_MIN_DB = -88;
+const VISUAL_GAIN_DEFAULT = 1.0;
+const VISUAL_OFFSET_DB_DEFAULT = 0.0;
+const NOISE_FLOOR_SAMPLE_LIMIT = 512;
+
+function linearToDb(value) {
+    return 20 * Math.log10(Math.max(1e-6, Number.isFinite(value) ? value : 0));
+}
+
+function smoothstep(edge0, edge1, x) {
+    if (edge0 === edge1) return x < edge0 ? 0 : 1;
+    const t = Math.max(0, Math.min(1, (x - edge0) / (edge1 - edge0)));
+    return t * t * (3 - 2 * t);
+}
+
+function median(values) {
+    if (!Array.isArray(values) || values.length === 0) return DISPLAY_RANGE_MIN_DB;
+    const sorted = [...values].sort((a, b) => a - b);
+    const mid = Math.floor(sorted.length / 2);
+    if (sorted.length % 2 === 0) {
+        return (sorted[mid - 1] + sorted[mid]) * 0.5;
+    }
+    return sorted[mid];
+}
 
 export class SonarVisuals {
     constructor(options = {}) {
@@ -161,6 +187,8 @@ export class SonarVisuals {
         this._demonWaterfallLevelPeak = 0.18;
         this._demonWaterfallImage = null;
         this._demonWaterfallImageDirty = true;
+        this._visualGain = VISUAL_GAIN_DEFAULT;
+        this._visualOffsetDb = VISUAL_OFFSET_DB_DEFAULT;
         this.enhancedVisualsEnabled = true;
         this.visualMode = VISUAL_MODES.STEALTH;
         this._demonLockConfig = {
@@ -186,8 +214,44 @@ export class SonarVisuals {
         this.enhancedVisualsEnabled = !!enabled;
     }
 
+    setVisualGain(value) {
+        const next = Number.isFinite(value) ? value : this._visualGain;
+        this._visualGain = Math.max(0.5, Math.min(3.0, next));
+    }
+
+    setVisualOffsetDb(value) {
+        const next = Number.isFinite(value) ? value : this._visualOffsetDb;
+        this._visualOffsetDb = Math.max(-30, Math.min(30, next));
+    }
+
     setVisualMode(mode) {
         this.visualMode = resolveVisualMode(mode);
+    }
+
+    _estimateNoiseFloorDb(source, sourceIsFloat, totalSamples) {
+        if (!source || totalSamples <= 0) return DISPLAY_RANGE_MIN_DB;
+        const values = [];
+        const step = Math.max(1, Math.floor(totalSamples / NOISE_FLOOR_SAMPLE_LIMIT));
+        for (let i = 0; i < totalSamples; i += step) {
+            const sampleValue = source[i] ?? 0;
+            const linear = sourceIsFloat ? sampleValue : sampleValue / 255;
+            values.push(linearToDb(linear));
+        }
+        return Math.max(LOFAR_NOISE_FLOOR_MIN_DB, median(values));
+    }
+
+    _equalizeDisplayDb(linearValue, noiseFloorDb) {
+        const sampleDb = linearToDb(linearValue);
+        const relativeDb = Math.max(0, sampleDb - noiseFloorDb);
+        return DISPLAY_RANGE_MIN_DB + relativeDb * this._visualGain + this._visualOffsetDb;
+    }
+
+    _mapDisplayDbToUnit(displayDb) {
+        const normalized = (displayDb - DISPLAY_RANGE_MIN_DB) / (DISPLAY_RANGE_MAX_DB - DISPLAY_RANGE_MIN_DB);
+        if (normalized <= 1) {
+            return smoothstep(0, 1, normalized);
+        }
+        return 1 - 0.08 / (1 + (normalized - 1) * 4);
     }
 
     init() {
@@ -498,6 +562,8 @@ export class SonarVisuals {
         const cvs = this.lCanvas;
         const source = this.lofarSpectrum || dataArray;
         const sourceIsFloat = source instanceof Float32Array;
+        const totalSamples = Math.max(1, Math.floor(source.length * 0.7));
+        const noiseFloorDb = this._estimateNoiseFloorDb(source, sourceIsFloat, totalSamples);
 
         ctx.fillStyle = 'rgba(0, 5, 10, 0.9)';
         ctx.fillRect(0, 0, cvs.width, cvs.height);
@@ -509,21 +575,40 @@ export class SonarVisuals {
             ctx.moveTo(i * cvs.width/10, 0);
             ctx.lineTo(i * cvs.width/10, cvs.height);
         }
+        for (let i = 0; i <= 3; i++) {
+            const y = (i / 3) * cvs.height;
+            ctx.moveTo(0, y);
+            ctx.lineTo(cvs.width, y);
+        }
         ctx.stroke();
 
         ctx.beginPath();
         ctx.strokeStyle = selectedTarget ? '#ff3333' : '#00ffcc';
         ctx.lineWidth = 1.2;
-        const viewLength = source.length * 0.7; // Limit high frequency view
+        const viewLength = totalSamples; // Limit high frequency view
         for(let i=0; i<viewLength; i++) {
             const x = (i / viewLength) * cvs.width;
             const sampleValue = source[i] ?? 0;
-            const normalized = sourceIsFloat ? sampleValue : sampleValue / 255;
-            const h = normalized * (cvs.height * 1.0);
+            const linear = sourceIsFloat ? sampleValue : sampleValue / 255;
+            const displayDb = this._equalizeDisplayDb(linear, noiseFloorDb);
+            const normalized = this._mapDisplayDbToUnit(displayDb);
+            const h = normalized * cvs.height;
             if(i===0) ctx.moveTo(x, cvs.height - h);
             else ctx.lineTo(x, cvs.height - h);
         }
         ctx.stroke();
+
+        ctx.save();
+        ctx.fillStyle = 'rgba(130, 210, 220, 0.7)';
+        ctx.font = `${Math.max(9, Math.round(cvs.height * 0.028))}px monospace`;
+        ctx.textBaseline = 'top';
+        const axisTicksDb = [0, -30, -60, -90];
+        for (const tickDb of axisTicksDb) {
+            const normalized = this._mapDisplayDbToUnit(tickDb);
+            const y = cvs.height - normalized * cvs.height;
+            ctx.fillText(`${tickDb} dB`, 4, Math.max(2, Math.min(cvs.height - 12, y + 2)));
+        }
+        ctx.restore();
 
         // Labeling peak harmonics if RPM > 0
         if (currentRpm > 50) {
@@ -2062,10 +2147,7 @@ export class SonarVisuals {
         const totalSamples = Math.floor(source.length * 0.8);
         const binHz = sampleRate > 0 && fftSize > 0 ? sampleRate / fftSize : 0;
         const maxFreqHz = totalSamples > 0 && binHz > 0 ? totalSamples * binHz : 0;
-        const wfTokens = RENDER_STYLE_TOKENS.sonar2d.waterfall;
-        const noiseFloor = this.enhancedVisualsEnabled ? wfTokens.noiseFloor : 0.004;
-        const displayGain = this.enhancedVisualsEnabled ? wfTokens.displayGain : 2.0;
-        const logNormalizer = this.enhancedVisualsEnabled ? wfTokens.logNormalizer : Math.log1p(40);
+        const noiseFloorDb = this._estimateNoiseFloorDb(source, sourceIsFloat, totalSamples);
 
         this.waterfallDisplay.drawNextLine((ctx, width, _height, scanY) => {
             const imageData = ctx.createImageData(width, 1);
@@ -2079,13 +2161,10 @@ export class SonarVisuals {
             for (let x = 0; x < width; x++) {
                 const sampleIdx = Math.floor((x / width) * totalSamples);
                 const val = source[sampleIdx] ?? 0;
-                const norm = sourceIsFloat ? val : val / 255;
+                const linear = sourceIsFloat ? val : val / 255;
                 const i = x * 4;
-                const lifted = Math.max(0, norm - noiseFloor);
-                const boosted =
-                    Math.log1p(Math.max(0, lifted) * displayGain * 40) / logNormalizer;
-                const dimFloor = norm > 0 ? Math.min(0.12, Math.sqrt(norm) * 0.08) : 0;
-                const level = Math.max(dimFloor, Math.min(1.0, boosted));
+                const displayDb = this._equalizeDisplayDb(linear, noiseFloorDb);
+                const level = this._mapDisplayDbToUnit(displayDb);
 
                 let r = 0;
                 let g = 0;
