@@ -96,6 +96,10 @@ const DEMON_INPUT_BAND_PRESETS = {
     }
 };
 
+const DEMON_WATERFALL_MAX_FREQ_HZ = 50;
+const DEMON_WATERFALL_BIN_RESOLUTION_HZ = 0.25;
+const DEMON_WATERFALL_TOP_INSET_PX = 14;
+
 export class SonarVisuals {
     constructor(options = {}) {
         this.lCanvas = null;
@@ -149,6 +153,14 @@ export class SonarVisuals {
         this._demonInputBandSettings = { ...DEMON_INPUT_BAND_PRESETS.MACHINERY };
         this._demonLocks = new Map();
         this._demonAnalysisRevision = 0;
+        this._demonLastWaterfallRevision = -1;
+        this._demonWaterfallSpectrum = null;
+        this._demonWaterfallLevels = null;
+        this._demonWaterfallWidth = 0;
+        this._demonWaterfallRows = 0;
+        this._demonWaterfallLevelPeak = 0.18;
+        this._demonWaterfallImage = null;
+        this._demonWaterfallImageDirty = true;
         this.enhancedVisualsEnabled = true;
         this.visualMode = VISUAL_MODES.STEALTH;
         this._demonLockConfig = {
@@ -360,6 +372,9 @@ export class SonarVisuals {
         if (this._demonSmoothedSpectrum instanceof Float32Array) {
             float32Pool.release(this._demonSmoothedSpectrum);
         }
+        if (this._demonWaterfallSpectrum instanceof Float32Array) {
+            float32Pool.release(this._demonWaterfallSpectrum);
+        }
         this._demonSmoothedSpectrum = null;
 
         if (this._demonEnhancedSpectrum instanceof Float32Array) {
@@ -444,6 +459,16 @@ export class SonarVisuals {
         this._demonSampleCount = 0;
         this._demonSampleWriteIndex = 0;
         this._demonSampleBuffer.fill(0);
+        this._demonLastWaterfallRevision = -1;
+        if (this._demonWaterfallSpectrum instanceof Float32Array) {
+            float32Pool.release(this._demonWaterfallSpectrum);
+            this._demonWaterfallSpectrum = null;
+        }
+        if (this._demonWaterfallLevels instanceof Uint8Array) {
+            this._demonWaterfallLevels.fill(0);
+        }
+        this._demonWaterfallImage = null;
+        this._demonWaterfallImageDirty = true;
         if (this._demonSelectedTargetId) {
             this._restoreDemonStateFromCache(this._demonSelectedTargetId);
         } else {
@@ -644,6 +669,10 @@ export class SonarVisuals {
         if (!analysisWindow) return;
 
         const rawSpectrum = this._computeDemonSpectrum(analysisWindow, sampleRate, 120);
+        if (this._demonWaterfallSpectrum instanceof Float32Array) {
+            float32Pool.release(this._demonWaterfallSpectrum);
+        }
+        this._demonWaterfallSpectrum = this._computeDemonDisplaySpectrum(analysisWindow, sampleRate);
         float32Pool.release(analysisWindow);
 
         const maskedSpectrum = this._applyOwnShipMask(rawSpectrum, selectedTarget);
@@ -937,6 +966,220 @@ export class SonarVisuals {
         float32Pool.release(signal);
 
         return spectrum;
+    }
+
+    _ensureDemonWaterfallBuffer(width, rows) {
+        const safeWidth = Math.max(1, Math.floor(width));
+        const safeRows = Math.max(1, Math.floor(rows));
+        if (
+            this._demonWaterfallLevels instanceof Uint8Array &&
+            this._demonWaterfallWidth === safeWidth &&
+            this._demonWaterfallRows === safeRows
+        ) {
+            return;
+        }
+
+        this._demonWaterfallWidth = safeWidth;
+        this._demonWaterfallRows = safeRows;
+        this._demonWaterfallLevels = new Uint8Array(safeWidth * safeRows);
+        this._demonLastWaterfallRevision = -1;
+        this._demonWaterfallImage = null;
+        this._demonWaterfallImageDirty = true;
+    }
+
+    _computeDemonDisplaySpectrum(timeDomainData, sampleRate) {
+        const nRaw = timeDomainData.length;
+        const maxFreqHz = DEMON_WATERFALL_MAX_FREQ_HZ;
+        const binResolutionHz = DEMON_WATERFALL_BIN_RESOLUTION_HZ;
+        const binCount = Math.round(maxFreqHz / binResolutionHz);
+        const baseSpectrum = float32Pool.acquire(binCount + 1);
+        const enhancedSpectrum = float32Pool.acquire(binCount + 1);
+        baseSpectrum.fill(0);
+        enhancedSpectrum.fill(0);
+
+        if (nRaw < 64) {
+            float32Pool.release(baseSpectrum);
+            return enhancedSpectrum;
+        }
+
+        let meanRaw = 0;
+        for (let i = 0; i < nRaw; i++) meanRaw += timeDomainData[i];
+        meanRaw /= nRaw;
+
+        const hpLowHz = this._demonInputBandSettings.inputBandLowHz;
+        const lpHighHz = this._demonInputBandSettings.inputBandHighHz;
+        const hpRc = 1 / (2 * Math.PI * hpLowHz);
+        const lpRc = 1 / (2 * Math.PI * lpHighHz);
+        const dt = 1 / sampleRate;
+        const hpAlpha = hpRc / (hpRc + dt);
+        const lpAlpha = dt / (lpRc + dt);
+
+        const targetDecimatedRateHz = this._demonInputBandSettings.decimatedRateTargetHz;
+        const D = Math.max(1, Math.floor(sampleRate / targetDecimatedRateHz));
+        const decimSR = sampleRate / D;
+        const nDecim = Math.floor(nRaw / D);
+        if (nDecim < 8) {
+            float32Pool.release(baseSpectrum);
+            return enhancedSpectrum;
+        }
+
+        const decimEnv = float32Pool.acquire(nDecim);
+        let hpY = 0;
+        let hpPrevX = 0;
+        let lpY = 0;
+        let accum = 0;
+        for (let i = 0; i < nRaw; i++) {
+            const x = timeDomainData[i] - meanRaw;
+            hpY = hpAlpha * (hpY + x - hpPrevX);
+            hpPrevX = x;
+            lpY += lpAlpha * (hpY - lpY);
+            accum += Math.abs(lpY);
+            if ((i + 1) % D === 0) {
+                decimEnv[(i + 1) / D - 1] = accum / D;
+                accum = 0;
+            }
+        }
+
+        const envHpHz = this._demonInputBandSettings.envelopeHpHz;
+        const envHpRc = 1 / (2 * Math.PI * envHpHz);
+        const decimDt = 1 / decimSR;
+        const envHpAlpha = envHpRc / (envHpRc + decimDt);
+        let envHpY = 0;
+        let envHpPrevX = decimEnv[0] || 0;
+        const signal = float32Pool.acquire(nDecim);
+        for (let i = 0; i < nDecim; i++) {
+            const x = decimEnv[i];
+            envHpY = envHpAlpha * (envHpY + x - envHpPrevX);
+            envHpPrevX = x;
+            signal[i] = envHpY;
+        }
+
+        const hannDenom = Math.max(1, nDecim - 1);
+        for (let bin = 1; bin <= binCount; bin++) {
+            const hz = bin * binResolutionHz;
+            const omega = (2 * Math.PI * hz) / decimSR;
+            let re = 0;
+            let im = 0;
+            for (let i = 0; i < nDecim; i++) {
+                const hann = 0.5 * (1 - Math.cos((2 * Math.PI * i) / hannDenom));
+                const value = signal[i] * hann;
+                const angle = omega * i;
+                re += value * Math.cos(angle);
+                im -= value * Math.sin(angle);
+            }
+            baseSpectrum[bin] = Math.hypot(re, im) / nDecim;
+        }
+
+        let localPeak = 1e-6;
+        for (let bin = 1; bin <= binCount; bin++) {
+            let sum = 0;
+            let count = 0;
+            const start = Math.max(1, bin - 4);
+            const end = Math.min(binCount, bin + 4);
+            for (let i = start; i <= end; i++) {
+                if (i === bin) continue;
+                sum += baseSpectrum[i];
+                count++;
+            }
+            const localNoise = count > 0 ? sum / count : 0;
+            const lifted = Math.max(0, baseSpectrum[bin] - localNoise * 0.9);
+            enhancedSpectrum[bin] = lifted;
+            if (lifted > localPeak) localPeak = lifted;
+        }
+
+        if (localPeak > 1e-6) {
+            for (let bin = 1; bin <= binCount; bin++) {
+                enhancedSpectrum[bin] /= localPeak;
+            }
+        }
+
+        float32Pool.release(baseSpectrum);
+        float32Pool.release(decimEnv);
+        float32Pool.release(signal);
+
+        return enhancedSpectrum;
+    }
+
+    _pushDemonWaterfallLine(plotWidth, plotHeight) {
+        this._ensureDemonWaterfallBuffer(plotWidth, plotHeight);
+        if (!(this._demonWaterfallLevels instanceof Uint8Array) || !(this._demonWaterfallSpectrum instanceof Float32Array)) {
+            return;
+        }
+
+        const width = this._demonWaterfallWidth;
+        const rows = this._demonWaterfallRows;
+        const buffer = this._demonWaterfallLevels;
+        if (rows > 1) {
+            buffer.copyWithin(width, 0, width * (rows - 1));
+        }
+
+        let framePeak = 1e-6;
+        for (let i = 1; i < this._demonWaterfallSpectrum.length; i++) {
+            const value = this._demonWaterfallSpectrum[i];
+            if (value > framePeak) framePeak = value;
+        }
+        const targetPeak = Math.max(0.08, framePeak);
+        const alpha = framePeak >= this._demonWaterfallLevelPeak ? 0.28 : 0.08;
+        this._demonWaterfallLevelPeak += (targetPeak - this._demonWaterfallLevelPeak) * alpha;
+
+        const peak = Math.max(0.08, this._demonWaterfallLevelPeak);
+        const binCount = this._demonWaterfallSpectrum.length - 1;
+        for (let x = 0; x < width; x++) {
+            const hz = (x / Math.max(1, width - 1)) * DEMON_WATERFALL_MAX_FREQ_HZ;
+            const samplePos = (hz / DEMON_WATERFALL_MAX_FREQ_HZ) * binCount;
+            const idx = Math.floor(samplePos);
+            const frac = samplePos - idx;
+            const a = this._demonWaterfallSpectrum[Math.max(1, idx)] || 0;
+            const b = this._demonWaterfallSpectrum[Math.min(binCount, idx + 1)] || a;
+            const value = a + (b - a) * frac;
+            const normalized = Math.max(0, value / peak);
+            const level = Math.log1p(normalized * 28) / Math.log1p(28);
+            buffer[x] = Math.max(0, Math.min(255, Math.round(level * 255)));
+        }
+        this._demonWaterfallImageDirty = true;
+    }
+
+    _renderDemonWaterfall(ctx, plotLeft, plotTop, plotWidth, plotHeight, theme) {
+        this._ensureDemonWaterfallBuffer(plotWidth, plotHeight);
+        if (!this._demonWaterfallImage || this._demonWaterfallImageDirty) {
+            const imageData = ctx.createImageData(plotWidth, plotHeight);
+            const out = imageData.data;
+            const low = theme.low;
+            const mid = theme.mid;
+            const high = theme.high;
+
+            for (let y = 0; y < plotHeight; y++) {
+                const rowOffset = y * plotWidth;
+                for (let x = 0; x < plotWidth; x++) {
+                    const raw = this._demonWaterfallLevels[rowOffset + x] / 255;
+                    let r = 0;
+                    let g = 0;
+                    let b = 0;
+
+                    if (raw < 0.45) {
+                        const t = raw / 0.45;
+                        r = low[0] * (1 - t) + mid[0] * t;
+                        g = low[1] * (1 - t) + mid[1] * t;
+                        b = low[2] * (1 - t) + mid[2] * t;
+                    } else {
+                        const t = (raw - 0.45) / 0.55;
+                        r = mid[0] * (1 - t) + high[0] * t;
+                        g = mid[1] * (1 - t) + high[1] * t;
+                        b = mid[2] * (1 - t) + high[2] * t;
+                    }
+
+                    const offset = rowOffset * 4 + x * 4;
+                    out[offset] = r | 0;
+                    out[offset + 1] = g | 0;
+                    out[offset + 2] = b | 0;
+                    out[offset + 3] = 255;
+                }
+            }
+
+            this._demonWaterfallImage = imageData;
+            this._demonWaterfallImageDirty = false;
+        }
+        ctx.putImageData(this._demonWaterfallImage, plotLeft, plotTop);
     }
 
     _enhanceDemonSpectrum(spectrum) {
@@ -1295,109 +1538,56 @@ export class SonarVisuals {
         return lock;
     }
 
-    drawDEMON(dataArray, currentRpm, selectedTarget, sampleRate) {
+    drawDEMON(_dataArray, currentRpm, selectedTarget, sampleRate) {
         if (!this.dCtx || !this.dCanvas) return;
         const ctx = this.dCtx;
         const cvs = this.dCanvas;
+        const theme = BTR_THEMES[this.currentWaterfallTheme].WATERFALL;
         const selectedBladeCount = Number.isFinite(selectedTarget?.bladeCount)
             ? Math.max(1, Math.floor(selectedTarget.bladeCount))
             : null;
         const bladeCountForMarkers = selectedBladeCount ?? 5;
         const rpmForMarkers = selectedTarget?.rpm ?? currentRpm;
         const bpfHz = rpmForMarkers > 0 ? (rpmForMarkers / 60) * bladeCountForMarkers : 0;
-        const maxFreqHz = this._getDemonMaxFrequencyHz(selectedTarget, currentRpm);
         const infoPanelWidth = Math.min(220, Math.max(180, Math.floor(cvs.width * 0.42)));
         const infoPanelX = cvs.width - infoPanelWidth - 8;
         const infoPanelY = 6;
         const plotLeft = 6;
+        const plotTop = DEMON_WATERFALL_TOP_INSET_PX;
         const plotRight = cvs.width - 6;
+        const plotBottom = cvs.height - 6;
         const plotWidth = Math.max(40, plotRight - plotLeft);
-        const toPlotX = (hz) => plotLeft + (hz / maxFreqHz) * plotWidth;
+        const plotHeight = Math.max(24, plotBottom - plotTop);
+        const toWaterfallX = (hz) => plotLeft + (hz / DEMON_WATERFALL_MAX_FREQ_HZ) * plotWidth;
 
-        ctx.fillStyle = 'rgba(0, 5, 10, 0.8)';
+        ctx.fillStyle = 'rgba(0, 5, 10, 0.95)';
         ctx.fillRect(0, 0, cvs.width, cvs.height);
 
-        // Background frequency grid.
-        ctx.strokeStyle = 'rgba(0, 255, 255, 0.08)';
+        if (this._demonAnalysisRevision !== this._demonLastWaterfallRevision) {
+            if (this._demonWaterfallSpectrum instanceof Float32Array) {
+                this._pushDemonWaterfallLine(plotWidth, plotHeight);
+            }
+            this._demonLastWaterfallRevision = this._demonAnalysisRevision;
+        }
+
+        this._renderDemonWaterfall(ctx, plotLeft, plotTop, plotWidth, plotHeight, theme);
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.22)';
+        ctx.fillRect(plotLeft, plotTop, plotWidth, plotHeight);
+
+        ctx.strokeStyle = `rgba(${theme.high[0]}, ${theme.high[1]}, ${theme.high[2]}, 0.14)`;
         ctx.lineWidth = 1;
         ctx.beginPath();
-        for (let hz = 10; hz <= maxFreqHz; hz += 10) {
-            const x = toPlotX(hz);
-            ctx.moveTo(x, 0);
-            ctx.lineTo(x, cvs.height);
+        for (let hz = 0; hz <= DEMON_WATERFALL_MAX_FREQ_HZ; hz += 10) {
+            const x = toWaterfallX(hz);
+            ctx.moveTo(x, plotTop);
+            ctx.lineTo(x, plotBottom);
+        }
+        for (let i = 0; i <= 4; i++) {
+            const y = plotTop + (i / 4) * plotHeight;
+            ctx.moveTo(plotLeft, y);
+            ctx.lineTo(plotRight, y);
         }
         ctx.stroke();
-
-        // DEMON spectrum trace (envelope spectrum in low-frequency band).
-        const enhancedSpectrum = this._demonSmoothedSpectrum;
-        if (enhancedSpectrum && enhancedSpectrum.length > 2) {
-            let peak = 1e-6;
-            for (let i = 1; i < enhancedSpectrum.length; i++) {
-                if (enhancedSpectrum[i] > peak) peak = enhancedSpectrum[i];
-            }
-
-            ctx.beginPath();
-            ctx.strokeStyle = selectedTarget ? 'rgba(255, 60, 60, 0.45)' : 'rgba(255, 190, 40, 0.4)';
-            ctx.lineWidth = 1.05;
-
-            const traceSamples = Math.max(240, Math.floor(plotWidth * 2.5));
-            for (let i = 0; i <= traceSamples; i++) {
-                const hz = 1 + (i / traceSamples) * (maxFreqHz - 1);
-                const x = toPlotX(hz);
-
-                // Use quadratic interpolation for a smoother, more accurate envelope trace.
-                const k = Math.floor(hz);
-                const t = hz - k;
-
-                const v_m1 = enhancedSpectrum[k - 1] || 0;
-                const v_0  = enhancedSpectrum[k] || 0;
-                const v_p1 = enhancedSpectrum[k + 1] || v_0;
-                const v_p2 = enhancedSpectrum[k + 2] || v_p1;
-
-                // 4-point cubic interpolation for smoother sub-bin magnitude sampling.
-                const c0 = -0.5 * v_m1 + 1.5 * v_0 - 1.5 * v_p1 + 0.5 * v_p2;
-                const c1 = v_m1 - 2.5 * v_0 + 2 * v_p1 - 0.5 * v_p2;
-                const c2 = -0.5 * v_m1 + 0.5 * v_p1;
-                const c3 = v_0;
-                const value = Math.max(0, c0 * t * t * t + c1 * t * t + c2 * t + c3);
-
-                const norm = Math.log1p((value / peak) * 50) / Math.log1p(50);
-                const y = cvs.height - norm * cvs.height * 0.75;
-                if (i === 0) ctx.moveTo(x, y);
-                else ctx.lineTo(x, y);
-            }
-            ctx.stroke();
-
-            // Draw detected narrowband peaks.
-            ctx.strokeStyle = 'rgba(0, 255, 255, 0.9)';
-            ctx.lineWidth = 1.4;
-            let peakDrawCount = 0;
-            for (const hz of this._demonPeaksHz) {
-                if (hz > maxFreqHz) continue;
-                const x = toPlotX(hz);
-                ctx.beginPath();
-                ctx.moveTo(x, cvs.height);
-                ctx.lineTo(x, cvs.height * 0.42);
-                ctx.stroke();
-                peakDrawCount++;
-                if (peakDrawCount >= 4) break;
-            }
-        } else {
-            // Fallback when time-domain data isn't available.
-            ctx.strokeStyle = 'rgba(255, 170, 0, 0.6)';
-            ctx.lineWidth = 2;
-            const bins = Math.min(12, dataArray.length);
-            for (let i = 1; i < bins; i++) {
-                const hz = (i / bins) * maxFreqHz;
-                const x = toPlotX(hz);
-                const val = dataArray[i] / 255;
-                const y = cvs.height - val * cvs.height * 0.55;
-                ctx.beginPath();
-                ctx.moveTo(x, cvs.height);
-                ctx.lineTo(x, y);
-                ctx.stroke();
-            }
-        }
 
         // Blade-rate harmonic markers.
         const autoBpfConfidenceThreshold = 0.45;
@@ -1424,19 +1614,19 @@ export class SonarVisuals {
             ctx.setLineDash([2, 2]);
             for (let k = 1; k <= 6; k++) {
                 const f = trackedBpfHz * k;
-                if (f > maxFreqHz) break;
+                if (f > DEMON_WATERFALL_MAX_FREQ_HZ) break;
                 targetHarmonicsHz.push(f);
 
                 const bandLeftHz = Math.max(0, f - toleranceHz);
-                const bandRightHz = Math.min(maxFreqHz, f + toleranceHz);
-                const bandX = toPlotX(bandLeftHz);
-                const bandW = Math.max(1, toPlotX(bandRightHz) - bandX);
-                ctx.fillRect(bandX, 0, bandW, cvs.height * 0.8);
+                const bandRightHz = Math.min(DEMON_WATERFALL_MAX_FREQ_HZ, f + toleranceHz);
+                const bandX = toWaterfallX(bandLeftHz);
+                const bandW = Math.max(1, toWaterfallX(bandRightHz) - bandX);
+                ctx.fillRect(bandX, plotTop, bandW, plotHeight);
 
-                const x = toPlotX(f);
+                const x = toWaterfallX(f);
                 ctx.beginPath();
-                ctx.moveTo(x, 0);
-                ctx.lineTo(x, cvs.height * 0.8);
+                ctx.moveTo(x, plotTop);
+                ctx.lineTo(x, plotBottom);
                 ctx.stroke();
             }
             ctx.restore();
@@ -1454,20 +1644,33 @@ export class SonarVisuals {
             let drawn = 0;
             for (let k = 1; k <= 8; k++) {
                 const hz = ownBpfHz * k;
-                if (hz > maxFreqHz) break;
+                if (hz > DEMON_WATERFALL_MAX_FREQ_HZ) break;
                 // Avoid overdraw where own-ship harmonics nearly overlap target harmonics.
                 if (targetHarmonicsHz.some((f) => Math.abs(f - hz) < 0.9)) continue;
-                const x = toPlotX(hz);
+                const x = toWaterfallX(hz);
                 ctx.beginPath();
-                ctx.moveTo(x, 0);
-                ctx.lineTo(x, cvs.height * 0.55);
+                ctx.moveTo(x, plotTop);
+                ctx.lineTo(x, plotTop + plotHeight * 0.72);
                 ctx.stroke();
-                ctx.fillText(`S${k}`, x + 2, cvs.height * 0.57);
+                ctx.fillText(`S${k}`, x + 2, plotTop + plotHeight * 0.74);
                 drawn++;
                 if (drawn >= 5) break;
             }
             ctx.restore();
         }
+
+        ctx.fillStyle = `rgba(${theme.high[0]}, ${theme.high[1]}, ${theme.high[2]}, 0.84)`;
+        ctx.font = '9px "Share Tech Mono", monospace';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'top';
+        for (let hz = 0; hz <= DEMON_WATERFALL_MAX_FREQ_HZ; hz += 10) {
+            ctx.fillText(`${hz}`, toWaterfallX(hz), 1);
+        }
+        ctx.textAlign = 'left';
+        ctx.fillStyle = `rgba(${theme.high[0]}, ${theme.high[1]}, ${theme.high[2]}, 0.56)`;
+        ctx.fillText('NOW', plotLeft + 2, plotTop + 2);
+        ctx.fillText('TIME', plotLeft + 2, plotTop + Math.max(12, Math.floor(plotHeight * 0.5)));
+        ctx.fillText('OLD', plotLeft + 2, plotBottom - 12);
 
         // Keep text readable against dense marker regions.
         ctx.fillStyle = 'rgba(0, 0, 0, 0.48)';
@@ -1491,7 +1694,7 @@ export class SonarVisuals {
             infoPanelY + 66
         );
         if (sampleRate > 0) {
-            ctx.fillText(`BAND: 1-${maxFreqHz} Hz`, infoPanelX + 6, infoPanelY + 80);
+            ctx.fillText(`BAND: 0-${DEMON_WATERFALL_MAX_FREQ_HZ} Hz`, infoPanelX + 6, infoPanelY + 80);
         }
         const harmonicMatchText = hasSelectedTarget
             ? (harmonicEvalEnabled ? `${(this._demonDisplayHarmonicScore * 100).toFixed(0)}%` : '--')
@@ -2023,5 +2226,8 @@ export class SonarVisuals {
         this.fftProcessor = null;
         this.lofarSpectrum = null;
         this._lofarPending = null;
+        this._demonWaterfallSpectrum = null;
+        this._demonWaterfallLevels = null;
+        this._demonWaterfallImage = null;
     }
 }

@@ -18,3 +18,8 @@ Completed:
 - Validation commands:
   - `npm test`
   - `npm run lint`
+
+2026-03-24:
+- Auditing DEMON/synthesis integration for passive-sonar validation.
+- Updated the Rust cavitation path to build per-blade pulse envelopes from shaft phase so cavitation broadband is explicitly blade-pass AM encoded.
+- Replaced the DEMON static trace renderer with a rolling 0-50 Hz waterfall buffer in `src/sonar-visuals.js`; pending validation/tuning.

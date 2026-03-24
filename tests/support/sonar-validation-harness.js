@@ -35,15 +35,24 @@ export function createNoopContext() {
         strokeStyle: '#000',
         lineWidth: 1,
         font: '10px monospace',
+        textAlign: 'left',
+        textBaseline: 'alphabetic',
         beginPath() {},
         moveTo() {},
         lineTo() {},
         stroke() {},
         fillRect() {},
         fillText() {},
+        createImageData(width, height) {
+            return { data: new Uint8ClampedArray(width * height * 4), width, height };
+        },
+        putImageData() {},
         save() {},
         restore() {},
-        setLineDash() {}
+        setLineDash() {},
+        measureText(text) {
+            return { width: String(text || '').length * 6 };
+        }
     };
 }
 

@@ -287,7 +287,9 @@ impl CavState {
     fn tick(
         &mut self,
         rpm: f32,
+        shaft_phase: f32,
         blade_phase: f32,
+        blade_count: f32,
         load: f32,
         cavitation_level: f32,
         class_profile: u32,
@@ -328,6 +330,21 @@ impl CavState {
 
         let blade_mod = 0.5 + 0.5 * blade_phase.sin();
         let blade_pulse = blade_phase.sin().abs();
+        let discrete_blades = clamp(blade_count.round(), 1.0, 12.0) as usize;
+        let pulse_power = 5.0 + regime_drive * 7.0;
+        let mut blade_packet = 0.0;
+        for blade_idx in 0..discrete_blades {
+            let blade_offset = TWO_PI * blade_idx as f32 / discrete_blades as f32;
+            let phase = shaft_phase + blade_offset;
+            let passage = (0.5 + 0.5 * phase.cos()).powf(pulse_power);
+            let blade_weight =
+                0.88 + 0.12 * ((blade_idx as f32 * 1.73 + load * 2.4).sin() * 0.5 + 0.5);
+            blade_packet += passage * blade_weight;
+        }
+        blade_packet /= discrete_blades.max(1) as f32;
+        let modulation_depth = 0.18 + regime_drive * 0.72;
+        let blade_envelope = (1.0 - modulation_depth)
+            + modulation_depth * (0.18 + blade_mod * 0.34 + blade_packet * 1.48);
         self.burst_drive += 0.03 * ((blade_pulse * regime_drive) - self.burst_drive);
         let burst_threshold = 0.76 - regime_drive * 0.26;
         if self.burst_drive > burst_threshold {
@@ -342,17 +359,19 @@ impl CavState {
         let regime_heavy = ((regime_drive - 0.68) / 0.32).clamp(0.0, 1.0);
 
         let low_texture = self.slow_noise * 0.10 + self.shaped_noise * 0.26;
-        let incipient_texture = self.shaped_noise * (0.22 + 0.32 * blade_mod);
-        let developed_texture = self.shaped_noise * (0.38 + 0.58 * blade_mod) + hp * 0.12;
-        let heavy_texture = self.shaped_noise * (0.48 + 0.72 * blade_mod)
-            + hp * (0.18 + 0.12 * blade_mod)
+        let incipient_texture = self.shaped_noise * (0.18 + 0.18 * blade_mod) * blade_envelope;
+        let developed_texture =
+            (self.shaped_noise * (0.26 + 0.42 * blade_mod) + hp * 0.08) * blade_envelope;
+        let heavy_texture = (self.shaped_noise * (0.32 + 0.56 * blade_mod)
+            + hp * (0.12 + 0.1 * blade_mod))
+            * blade_envelope
             + self.burst_env * rand_signed(rng) * 0.55;
 
         let intensity = 0.008
             + regime_none * 0.012
             + regime_incipient * 0.05
             + regime_developed * 0.16
-            + regime_heavy * 0.34;
+            + regime_heavy * 0.40;
         let texture = low_texture * regime_none
             + incipient_texture * regime_incipient
             + developed_texture * regime_developed
@@ -1385,7 +1404,9 @@ impl Voice {
             .cav
             .tick(
                 self.engine.current_rpm,
+                self.engine.shaft_phase,
                 self.engine.blade_phase,
+                self.engine.blades,
                 self.engine.load,
                 self.cavitation_level,
                 self.engine.class_profile,

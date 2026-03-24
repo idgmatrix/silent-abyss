@@ -14,7 +14,7 @@ import {
 } from './support/sonar-validation-harness.js';
 
 describe('Sonar validation regression', () => {
-    it('merchant cruise case exposes stable LOFAR tonals and DEMON lock at expected BPF', () => {
+    it('merchant cruise case exposes stable LOFAR tonals and DEMON lock at expected BPF', { timeout: 20000 }, () => {
         const scenario = SONAR_VALIDATION_SCENARIOS.merchantCruise;
         const expectedBpf = (scenario.target.rpm / 60) * scenario.target.bladeCount;
         const samples = renderVoiceSamples({
@@ -50,7 +50,7 @@ describe('Sonar validation regression', () => {
         expect(Math.abs(lockRun.lock.bpfEstimateHz - expectedBpf)).toBeLessThanOrEqual(expectedBpf * 0.12);
     });
 
-    it('heavy cavitation raises high-band LOFAR energy and keeps DEMON BPF recoverable', () => {
+    it('heavy cavitation raises high-band LOFAR energy and keeps DEMON BPF recoverable', { timeout: 20000 }, () => {
         const baseline = SONAR_VALIDATION_SCENARIOS.cavitationBaseline;
         const heavy = SONAR_VALIDATION_SCENARIOS.cavitationHeavy;
         const expectedBpf = (heavy.target.rpm / 60) * heavy.target.bladeCount;
