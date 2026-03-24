@@ -224,10 +224,7 @@ impl EngineState {
         if self.shaft_phase >= TWO_PI {
             self.shaft_phase -= TWO_PI;
         }
-        self.blade_phase += TWO_PI * bpf_hz / sample_rate;
-        if self.blade_phase >= TWO_PI {
-            self.blade_phase -= TWO_PI;
-        }
+        self.blade_phase = (self.shaft_phase * self.blades.max(1.0)).rem_euclid(TWO_PI);
 
         let machinery_hz_a = 24.0 + shaft_hz * (11.0 + 5.0 * brightness) + 28.0 * load;
         let machinery_hz_b = 70.0 + bpf_hz * 0.5 + 55.0 * brightness + 36.0 * load;
@@ -250,6 +247,7 @@ impl EngineState {
         let machinery = self.machinery_phase_a.sin() * 0.75
             + (1.11 * self.machinery_phase_b).sin() * 0.23
             + (self.machinery_phase_a + self.blade_phase * 0.16).sin() * 0.14;
+        let machinery = (machinery * (1.18 + 0.24 * load)).tanh();
 
         let envelope = 0.80
             + 0.14 * self.blade_phase.sin().abs()
@@ -265,6 +263,9 @@ impl EngineState {
 
 #[derive(Clone, Copy)]
 struct CavState {
+    broadband_lp_a: f32,
+    broadband_lp_b: f32,
+    broadband_lp_c: f32,
     lp_noise: f32,
     slow_noise: f32,
     shaped_noise: f32,
@@ -275,6 +276,9 @@ struct CavState {
 impl CavState {
     fn new() -> Self {
         Self {
+            broadband_lp_a: 0.0,
+            broadband_lp_b: 0.0,
+            broadband_lp_c: 0.0,
             lp_noise: 0.0,
             slow_noise: 0.0,
             shaped_noise: 0.0,
@@ -286,6 +290,7 @@ impl CavState {
     #[inline]
     fn tick(
         &mut self,
+        sample_rate: f32,
         rpm: f32,
         shaft_phase: f32,
         blade_phase: f32,
@@ -296,6 +301,9 @@ impl CavState {
         rng: &mut u32,
     ) -> f32 {
         if rpm < 1.0 {
+            self.broadband_lp_a = 0.0;
+            self.broadband_lp_b = 0.0;
+            self.broadband_lp_c = 0.0;
             self.lp_noise = 0.0;
             self.slow_noise = 0.0;
             self.shaped_noise = 0.0;
@@ -305,6 +313,14 @@ impl CavState {
         }
 
         let white = rand_signed(rng);
+        let cutoff_hz = 1000.0;
+        let rc = 1.0 / (TWO_PI * cutoff_hz);
+        let dt = 1.0 / sample_rate.max(1.0);
+        let broadband_alpha = (dt / (rc + dt)).clamp(0.0, 1.0);
+        self.broadband_lp_a += broadband_alpha * (white - self.broadband_lp_a);
+        self.broadband_lp_b += broadband_alpha * (self.broadband_lp_a - self.broadband_lp_b);
+        self.broadband_lp_c += broadband_alpha * (self.broadband_lp_b - self.broadband_lp_c);
+        let broadband = self.broadband_lp_c;
         let speed_norm = clamp((rpm - 60.0) / 320.0, 0.0, 1.0);
         let load = clamp(load, 0.0, 1.0);
         let cavitation_level = clamp(cavitation_level, 0.0, 1.0);
@@ -322,16 +338,16 @@ impl CavState {
         );
 
         // Use two smoothed noise bands to build a regime-dependent cavitation texture.
-        self.slow_noise += 0.025 * (white - self.slow_noise);
-        self.lp_noise += (0.08 + 0.06 * regime_drive) * (white - self.lp_noise);
-        let hp = white - self.lp_noise;
+        self.slow_noise += 0.025 * (broadband - self.slow_noise);
+        self.lp_noise += (0.08 + 0.06 * regime_drive) * (broadband - self.lp_noise);
+        let hp = broadband - self.lp_noise;
         let fizz = hp - self.slow_noise * (0.25 + 0.2 * regime_drive);
         self.shaped_noise += (0.22 + 0.18 * regime_drive) * (fizz - self.shaped_noise);
 
-        let blade_mod = 0.5 + 0.5 * blade_phase.sin();
-        let blade_pulse = blade_phase.sin().abs();
+        let blade_mod = (0.5 + 0.5 * blade_phase.cos()).powf(10.0);
+        let blade_pulse = blade_mod;
         let discrete_blades = clamp(blade_count.round(), 1.0, 12.0) as usize;
-        let pulse_power = 5.0 + regime_drive * 7.0;
+        let pulse_power = 10.0 + regime_drive * 8.0;
         let mut blade_packet = 0.0;
         for blade_idx in 0..discrete_blades {
             let blade_offset = TWO_PI * blade_idx as f32 / discrete_blades as f32;
@@ -1403,6 +1419,7 @@ impl Voice {
         let c = self
             .cav
             .tick(
+                sample_rate,
                 self.engine.current_rpm,
                 self.engine.shaft_phase,
                 self.engine.blade_phase,
