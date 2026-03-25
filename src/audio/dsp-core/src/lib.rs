@@ -224,7 +224,10 @@ impl EngineState {
         if self.shaft_phase >= TWO_PI {
             self.shaft_phase -= TWO_PI;
         }
-        self.blade_phase = (self.shaft_phase * self.blades.max(1.0)).rem_euclid(TWO_PI);
+        self.blade_phase += TWO_PI * bpf_hz / sample_rate;
+        if self.blade_phase >= TWO_PI {
+            self.blade_phase -= TWO_PI;
+        }
 
         let machinery_hz_a = 24.0 + shaft_hz * (11.0 + 5.0 * brightness) + 28.0 * load;
         let machinery_hz_b = 70.0 + bpf_hz * 0.5 + 55.0 * brightness + 36.0 * load;
@@ -247,7 +250,6 @@ impl EngineState {
         let machinery = self.machinery_phase_a.sin() * 0.75
             + (1.11 * self.machinery_phase_b).sin() * 0.23
             + (self.machinery_phase_a + self.blade_phase * 0.16).sin() * 0.14;
-        let machinery = (machinery * (1.18 + 0.24 * load)).tanh();
 
         let envelope = 0.80
             + 0.14 * self.blade_phase.sin().abs()
@@ -263,13 +265,6 @@ impl EngineState {
 
 #[derive(Clone, Copy)]
 struct CavState {
-    broadband_lp_a: f32,
-    broadband_lp_b: f32,
-    broadband_lp_c: f32,
-    blade_cache_count: usize,
-    blade_offset_cos: [f32; 12],
-    blade_offset_sin: [f32; 12],
-    blade_weight_cache: [f32; 12],
     lp_noise: f32,
     slow_noise: f32,
     shaped_noise: f32,
@@ -280,13 +275,6 @@ struct CavState {
 impl CavState {
     fn new() -> Self {
         Self {
-            broadband_lp_a: 0.0,
-            broadband_lp_b: 0.0,
-            broadband_lp_c: 0.0,
-            blade_cache_count: 0,
-            blade_offset_cos: [0.0; 12],
-            blade_offset_sin: [0.0; 12],
-            blade_weight_cache: [1.0; 12],
             lp_noise: 0.0,
             slow_noise: 0.0,
             shaped_noise: 0.0,
@@ -296,44 +284,16 @@ impl CavState {
     }
 
     #[inline]
-    fn refresh_blade_cache(&mut self, discrete_blades: usize) {
-        if self.blade_cache_count == discrete_blades {
-            return;
-        }
-
-        self.blade_cache_count = discrete_blades;
-        for blade_idx in 0..12 {
-            if blade_idx < discrete_blades {
-                let blade_offset = TWO_PI * blade_idx as f32 / discrete_blades as f32;
-                self.blade_offset_cos[blade_idx] = blade_offset.cos();
-                self.blade_offset_sin[blade_idx] = blade_offset.sin();
-                self.blade_weight_cache[blade_idx] =
-                    0.88 + 0.12 * ((blade_idx as f32 * 1.73).sin() * 0.5 + 0.5);
-            } else {
-                self.blade_offset_cos[blade_idx] = 0.0;
-                self.blade_offset_sin[blade_idx] = 0.0;
-                self.blade_weight_cache[blade_idx] = 1.0;
-            }
-        }
-    }
-
-    #[inline]
     fn tick(
         &mut self,
-        sample_rate: f32,
         rpm: f32,
-        shaft_phase: f32,
         blade_phase: f32,
-        blade_count: f32,
         load: f32,
         cavitation_level: f32,
         class_profile: u32,
         rng: &mut u32,
     ) -> f32 {
         if rpm < 1.0 {
-            self.broadband_lp_a = 0.0;
-            self.broadband_lp_b = 0.0;
-            self.broadband_lp_c = 0.0;
             self.lp_noise = 0.0;
             self.slow_noise = 0.0;
             self.shaped_noise = 0.0;
@@ -343,14 +303,6 @@ impl CavState {
         }
 
         let white = rand_signed(rng);
-        let cutoff_hz = 1000.0;
-        let rc = 1.0 / (TWO_PI * cutoff_hz);
-        let dt = 1.0 / sample_rate.max(1.0);
-        let broadband_alpha = (dt / (rc + dt)).clamp(0.0, 1.0);
-        self.broadband_lp_a += broadband_alpha * (white - self.broadband_lp_a);
-        self.broadband_lp_b += broadband_alpha * (self.broadband_lp_a - self.broadband_lp_b);
-        self.broadband_lp_c += broadband_alpha * (self.broadband_lp_b - self.broadband_lp_c);
-        let broadband = self.broadband_lp_c;
         let speed_norm = clamp((rpm - 60.0) / 320.0, 0.0, 1.0);
         let load = clamp(load, 0.0, 1.0);
         let cavitation_level = clamp(cavitation_level, 0.0, 1.0);
@@ -368,30 +320,14 @@ impl CavState {
         );
 
         // Use two smoothed noise bands to build a regime-dependent cavitation texture.
-        self.slow_noise += 0.025 * (broadband - self.slow_noise);
-        self.lp_noise += (0.08 + 0.06 * regime_drive) * (broadband - self.lp_noise);
-        let hp = broadband - self.lp_noise;
+        self.slow_noise += 0.025 * (white - self.slow_noise);
+        self.lp_noise += (0.08 + 0.06 * regime_drive) * (white - self.lp_noise);
+        let hp = white - self.lp_noise;
         let fizz = hp - self.slow_noise * (0.25 + 0.2 * regime_drive);
         self.shaped_noise += (0.22 + 0.18 * regime_drive) * (fizz - self.shaped_noise);
 
-        let blade_mod = (0.5 + 0.5 * blade_phase.cos()).powf(10.0);
-        let blade_pulse = blade_mod;
-        let discrete_blades = clamp(blade_count.round(), 1.0, 12.0) as usize;
-        self.refresh_blade_cache(discrete_blades);
-        let pulse_power = 10.0 + regime_drive * 8.0;
-        let mut blade_packet = 0.0;
-        let shaft_cos = shaft_phase.cos();
-        let shaft_sin = shaft_phase.sin();
-        for blade_idx in 0..discrete_blades {
-            let phase_cos = shaft_cos * self.blade_offset_cos[blade_idx]
-                - shaft_sin * self.blade_offset_sin[blade_idx];
-            let passage = (0.5 + 0.5 * phase_cos).powf(pulse_power);
-            blade_packet += passage * self.blade_weight_cache[blade_idx];
-        }
-        blade_packet /= discrete_blades.max(1) as f32;
-        let modulation_depth = 0.18 + regime_drive * 0.72;
-        let blade_envelope = (1.0 - modulation_depth)
-            + modulation_depth * (0.18 + blade_mod * 0.34 + blade_packet * 1.48);
+        let blade_mod = 0.5 + 0.5 * blade_phase.sin();
+        let blade_pulse = blade_phase.sin().abs();
         self.burst_drive += 0.03 * ((blade_pulse * regime_drive) - self.burst_drive);
         let burst_threshold = 0.76 - regime_drive * 0.26;
         if self.burst_drive > burst_threshold {
@@ -406,19 +342,17 @@ impl CavState {
         let regime_heavy = ((regime_drive - 0.68) / 0.32).clamp(0.0, 1.0);
 
         let low_texture = self.slow_noise * 0.10 + self.shaped_noise * 0.26;
-        let incipient_texture = self.shaped_noise * (0.18 + 0.18 * blade_mod) * blade_envelope;
-        let developed_texture =
-            (self.shaped_noise * (0.26 + 0.42 * blade_mod) + hp * 0.08) * blade_envelope;
-        let heavy_texture = (self.shaped_noise * (0.32 + 0.56 * blade_mod)
-            + hp * (0.12 + 0.1 * blade_mod))
-            * blade_envelope
+        let incipient_texture = self.shaped_noise * (0.22 + 0.32 * blade_mod);
+        let developed_texture = self.shaped_noise * (0.38 + 0.58 * blade_mod) + hp * 0.12;
+        let heavy_texture = self.shaped_noise * (0.48 + 0.72 * blade_mod)
+            + hp * (0.18 + 0.12 * blade_mod)
             + self.burst_env * rand_signed(rng) * 0.55;
 
         let intensity = 0.008
             + regime_none * 0.012
             + regime_incipient * 0.05
             + regime_developed * 0.16
-            + regime_heavy * 0.40;
+            + regime_heavy * 0.34;
         let texture = low_texture * regime_none
             + incipient_texture * regime_incipient
             + developed_texture * regime_developed
@@ -1450,11 +1384,8 @@ impl Voice {
         let c = self
             .cav
             .tick(
-                sample_rate,
                 self.engine.current_rpm,
-                self.engine.shaft_phase,
                 self.engine.blade_phase,
-                self.engine.blades,
                 self.engine.load,
                 self.cavitation_level,
                 self.engine.class_profile,
@@ -1476,9 +1407,6 @@ pub struct DspGraph {
     voices: Vec<Voice>,
     output: Vec<f32>,
     next_seed: u32,
-    process_call_count: u32,
-    process_total_ms: f64,
-    process_max_ms: f64,
 }
 
 #[wasm_bindgen]
@@ -1500,9 +1428,6 @@ impl DspGraph {
             voices,
             output: vec![0.0; max_frames.max(1)],
             next_seed: 0x1234_abcd,
-            process_call_count: 0,
-            process_total_ms: 0.0,
-            process_max_ms: 0.0,
         }
     }
 
@@ -1559,59 +1484,15 @@ impl DspGraph {
         let n = frames.min(self.max_frames);
         self.last_frames = n;
 
-        for sample in &mut self.output[..n] {
-            *sample = 0.0;
-        }
-
-        for voice in &mut self.voices {
-            if !voice.active {
-                continue;
-            }
-            for i in 0..n {
-                self.output[i] += voice.sample(self.sample_rate);
-            }
-        }
-
         for i in 0..n {
-            self.output[i] = self.output[i].tanh();
+            let mut mix = 0.0f32;
+            for voice in &mut self.voices {
+                mix += voice.sample(self.sample_rate);
+            }
+            self.output[i] = mix.tanh();
         }
 
         self.output.as_ptr() as usize
-    }
-
-    pub fn record_process_ms(&mut self, elapsed_ms: f64) {
-        let safe_elapsed = if elapsed_ms.is_finite() {
-            elapsed_ms.max(0.0)
-        } else {
-            0.0
-        };
-        self.process_call_count = self.process_call_count.saturating_add(1);
-        self.process_total_ms += safe_elapsed;
-        if safe_elapsed > self.process_max_ms {
-            self.process_max_ms = safe_elapsed;
-        }
-    }
-
-    pub fn average_process_ms(&self) -> f64 {
-        if self.process_call_count == 0 {
-            0.0
-        } else {
-            self.process_total_ms / self.process_call_count as f64
-        }
-    }
-
-    pub fn max_process_ms(&self) -> f64 {
-        self.process_max_ms
-    }
-
-    pub fn process_call_count(&self) -> u32 {
-        self.process_call_count
-    }
-
-    pub fn reset_process_stats(&mut self) {
-        self.process_call_count = 0;
-        self.process_total_ms = 0.0;
-        self.process_max_ms = 0.0;
     }
 
     pub fn output_len(&self) -> usize {

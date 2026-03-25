@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { SonarVisuals } from '../src/sonar-visuals.js';
-import { DspGraph, compute_demon_spectrum, initSync } from '../src/audio/dsp-core/pkg/dsp_core.js';
+import { DspGraph, initSync } from '../src/audio/dsp-core/pkg/dsp_core.js';
 
 function createNoopContext() {
     const ctx = {
@@ -9,24 +9,15 @@ function createNoopContext() {
         strokeStyle: '#000',
         lineWidth: 1,
         font: '10px monospace',
-        textAlign: 'left',
-        textBaseline: 'alphabetic',
         beginPath() {},
         moveTo() {},
         lineTo() {},
         stroke() {},
         fillRect() {},
         fillText() {},
-        createImageData(width, height) {
-            return { data: new Uint8ClampedArray(width * height * 4), width, height };
-        },
-        putImageData() {},
         save() {},
         restore() {},
-        setLineDash() {},
-        measureText(text) {
-            return { width: String(text || '').length * 6 };
-        }
+        setLineDash() {}
     };
     return ctx;
 }
@@ -140,43 +131,6 @@ function measureMeanAbsDelta(samples) {
     return sum / Math.max(1, samples.length - 1);
 }
 
-function measurePeakNearHz(spectrum, targetHz, toleranceHz = 2) {
-    const lo = Math.max(1, Math.floor(targetHz - toleranceHz));
-    const hi = Math.min(spectrum.length - 1, Math.ceil(targetHz + toleranceHz));
-    let bestHz = lo;
-    let bestValue = 0;
-    for (let hz = lo; hz <= hi; hz++) {
-        if (spectrum[hz] > bestValue) {
-            bestValue = spectrum[hz];
-            bestHz = hz;
-        }
-    }
-    return { hz: bestHz, value: bestValue };
-}
-
-function measureLocalContrast(spectrum, targetHz, shoulderWidthHz = 3) {
-    const peak = measurePeakNearHz(spectrum, targetHz, 1);
-    let sum = 0;
-    let count = 0;
-    for (let hz = Math.max(1, targetHz - shoulderWidthHz); hz <= Math.min(spectrum.length - 1, targetHz + shoulderWidthHz); hz++) {
-        if (Math.abs(hz - peak.hz) <= 1) continue;
-        sum += spectrum[hz];
-        count++;
-    }
-    const baseline = count > 0 ? sum / count : 1e-6;
-    return peak.value / Math.max(1e-6, baseline);
-}
-
-function renderVoiceSamples(config = {}) {
-    const { frames = 96, frameSize = 1024 } = config;
-    const nextFrame = createRealSynthFrameRunner(config);
-    const out = new Float32Array(frames * frameSize);
-    for (let frame = 0; frame < frames; frame++) {
-        out.set(nextFrame(), frame * frameSize);
-    }
-    return out;
-}
-
 function runRealSynthDemonScenario({
     selectedTarget,
     synthConfig,
@@ -208,7 +162,7 @@ function runRealSynthDemonScenario({
 }
 
 describe('DEMON lock tracker', () => {
-    it('acquires lock near expected BPF in bounded frames', { timeout: 20000 }, () => {
+    it('acquires lock near expected BPF in bounded frames', () => {
         const visuals = createDemonHarness();
         const selectedTarget = {
             id: 'target-01',
@@ -235,7 +189,7 @@ describe('DEMON lock tracker', () => {
         expect(Math.abs(lock.bpfEstimateHz - expectedBpf)).toBeLessThanOrEqual(expectedBpf * 0.1);
     });
 
-    it('acquires lock from real wasm propulsion synthesis', { timeout: 20000 }, () => {
+    it('acquires lock from real wasm propulsion synthesis', () => {
         const selectedTarget = {
             id: 'target-real-01',
             type: 'SHIP',
@@ -265,7 +219,7 @@ describe('DEMON lock tracker', () => {
         expect(Math.abs(lock.bpfEstimateHz - expectedBpf)).toBeLessThanOrEqual(expectedBpf * 0.12);
     });
 
-    it('keeps lock state invariant when DEMON is redrawn without new analysis', { timeout: 20000 }, () => {
+    it('keeps lock state invariant when DEMON is redrawn without new analysis', { timeout: 10000 }, () => {
         const selectedTarget = {
             id: 'target-frame-invariant',
             type: 'SHIP',
@@ -315,7 +269,7 @@ describe('DEMON lock tracker', () => {
         expect(Math.abs(baseline.bpfEstimateHz - redrawHeavy.bpfEstimateHz)).toBeLessThanOrEqual(0.2);
     });
 
-    it('changes synth texture across cavitation regimes while preserving DEMON lock', { timeout: 20000 }, () => {
+    it('changes synth texture across cavitation regimes while preserving DEMON lock', () => {
         const selectedTarget = {
             id: 'target-real-cav',
             type: 'SHIP',
@@ -355,70 +309,6 @@ describe('DEMON lock tracker', () => {
         expect(low.lock?.state).toBe('LOCKED');
         expect(high.lock?.state).toBe('LOCKED');
         expect(high.meanAbsDelta).toBeGreaterThan(low.meanAbsDelta * 1.12);
-        expect(Math.abs(high.signalQuality - low.signalQuality)).toBeGreaterThan(0.001);
-    });
-
-    it('shows blade-rate harmonics in cavitation-focused DEMON output from the wasm synth', { timeout: 20000 }, () => {
-        const rpm = 216;
-        const bladeCount = 5;
-        const expectedBpf = (rpm / 60) * bladeCount;
-        const samples = renderVoiceSamples({
-            sampleRate: 4096,
-            frameSize: 1024,
-            frames: 120,
-            rpm,
-            bladeCount,
-            shaftRate: rpm / 60,
-            load: 0.68,
-            rpmJitter: 0.06,
-            classProfile: 2,
-            cavitationLevel: 0.82
-        });
-        const spectrum = compute_demon_spectrum(samples, 4096, 60, 1500, 12000, 1.0, 500);
-        const peak = measurePeakNearHz(spectrum, expectedBpf, 3);
-        const contrast = measureLocalContrast(spectrum, Math.round(expectedBpf), 4);
-        const h2 = measurePeakNearHz(spectrum, expectedBpf * 2, 3);
-        const h3 = measurePeakNearHz(spectrum, expectedBpf * 3, 3);
-
-        expect(Math.abs(peak.hz - expectedBpf)).toBeLessThanOrEqual(3);
-        expect(contrast).toBeGreaterThan(1.25);
-        expect(h2.value).toBeGreaterThan(peak.value * 0.1);
-        expect(h3.value).toBeGreaterThan(peak.value * 0.015);
-    });
-
-    it('renders DEMON as a live spectrum without populating waterfall history', { timeout: 20000 }, () => {
-        const visuals = createDemonHarness();
-        const selectedTarget = {
-            id: 'target-waterfall-ramp',
-            type: 'SHIP',
-            rpm: 180,
-            bladeCount: 5,
-            classification: null
-        };
-        const sampleRate = 4096;
-        const frameSize = 1024;
-        let phaseCarrier = 0;
-        let phaseMod = 0;
-        const dt = 1 / sampleRate;
-
-        for (let frame = 0; frame < 90; frame++) {
-            const bpfHz = 14 + (frame / 89) * 8;
-            selectedTarget.rpm = (bpfHz / selectedTarget.bladeCount) * 60;
-            const buf = new Float32Array(frameSize);
-            for (let i = 0; i < frameSize; i++) {
-                const carrier = Math.sin(phaseCarrier) + 0.32 * Math.sin(phaseCarrier * 1.73);
-                const envelope = Math.sin(phaseMod) >= 0 ? 1.45 : 0.08;
-                buf[i] = envelope * carrier;
-                phaseCarrier += 2 * Math.PI * 520 * dt;
-                phaseMod += 2 * Math.PI * bpfHz * dt;
-            }
-
-            visuals._updateDemonSpectrum(buf, sampleRate, selectedTarget);
-            visuals.drawDEMON(new Uint8Array(128), selectedTarget.rpm, selectedTarget, sampleRate);
-        }
-
-        expect(visuals._demonSmoothedSpectrum).toBeInstanceOf(Float32Array);
-        expect(visuals._demonSmoothedSpectrum.length).toBeGreaterThan(20);
-        expect(visuals._demonWaterfallSpectrum).toBeNull();
-    });
+        expect(Math.abs(high.signalQuality - low.signalQuality)).toBeGreaterThan(0.01);
+    }, 15000);
 });
