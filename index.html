@@ -10,11 +10,29 @@
     <link rel="icon" href="/silent-abyss/favicon.svg" type="image/svg+xml">
     <link rel="icon" href="/silent-abyss/favicon.png" type="image/png" sizes="64x64">
     <link rel="shortcut icon" href="/silent-abyss/favicon.ico">
-  <script type="module" crossorigin src="/silent-abyss/assets/index-D9vYqF5R.js"></script>
-  <link rel="stylesheet" crossorigin href="/silent-abyss/assets/index-jQrwoXwX.css">
+  <script type="module" crossorigin src="/silent-abyss/assets/index-Czw5Wgrw.js"></script>
+  <link rel="stylesheet" crossorigin href="/silent-abyss/assets/index-DiDKDNAh.css">
 </head>
-<body class="p-3 h-screen flex flex-col gap-3">
+<body class="game-awaiting-start p-3 h-screen flex flex-col gap-3">
     <div class="crt-overlay"></div>
+
+    <div id="launch-overlay" class="launch-overlay" role="dialog" aria-modal="true" aria-labelledby="launch-title">
+        <div class="launch-bearing" aria-hidden="true">
+            <span>270</span><span>315</span><span>000</span><span>045</span><span>090</span>
+        </div>
+        <div class="launch-content">
+            <p class="launch-kicker">SONAR CONTROL / STATION 01</p>
+            <h2 id="launch-title">SILENT ABYSS</h2>
+            <div class="launch-rule" aria-hidden="true"><span></span></div>
+            <p class="launch-status" id="launch-status" aria-live="polite">TACTICAL CORE STANDBY</p>
+            <button id="start-btn" class="launch-button" type="button">
+                <span class="launch-button-mark" aria-hidden="true"></span>
+                <span>작전 개시</span>
+                <span class="launch-button-code" aria-hidden="true">ENGAGE</span>
+            </button>
+        </div>
+        <p class="launch-footnote">PASSIVE SONAR / AUDIO LINK READY</p>
+    </div>
 
     <header class="panel p-2 flex justify-between items-center border-b-2 border-cyan-800">
         <h1 class="text-lg font-bold tracking-[0.2em] glow-text uppercase text-cyan-400">SILENT ABYSS // TACTICAL</h1>
@@ -113,9 +131,7 @@
                 <div class="label-tech border-b border-cyan-900 pb-1">Main Drive Control</div>
 
                 <div id="setup-screen" class="flex flex-col items-center justify-center text-center py-2">
-                    <button id="start-btn" class="px-6 py-2 border border-cyan-400 hover:bg-cyan-900 transition-all uppercase text-sm font-bold shadow-[0_0_15px_rgba(0,255,204,0.3)]">
-                        Boot Tactical Core
-                    </button>
+                    <span class="text-[10px] text-cyan-500 tracking-widest">TACTICAL CORE STANDBY</span>
                 </div>
 
                 <div id="engine-controls" class="hidden space-y-3">
