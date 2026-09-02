@@ -111,9 +111,6 @@ export class UIManager {
     }
 
     bindGlobalHandlers() {
-        const startBtn = document.getElementById('start-btn');
-        if (startBtn) startBtn.onclick = () => this.orch.init();
-
         const pingBtn = document.getElementById('ping-btn');
         if (pingBtn) pingBtn.onclick = () => this.triggerPing();
 

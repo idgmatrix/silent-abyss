@@ -111,8 +111,9 @@ export class GameOrchestrator {
         this.depthProfileDisplay.environment = this.worldModel.environment;
         this.depthProfileDisplay.init('depth-profile-canvas');
 
-        await this.webgpuFft.init();
+        // Create the AudioContext while the launch click still owns user activation.
         await this.audioSys.init();
+        await this.webgpuFft.init();
 
         this.audioSys.setComputeProcessor(this.webgpuFft);
         this.sonarVisuals.setFFTProcessor(this.webgpuFft);
